@@ -40,3 +40,27 @@
 ### Mood Check
 ✅ Good start! Foundation is laid, ready to build.
 
+## Company Structure Reference
+
+### Company 1: Kleanit Charlotte
+- Type: Carpet Cleaning
+- Location: Charlotte, NC
+- Notes: Original company, not franchised
+
+### Company 2: Get a Grip Resurfacing of Charlotte
+- Type: Surface Resurfacing
+- Location: Charlotte, NC
+- Notes: Chris runs this company
+
+### Company 3: CTS of Raleigh
+- Type: Umbrella Company
+- Location: Raleigh, NC
+- Services: Get a Grip franchise + Kleanit carpet cleaning
+
+### Company 4: Kleanit South Florida
+- Type: Carpet Cleaning
+- Location: South Florida
+- Notes: Second Kleanit location (not franchised)
+
+**Total**: 4 companies sharing ServiceFusion infrastructure
+**Billing**: Each company on Plus tier (~$382/month each)
