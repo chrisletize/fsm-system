@@ -132,3 +132,86 @@
 2. Show Michele the system
 3. Deploy to production
 4. Begin Phase 1 planning
+---
+
+## Session 3 - Dynamic Branding & Multi-Company Support (2026-01-16)
+
+### What We Built
+
+1. **Company Branding System**
+   - Created `backend/api/branding.py` with color schemes for all 4 companies
+   - Get a Grip: Burgundy (#8B1538) + Cream (#F5F5DC)
+   - Kleanit (Charlotte & South Florida): Blue (#0052CC) + Green (#00D66C)
+   - CTS of Raleigh: Dark Gray (#2C2C2C) + Cream (#F5F5DC)
+   - Added `/api/branding/<company_id>` endpoint
+
+2. **Dynamic Web Interface**
+   - Main page changes colors/logo when company selected
+   - Upload page changes colors/logo when company selected
+   - Uses CSS variables for dynamic color switching
+   - Smooth transitions between color schemes
+   - Company display names distinguish between Kleanit Charlotte and South Florida
+
+3. **Logo Management**
+   - Added all company logos to `assets/` and `backend/api/static/`
+   - get-a-grip-logo.jpg
+   - kleanit-logo.png
+   - cts-logo.jpg
+
+4. **PDF Dynamic Branding** (In Progress)
+   - Updated `generate_pdf_statement.py` to use dynamic branding
+   - Imports branding config
+   - Sets colors and logo based on company_id
+   - Fixed logo path to use absolute paths
+
+### Technical Challenges
+
+1. **JavaScript fetch() syntax issue**
+   - Problem: Backticks appearing outside parentheses: `fetch`/api/...`)`
+   - Solution: Used sed to fix: `sed -i "s/fetch\`/fetch(\`/g"`
+   - Occurred in both index.html and upload.html
+
+2. **Company dropdown not refreshing summary**
+   - Problem: API calls had syntax errors, summary boxes showed stale data
+   - Solution: Fixed fetch syntax, added proper company_id parameter
+
+3. **Upload functionality breaking**
+   - Problem: Database column mismatch `service_location_address` vs `service_location_address_1`
+   - Status: IN PROGRESS - debugging import errors
+
+### Files Modified
+
+- `backend/api/branding.py` - NEW
+- `backend/api/app.py` - Added branding endpoint, fixed summary handling
+- `backend/api/templates/index.html` - Dynamic CSS variables, branding loader
+- `backend/api/templates/upload.html` - Dynamic CSS variables, branding loader
+- `scripts/generate_pdf_statement.py` - Dynamic branding support
+- `assets/` - Added kleanit-logo.png, cts-logo.jpg
+
+### Current Status
+
+**Working:**
+- ✅ Dynamic branding on main page
+- ✅ Dynamic branding on upload page  
+- ✅ All 4 company color schemes configured
+- ✅ Logo switching works
+- ✅ Company dropdown updates properly
+
+**In Progress:**
+- 🔄 Excel upload debugging for Kleanit/CTS data
+- 🔄 PDF generation with dynamic branding (code written, needs testing)
+
+**Blocked:**
+- Upload import failing with cryptic "0" errors on every row
+- Need better error logging to diagnose
+
+### Next Session Tasks
+
+1. Fix upload import errors (add detailed error logging)
+2. Test PDF generation with all 4 companies
+3. Import real data from Kleanit Charlotte, CTS, Kleanit South Florida
+4. Build bulk statement generation feature
+5. Add date range filter for statements
+
+### Time Spent
+~3 hours (branding system, dynamic UI, logo management, debugging)
