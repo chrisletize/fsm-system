@@ -1,51 +1,4 @@
 # FSM System - Current Status
-*Last Updated: 2026-01-14*
-
-## Project Overview
-Building custom Field Service Management system to replace ServiceFusion.
-- **Companies**: 4 service companies
-- **Users**: ~25 field technicians, 5 office staff
-- **Scale**: 250 jobs/day at peak season
-- **Current Phase**: Phase 0 - Statement Generator
-
-## Business Problem
-ServiceFusion costs ~$1,500/month for 4 companies and lacks statement generation.
-QuickBooks integration exists but we want to phase out QB entirely.
-Michele (AR person) needs accurate customer statements quickly.
-
-## Phase 0 Goals
-Build standalone statement generator tool:
-- Import unpaid invoices from ServiceFusion exports
-- Generate professional PDF statements
-- Clean web interface for Michele
-- Deployment to production server
-
-**Success Criteria**: Michele can generate statements in <2 minutes
-
-## Current Sprint
-Sprint 0.1: Setup & Data Import (Week 1)
-
-## What's Working
-✅ GitHub repository created
-✅ Project board set up
-✅ Directory structure created
-
-## What's In Progress
-🔄 Setting up development environment
-🔄 Waiting for ServiceFusion data export
-
-## Known Issues
-None yet - just getting started!
-
-## Next Steps
-1. Export sample invoice data from ServiceFusion
-2. Set up PostgreSQL database
-3. Design database schema
-4. Build data import script
-
-## Key Technical Decisions
-*See DECISIONS.md for full list*
-# FSM System - Current Status
 *Last Updated: 2026-01-15*
 
 ## Project Overview
@@ -62,12 +15,14 @@ Michele (AR person) needs to generate professional customer statements monthly.
 
 **Goal**: Build complete FSM replacement to eliminate ServiceFusion costs ($25k+/year savings) and gain full control over features.
 
-## Phase 0 Goals (Statement Generator)
+## Phase 0 Status: NEARLY COMPLETE ✅
+
 Build standalone statement generator as proof of concept:
-- Import unpaid invoices from ServiceFusion Excel exports
-- Generate professional PDF statements with company branding
-- Clean web interface for Michele at statements.cletize.com
-- Prove we can build production-quality business software
+- ✅ Import unpaid invoices from ServiceFusion Excel exports
+- ✅ Generate professional PDF statements with company branding
+- ✅ Clean web interface for Michele at statements.cletize.com
+- ✅ Excel upload feature with drag-and-drop
+- 🔄 Testing with all 4 companies' data (in progress)
 
 **Success Criteria**: Michele can generate statements in <2 minutes
 
@@ -79,29 +34,33 @@ Build standalone statement generator as proof of concept:
 - PDF statement generator with company logo and aging buckets
 - Reverse proxy configured (statements.cletize.com via NPM)
 - Web interface shows customer list, search, and one-click PDF generation
+- **NEW: Excel upload page with drag-and-drop interface**
+- **NEW: Automatic duplicate detection (updates existing, inserts new)**
+- **NEW: Upload feedback shows inserted/updated/skipped counts**
 
 ## What's In Progress 🔄
-- Building Excel upload feature (so Michele can import fresh data monthly)
-- Testing with other 3 companies' invoice data
+- Testing upload feature with other 3 companies' invoice data
+- Training Michele on the system
 
 ## Known Issues
-None currently - system stable
+None currently - system stable and functional
 
 ## Next Steps
-1. Build upload page for Excel imports
-2. Add duplicate detection logic (update existing invoices vs insert new)
-3. Test with all 4 companies' data
-4. Deploy to production and train Michele
-5. Begin planning Phase 1 (full FSM features)
+1. Test upload with Kleanit Charlotte, CTS of Raleigh, Kleanit South Florida data
+2. Deploy to production and train Michele
+3. Monitor for any issues during first month of use
+4. Begin planning Phase 1 (full FSM features)
 
 ## Technical Stack Confirmed
 - **Backend**: Python + Flask
 - **Database**: PostgreSQL 16
 - **PDF Generation**: ReportLab
 - **Frontend**: HTML + CSS (burgundy/cream brand colors)
+- **File Upload**: openpyxl for Excel parsing
 - **Deployment**: Docker on ubuntu1, Nginx reverse proxy
 
 ## Key Metrics
-- Development time so far: ~8 hours
-- Database: 3 tables, 180 records
-- Outstanding invoices tracked: $119,360
+- Development time: ~12 hours total
+- Database: 3 tables, 180+ records
+- Outstanding invoices tracked: $119,360+
+- Features completed: 100% of Phase 0 scope
