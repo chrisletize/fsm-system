@@ -215,3 +215,90 @@
 
 ### Time Spent
 ~3 hours (branding system, dynamic UI, logo management, debugging)
+---
+
+## Session 4 - Excel Upload Debugging & Clear Data Feature (2026-01-16)
+
+### What We Fixed
+
+1. **Excel Upload KeyError Issues**
+   - Fixed database query result handling (dictionary vs tuple access)
+   - Changed `customer[0]` and `existing[0]` to `customer['id']` and `existing['id']`
+   - Added `invoice_status` column to INSERT and UPDATE statements (defaulting to 'Unpaid')
+   - All 4 companies can now successfully import invoice data
+
+2. **Setup as System Service**
+   - Created `/etc/systemd/system/fsm-statements.service`
+   - Flask now runs automatically in background
+   - Service starts on boot, restarts on failure
+   - Can manage with `sudo systemctl start/stop/restart fsm-statements`
+
+3. **Clear Data Feature**
+   - Added "Clear All Data for This Company" button (red trash icon)
+   - Double confirmation before deletion
+   - Deletes all invoices and customers for selected company
+   - Button only appears when company is selected
+   - Backend API endpoint: DELETE `/api/clear-company-data/<company_id>`
+
+4. **UX Improvements**
+   - Fixed company dropdown behavior - no auto-load on page load
+   - Users must explicitly select company before data appears
+   - Prevents confusion when dropdown shows different company than loaded data
+
+### Technical Challenges
+
+1. **JavaScript variable naming vs HTML IDs**
+   - HTML element ID: `company-select` (with hyphen)
+   - JavaScript variable: `companySelect` (camelCase, no hyphen)
+   - Find-replace accidentally changed variable names, breaking syntax
+   - Learned: only element IDs in quotes should have hyphens
+
+2. **Event listener null reference errors**
+   - Added safety checks: `if (element)` before adding listeners
+   - Prevents crashes when elements don't exist on page
+
+3. **Browser caching**
+   - Hard refresh (Ctrl+Shift+F5) needed after HTML/JS changes
+   - Systemd service restart only updates Python backend
+
+### Files Modified
+
+- `backend/api/app.py` - Fixed database queries, added clear-data endpoint
+- `backend/api/templates/index.html` - Added clear button HTML and JavaScript
+- `/etc/systemd/system/fsm-statements.service` - NEW systemd service file
+
+### Testing Results
+
+- ✅ Get a Grip Charlotte: 180 invoices imported successfully
+- ✅ Kleanit Charlotte: Upload working
+- ✅ CTS of Raleigh: Upload working
+- ✅ Get a Grip Charlotte (re-upload): 22 invoices updated correctly
+- ✅ Clear data feature working with double confirmation
+- ✅ PDF generation with dynamic branding confirmed working
+- ✅ Company dropdown behavior fixed
+
+### Current Status
+
+**Working Features:**
+- Multi-company invoice import via Excel
+- Dynamic branding (colors/logos) per company
+- PDF statement generation
+- Clear data functionality
+- Systemd background service
+- Professional web interface
+
+**Ready for Next Session:**
+- Bulk statement generation (generate for all customers at once)
+- Date range filter for statements
+- Email statements directly to customers
+- Additional testing with larger datasets
+
+### Time Spent
+~3 hours (debugging, systemd setup, clear data feature, UX fixes)
+
+### Next Session Goals
+
+1. Build bulk statement generation feature
+2. Add date range filter
+3. Test with Michele's feedback
+4. Begin email functionality planning

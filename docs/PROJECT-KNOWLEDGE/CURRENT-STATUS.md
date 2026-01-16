@@ -29,18 +29,23 @@ Build standalone statement generator as proof of concept:
 ## What's Working ✅
 - PostgreSQL 16 database on ubuntu1
 - Multi-tenant database schema (companies, customers, invoices)
-- Real data imported: 180 invoices from Get a Grip Charlotte ($119,360 outstanding)
-- Flask web application with burgundy/cream brand colors
+- Real data imported: All 4 companies' unpaid invoices
+- Flask web application with dynamic branding per company
 - PDF statement generator with company logo and aging buckets
 - Reverse proxy configured (statements.cletize.com via NPM)
 - Web interface shows customer list, search, and one-click PDF generation
-- **NEW: Excel upload page with drag-and-drop interface**
-- **NEW: Automatic duplicate detection (updates existing, inserts new)**
-- **NEW: Upload feedback shows inserted/updated/skipped counts**
+- Excel upload page with drag-and-drop interface
+- Automatic duplicate detection (updates existing, inserts new)
+- Upload feedback shows inserted/updated/skipped counts
+- **NEW: Clear data button per company with double confirmation**
+- **NEW: Systemd service - runs automatically in background**
+- **NEW: Fixed company dropdown UX - no auto-load confusion**
+- **NEW: All 4 companies tested and working**
 
 ## What's In Progress 🔄
-- Testing upload feature with other 3 companies' invoice data
-- Training Michele on the system
+- Bulk statement generation (next priority)
+- Date range filtering
+- Email delivery functionality
 
 ## Known Issues
 None currently - system stable and functional

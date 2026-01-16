@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Upload Invoices - FSM Statement Generator</title>
+    <style>
+        :root {
+            /* Default to Get a Grip colors */
+            --primary-color: #8B1538;
+            --secondary-color: #F5F5DC;
+            --accent-color: #2C2C2C;
+            --background-color: #FFF5F0;
+        }
+    
+        * {
+            margin: 0;            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--accent-color) 100%);
+            transition: background 0.3s ease;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+
+        .logo-header {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .logo-header img {
+            height: 60px;
+            width: auto;
+        }
+        
+        .header h1 {
+            color: #2d3748;
+            font-size: 32px;
+            margin-bottom: 5px;
+        }
+        
+        .header p {
+            color: #718096;
+            font-size: 16px;
+        }
+
+        .nav-links {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #e2e8f0;
+        }
+
+        .nav-links a {
+            color: #8B1538;
+            text-decoration: none;
+            font-weight: 600;
+            margin-right: 20px;
+        }
+
+        .nav-links a:hover {
+            text-decoration: underline;
+        }
+        
+        .upload-section {
+            background: white;
+            border-radius: 10px;
+            padding: 40px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .company-selector {
+            margin-bottom: 30px;
+        }
+
+        .company-selector label {
+            display: block;
+            margin-bottom: 8px;
+            color: #4a5568;
+            font-weight: 600;
+        }
+
+        .company-selector select {
+            width: 100%;
+            padding: 12px 15px;
+            font-size: 16px;
+            border: 2px solid #e2e8f0;
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+        }
+
+        .company-selector select:focus {
+            outline: none;
+            border-color: #8B1538;
+        }
+        
+        .drop-zone {
+            border: 3px dashed #cbd5e0;
+            border-radius: 10px;
+            padding: 60px 20px;
+            text-align: center;
+            background: #f7fafc;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .drop-zone:hover,
+        .drop-zone.dragover {
+            border-color: #8B1538;
+            background: #fff5f7;
+        }
+        
+        .drop-zone-icon {
+            font-size: 48px;
+            color: #8B1538;
+            margin-bottom: 15px;
+        }
+        
+        .drop-zone-text {
+            font-size: 18px;
+            color: #2d3748;
+            margin-bottom: 10px;
+        }
+        
+        .drop-zone-subtext {
+            font-size: 14px;
+            color: #718096;
+        }
+        
+        #file-input {
+            display: none;
+        }
+        
+        .file-info {
+            display: none;
+            margin-top: 20px;
+            padding: 15px;
+            background: #edf2f7;
+            border-radius: 6px;
+        }
+        
+        .file-info.show {
+            display: block;
+        }
+        
+        .upload-btn {
+            display: none;
+            margin-top: 20px;
+            padding: 15px 40px;
+            background: #8B1538;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .upload-btn.show {
+            display: inline-block;
+        }
+        
+        .upload-btn:hover {
+            background: #6d0f2a;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(139, 21, 56, 0.3);
+        }
+        
+        .upload-btn:disabled {
+            background: #a0aec0;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .result {
+            display: none;
+            margin-top: 30px;
+            padding: 20px;
+            border-radius: 6px;
+        }
+        
+        .result.show {
+            display: block;
+        }
+        
+        .result.success {
+            background: #c6f6d5;
+            border: 2px solid #48bb78;
+            color: #22543d;
+        }
+        
+        .result.error {
+            background: #fed7d7;
+            border: 2px solid #fc8181;
+            color: #742a2a;
+        }
+        
+        .result h3 {
+            margin-bottom: 10px;
+            font-size: 18px;
+        }
+        
+        .result ul {
+            margin-left: 20px;
+        }
+
+        .instructions {
+            margin-top: 30px;
+            padding: 20px;
+            background: #edf2f7;
+            border-radius: 6px;
+            font-size: 14px;
+            color: #4a5568;
+        }
+
+        .instructions h3 {
+            color: #2d3748;
+            margin-bottom: 10px;
+        }
+
+        .instructions ol {
+            margin-left: 20px;
+        }
+
+        .instructions li {
+            margin-bottom: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo-header">
+                <img src="/static/get-a-grip-logo.jpg" alt="Get a Grip Logo">
+                <div>
+                    <h1>📤 Upload Invoices</h1>
+                    <p>Import unpaid invoices from ServiceFusion</p>
+                </div>
+            </div>
+
+            <div class="nav-links">
+                <a href="/">← Back to Statements</a>
+            </div>
+        </div>
+        
+        <div class="upload-section">
+            <div class="company-selector">
+                <label for="company-select">Select Company:</label>
+                <select id="company-select" required>
+                    <option value="">Choose a company...</option>
+                </select>
+            </div>
+
+            <div class="drop-zone" id="drop-zone">
+                <div class="drop-zone-icon">📄</div>
+                <div class="drop-zone-text">Drag & drop Excel file here</div>
+                <div class="drop-zone-subtext">or click to browse (xlsx, xls)</div>
+            </div>
+            
+            <input type="file" id="file-input" accept=".xlsx,.xls">
+            
+            <div class="file-info" id="file-info">
+                <strong>Selected file:</strong> <span id="file-name"></span>
+            </div>
+            
+            <button class="upload-btn" id="upload-btn">Upload & Import</button>
+            
+            <div class="result" id="result"></div>
+
+            <div class="instructions">
+                <h3>How to export from ServiceFusion:</h3>
+                <ol>
+                    <li>Log into ServiceFusion</li>
+                    <li>Go to <strong>Reports → Invoices</strong></li>
+                    <li>Filter by: <strong>Status = Unpaid</strong></li>
+                    <li>Set date range (e.g., last 6 months)</li>
+                    <li>Click <strong>Export → Excel</strong></li>
+                    <li>Select that file above and click Upload</li>
+                </ol>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const fileInfo = document.getElementById('file-info');
+        const fileName = document.getElementById('file-name');
+        const uploadBtn = document.getElementById('upload-btn');
+        const result = document.getElementById('result');
+        const companySelect = document.getElementById('company-select');
+        
+        let selectedFile = null;
+
+        // Load companies
+        async function loadCompanies() {
+            try {
+                const response = await fetch('/api/companies');
+                const companies = await response.json();
+                
+                companies.forEach(company => {
+                    const option = document.createElement('option');
+                    option.value = company.id;
+                    option.textContent = company.name;
+                    companySelect.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error loading companies:', error);
+            }
+        }
+        // Load and apply company branding
+        async function loadBranding() {
+            const companyId = parseInt(companySelect.value);
+            if (!companyId) return; // Don't load if no company selected
+            
+            try {
+                const response = await fetch(`/api/branding/${companyId}`);
+                const branding = await response.json();
+                
+                // Update CSS variables
+                document.documentElement.style.setProperty('--primary-color', branding.primary_color);
+                document.documentElement.style.setProperty('--secondary-color', branding.secondary_color);
+                document.documentElement.style.setProperty('--accent-color', branding.accent_color);
+                document.documentElement.style.setProperty('--background-color', branding.background_color);
+                
+                // Update logo
+                const logoImg = document.querySelector('.logo-header img');
+                if (logoImg) {
+                    logoImg.src = `/static/${branding.logo}`;
+                    logoImg.alt = `${branding.name} Logo`;
+                }
+                
+                // Update page title
+                const titleElement = document.querySelector('.logo-header h1');
+                if (titleElement && branding.display_name) {
+                    titleElement.innerHTML = `📤 ${branding.display_name}`;
+                }
+                
+            } catch (error) {
+                console.error('Error loading branding:', error);
+            }
+        }
+        
+        // Click to browse
+        dropZone.addEventListener('click', () => {
+            fileInput.click();
+        });
+        
+        // File selected via browse
+        fileInput.addEventListener('change', (e) => {
+            handleFile(e.target.files[0]);
+        });
+        
+        // Drag and drop handlers
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+        
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('dragover');
+        });
+        
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            handleFile(e.dataTransfer.files[0]);
+        });
+        
+        function handleFile(file) {
+            if (!file) return;
+            
+            const validTypes = [
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                'application/vnd.ms-excel'
+            ];
+            
+            if (!validTypes.includes(file.type)) {
+                showResult('error', 'Please select an Excel file (.xlsx or .xls)');
+                return;
+            }
+            
+            selectedFile = file;
+            fileName.textContent = file.name;
+            fileInfo.classList.add('show');
+            uploadBtn.classList.add('show');
+            result.classList.remove('show');
+        }
+        
+        // Upload button click
+        uploadBtn.addEventListener('click', async () => {
+            if (!selectedFile) return;
+
+            const companyId = companySelect.value;
+            if (!companyId) {
+                showResult('error', 'Please select a company first');
+                return;
+            }
+            
+            uploadBtn.disabled = true;
+            uploadBtn.textContent = 'Uploading...';
+            
+            try {
+                const formData = new FormData();
+                formData.append('file', selectedFile);
+                formData.append('company_id', companyId);
+                
+                const response = await fetch('/api/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.error || 'Upload failed');
+                }
+                
+                // Show success
+                let message = `
+                    <h3>✅ Import Complete</h3>
+                    <ul>
+                        <li><strong>${data.inserted}</strong> new invoices added</li>
+                        <li><strong>${data.updated}</strong> existing invoices updated</li>
+                        <li><strong>${data.skipped}</strong> invoices skipped (paid or invalid)</li>
+                    </ul>
+                `;
+                
+                if (data.errors && data.errors.length > 0) {
+                    message += `<p style="margin-top:10px"><strong>Errors:</strong></p><ul>`;
+                    data.errors.slice(0, 5).forEach(err => {
+                        message += `<li>${err}</li>`;
+                    });
+                    if (data.errors.length > 5) {
+                        message += `<li>...and ${data.errors.length - 5} more</li>`;
+                    }
+                    message += '</ul>';
+                }
+                
+                showResult('success', message);
+                
+                // Reset form
+                selectedFile = null;
+                fileInput.value = '';
+                fileInfo.classList.remove('show');
+                uploadBtn.classList.remove('show');
+                
+            } catch (error) {
+                showResult('error', `Error: ${error.message}`);
+            } finally {
+                uploadBtn.disabled = false;
+                uploadBtn.textContent = 'Upload & Import';
+            }
+        });
+        
+        function showResult(type, message) {
+            result.className = `result ${type} show`;
+            result.innerHTML = typeof message === 'string' ? `<p>${message}</p>` : message;
+        }
+        // Update branding when company changes
+        companySelect.addEventListener('change', loadBranding);
+
+        // Initialize
+        loadCompanies().then(() => {
+            // Load branding for first company after companies are loaded
+            if (companySelect.value) {
+                loadBranding();
+            }
+        });   
+ </script>
+</body>
+</html>
