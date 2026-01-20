@@ -35,6 +35,15 @@
 - Payment tracking
 - Mobile-friendly interface for field techs
 
+- Comprehensive audit log system
+  - Track ALL user actions with timestamps
+  - Who moved jobs, when, from where to where
+  - Who edited customer info, what changed
+  - Who deleted/modified invoices
+  - Searchable and filterable by user, date, action type
+  - Fast query performance (indexed properly)
+  - Export audit logs to CSV
+
 **Nice-to-Have**:
 - Calendar/schedule view
 - Basic reporting (jobs completed, revenue)
@@ -70,6 +79,12 @@
 - Integrations (accounting software, payment processors)
 - Automated backups and monitoring
 - Documentation for future maintainers
+
+- Audit log improvements
+  - Real-time activity feed for managers
+  - Suspicious activity alerts
+  - Performance optimization for large audit tables
+  - Retention policies (archive old logs)
 
 ---
 
