@@ -51,11 +51,11 @@ Build tax report page for sales tax compliance:
 - **LKit branding for "no selection" state**
 - **Import paid + unpaid invoices (statements use unpaid, tax uses paid)**
 - **Tax data fields in database (awaiting tax report import)**
+- ✅ Batch statement generation (ZIP download)
 
 ## What's In Progress 🔄
-- Tax report page and import (NEXT PRIORITY)
-- Batch statement generation
-- Email delivery functionality
+- Email delivery functionality (NEXT PRIORITY)
+- Batch email functionality
 
 ## Known Issues
 None - system stable
