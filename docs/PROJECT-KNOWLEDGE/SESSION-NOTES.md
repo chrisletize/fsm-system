@@ -420,3 +420,125 @@ After FL split import:
 - Paid vs unpaid invoices serve different business purposes (AR vs tax compliance)
 - UX details matter: dropdown behavior affects user confidence
 
+---
+
+## Session 6 - Tax Report with State/County Breakdown (2026-01-20)
+
+### What We Built
+
+1. **Complete Tax Report System**
+   - Separate page at `/tax-report`
+   - Upload ServiceFusion Tax Report Excel files
+   - County-grouped display with transaction details
+   - Date range filtering
+   - Export to Excel functionality
+
+2. **State vs County Tax Breakdown**
+   - Created NC tax rate database (all 100 counties)
+   - Hardcoded rates: 6.75%, 7.00%, 7.25%, 7.50%
+   - State: Always 4.75%
+   - County: 2.00% or 2.25%
+   - Transit: 0.50% (Mecklenburg, Wake, Durham, Orange only)
+   - Each transaction calculates state/county/transit portions
+
+3. **Summary Cards**
+   - Total State Tax - Shows all 4.75% portions going to state
+   - Total County Tax - Shows county + transit combined
+   - Total Tax Collected - Grand total
+   - Total Counties - Number of counties with transactions
+
+4. **County Breakdown Display**
+   - Each county header shows: "State: $X | County: $Y | Transit: $Z"
+   - Makes it clear where tax money goes
+   - Example: Mecklenburg shows $3,283 state + $1,380 county + $346 transit
+
+5. **Navigation System**
+   - Added Tax Report button to main statement page
+   - Added Tax Report button to upload page
+   - All 3 pages now interconnected
+   - Easy navigation between Statements / Tax Report / Upload
+
+6. **Clear Data Button**
+   - Added to tax report page (matches statement generator)
+   - Double confirmation before deletion
+   - Only shows when company selected
+
+### Technical Implementation
+
+**Files Created:**
+- `nc_tax_rates.py` - NC county tax rate database with breakdown calculator
+- `tax-report.html` - Tax report page with state/county display
+- Tax report API endpoints in `app.py`
+
+**Database:**
+- `tax_transactions` table with county, rates, amounts
+- Separate from invoices (paid vs unpaid workflow)
+
+**Key Functions:**
+- `get_tax_breakdown()` - Calculates state/county/transit portions
+- `get_county_rate_display()` - Formats rate display strings
+
+### Bug Fixes
+
+1. **Customer Totals Not Clearing**
+   - Fixed: clearDisplay() now resets customer totals section
+   - Previously persisted when switching companies
+
+2. **Background Colors**
+   - Fixed: Removed gradient, using solid company colors
+   - Better distinction between companies
+
+3. **Logo Display**
+   - Fixed: Branding API now returns logo_url with /static/ prefix
+   - All company logos display correctly
+
+### Testing Results
+
+✅ Uploaded December 2025 Get a Grip tax data (208 transactions)
+✅ 10 counties displaying correctly
+✅ Tax breakdown math verified:
+   - Total State: $3,284 (4.75%)
+   - Total County: $1,726 (2.00-2.25% + 0.50% transit)
+   - Total: $5,010
+✅ Mecklenburg transit tax calculated correctly
+✅ Navigation between all pages working
+✅ Export to Excel functional
+
+### Time Spent
+~3 hours (tax rate research, implementation, testing, navigation)
+
+### Next Session Goals
+
+1. **Batch Statement Generation**
+   - Generate PDFs for multiple customers at once
+   - Checkbox selection system (QuickBooks-style)
+   - "Select All" functionality
+   - Optional date range filtering
+   - Download as ZIP file
+
+2. **Email Functionality**
+   - Send statements via email
+   - Batch email option
+   - Email validation
+
+3. **Cleanup & Polish**
+   - Loading spinners
+   - Better error messages
+   - Confirmation dialogs
+   - Mobile responsiveness
+
+### Decisions Made
+
+- Tax report uses separate table from invoices (different workflows)
+- State/county breakdown calculated proportionally from total rate
+- Transit tax grouped with county tax in summary (simpler for filing)
+- NC tax rates hardcoded (more reliable than trying to parse from data)
+- Navigation buttons on all pages for easy movement
+
+### Key Learnings
+
+- NC has 4 counties with transit tax (0.5%)
+- Most counties are either 6.75% or 7.00%
+- Mecklenburg passed additional 1% transit tax (effective July 2026)
+- State always takes exactly 4.75%, counties get the rest
+- Tax filing requires state vs county breakdown for reporting
