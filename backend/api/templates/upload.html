@@ -266,7 +266,7 @@
             <div class="company-selector">
                 <label for="company-select">Select Company:</label>
                 <select id="company-select" required>
-                    <option value="">Choose a company...</option>
+                    <option value="0" selected>Select a company to begin</option>
                 </select>
             </div>
 
@@ -330,7 +330,7 @@
         // Load and apply company branding
         async function loadBranding() {
             const companyId = parseInt(companySelect.value);
-            if (!companyId) return; // Don't load if no company selected
+            if (companyId === null || companyId === undefined || isNaN(companyId)) return; // Don't load if no company selected
             
             try {
                 const response = await fetch(`/api/branding/${companyId}`);
@@ -480,12 +480,8 @@
         companySelect.addEventListener('change', loadBranding);
 
         // Initialize
-        loadCompanies().then(() => {
-            // Load branding for first company after companies are loaded
-            if (companySelect.value) {
-                loadBranding();
-            }
-        });   
+            loadBranding(); // Load default LKit branding
+        loadCompanies();
  </script>
 </body>
 </html>

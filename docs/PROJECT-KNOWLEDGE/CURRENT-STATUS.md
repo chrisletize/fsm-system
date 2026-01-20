@@ -1,71 +1,89 @@
 # FSM System - Current Status
-*Last Updated: 2026-01-15*
+*Last Updated: 2026-01-19*
 
 ## Project Overview
 Building custom Field Service Management system to replace ServiceFusion.
 - **Companies**: 4 service companies (Get a Grip Charlotte, Kleanit Charlotte, CTS of Raleigh, Kleanit South Florida)
 - **Users**: ~25 field technicians, 5 office staff
 - **Scale**: 250 jobs/day at peak season
-- **Current Phase**: Phase 0 - Statement Generator (Proof of Concept)
+- **Current Phase**: Phase 0 - Statement Generator (Proof of Concept) + Tax Reporting
 
 ## Business Problem
 ServiceFusion costs ~$1,500/month for 4 companies and lacks statement generation capability.
 QuickBooks integration is problematic - requires Michele to spend 5-10 hours weekly fixing sync errors.
-Michele (AR person) needs to generate professional customer statements monthly.
+Michele (AR person) needs to generate professional customer statements monthly AND tax reports for compliance.
 
 **Goal**: Build complete FSM replacement to eliminate ServiceFusion costs ($25k+/year savings) and gain full control over features.
 
-## Phase 0 Status: NEARLY COMPLETE ✅
+## Phase 0 Status: STATEMENT GENERATOR COMPLETE ✅
 
-Build standalone statement generator as proof of concept:
-- ✅ Import unpaid invoices from ServiceFusion Excel exports
+Statement generator is production-ready:
+- ✅ Import invoices from ServiceFusion Excel exports (all companies)
+- ✅ Auto-split Kleanit customers (*FL* → South Florida, others → Charlotte)
 - ✅ Generate professional PDF statements with company branding
-- ✅ Clean web interface for Michele at statements.cletize.com
-- ✅ Excel upload feature with drag-and-drop
-- 🔄 Testing with all 4 companies' data (in progress)
+- ✅ Clean web interface at statements.cletize.com
+- ✅ Excel upload with drag-and-drop
+- ✅ Dynamic branding (4 companies + LKit default state)
+- ✅ Clear data feature per company
 
-**Success Criteria**: Michele can generate statements in <2 minutes
+**Success Criteria**: Michele can generate statements in <2 minutes ✅ ACHIEVED
+
+## Phase 0.5: Tax Reporting (IN PROGRESS)
+
+Build tax report page for sales tax compliance:
+- 🔄 Import ServiceFusion Tax Report (county-grouped format)
+- 🔄 Display breakdown by county and tax rate
+- 🔄 Show customer tax totals
+- 🔄 Date range filtering
+- 🔄 Export to Excel
+
+**Success Criteria**: Michele can file monthly tax returns in <30 minutes
 
 ## What's Working ✅
 - PostgreSQL 16 database on ubuntu1
-- Multi-tenant database schema (companies, customers, invoices)
-- Real data imported: All 4 companies' unpaid invoices
-- Flask web application with dynamic branding per company
-- PDF statement generator with company logo and aging buckets
-- Reverse proxy configured (statements.cletize.com via NPM)
-- Web interface shows customer list, search, and one-click PDF generation
-- Excel upload page with drag-and-drop interface
-- Automatic duplicate detection (updates existing, inserts new)
-- Upload feedback shows inserted/updated/skipped counts
-- **NEW: Clear data button per company with double confirmation**
-- **NEW: Systemd service - runs automatically in background**
-- **NEW: Fixed company dropdown UX - no auto-load confusion**
-- **NEW: All 4 companies tested and working**
+- Multi-tenant schema (companies, customers, invoices)
+- Real data: 1,169 invoices across 4 companies
+- Flask web application with systemd service
+- PDF statement generator with dynamic branding
+- Reverse proxy (statements.cletize.com)
+- Excel upload with duplicate detection
+- **Auto-split: Kleanit Charlotte (1,138 customers) + Kleanit FL (202 customers)**
+- **LKit branding for "no selection" state**
+- **Import paid + unpaid invoices (statements use unpaid, tax uses paid)**
+- **Tax data fields in database (awaiting tax report import)**
 
 ## What's In Progress 🔄
-- Bulk statement generation (next priority)
-- Date range filtering
+- Tax report page and import (NEXT PRIORITY)
+- Batch statement generation
 - Email delivery functionality
 
 ## Known Issues
-None currently - system stable and functional
+None - system stable
 
 ## Next Steps
-1. Test upload with Kleanit Charlotte, CTS of Raleigh, Kleanit South Florida data
-2. Deploy to production and train Michele
-3. Monitor for any issues during first month of use
-4. Begin planning Phase 1 (full FSM features)
+1. Build tax report page with ServiceFusion Tax Report import
+2. Implement batch PDF generation
+3. Add email functionality
+4. Get Michele's feedback after 1 month of use
+5. Begin planning Phase 1 (full FSM features)
 
-## Technical Stack Confirmed
+## Technical Stack
 - **Backend**: Python + Flask
 - **Database**: PostgreSQL 16
 - **PDF Generation**: ReportLab
-- **Frontend**: HTML + CSS (burgundy/cream brand colors)
+- **Frontend**: HTML + CSS + JavaScript
 - **File Upload**: openpyxl for Excel parsing
-- **Deployment**: Docker on ubuntu1, Nginx reverse proxy
+- **Deployment**: Systemd service on ubuntu1, Nginx reverse proxy
 
 ## Key Metrics
-- Development time: ~12 hours total
-- Database: 3 tables, 180+ records
-- Outstanding invoices tracked: $119,360+
+- Development time: ~16 hours total
+- Database: 3 tables, 1,340+ customer records
+- Outstanding AR: $230,053.28 (across all companies)
 - Features completed: 100% of Phase 0 scope
+- Tax data ready: 108 paid invoices with tax fields
+
+## Company Breakdown
+- **Kleanit Charlotte** (ID 1): 1,138 customers, $194,994.28 outstanding
+- **Get a Grip Charlotte** (ID 2): Data ready for import
+- **CTS of Raleigh** (ID 3): Data ready for import  
+- **Kleanit South Florida** (ID 4): 202 customers, $35,059.00 outstanding

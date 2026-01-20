@@ -302,3 +302,121 @@
 2. Add date range filter
 3. Test with Michele's feedback
 4. Begin email functionality planning
+
+---
+
+## Session 5 - Auto-Split Kleanit FL, LKit Branding & Tax Prep (2026-01-19)
+
+### What We Built
+
+1. **Auto-Split Kleanit Customers**
+   - Customers with `*FL*` in name automatically route to Kleanit South Florida (company_id 4)
+   - Non-FL customers route to Kleanit Charlotte (company_id 1)
+   - Single upload splits data to both companies automatically
+   - Michele can upload combined Kleanit file once per month
+
+2. **LKit Branding System**
+   - Created company_id 0 for "no company selected" state
+   - Muted lavender color scheme (#8b7a9e, #b8a3d1, #ede5f5)
+   - Created LKit logo (interlocking L+K lettermark)
+   - Both main and upload pages show LKit branding on load
+   - "Select a company to begin" dropdown option
+
+3. **Updated Company Branding**
+   - Kleanit Charlotte: Blue (#0052CC) primary
+   - Kleanit South Florida: Green (#00D66C) primary - differentiated from Charlotte
+   - Fixed company_id database assignments (Kleanit Charlotte = 1, not 2)
+
+4. **Tax Data Infrastructure**
+   - Added tax_total and tax_rate_name to invoice imports
+   - Import ALL invoices (paid and unpaid) for future tax reporting
+   - Statement generator filters for unpaid (invoice_total_due > 0)
+   - Discovered ServiceFusion has separate Tax Report export
+   - Ready to build dedicated tax report page
+
+### Technical Fixes
+
+1. **Company ID Database Correction**
+   - Discovered: company_id 1 = Kleanit Charlotte (not Get a Grip)
+   - company_id 2 = Get a Grip Charlotte
+   - Updated auto-split logic to check company_id == 1 for FL routing
+   - Fixed all references throughout codebase
+
+2. **Customer INSERT Bug**
+   - Customer creation was using `company_id` instead of `target_company_id`
+   - FL customers were creating as Kleanit Charlotte, invoices as Kleanit FL
+   - Fixed: All customer and invoice operations now use `target_company_id`
+
+3. **UX Improvements**
+   - Removed auto-load on page initialization
+   - Clean dropdown with single "Select a company to begin" option
+   - LKit branding provides visual cue that no company is selected
+   - Consistent behavior across main and upload pages
+
+### Database Insights
+
+After FL split import:
+- **Kleanit Charlotte**: 1,138 customers, 734 invoices, $194,994.28
+- **Kleanit South Florida**: 202 customers, 202 invoices, $35,059.00
+- All FL customers correctly have `*FL*` prefix in customer_name
+- Zero double-counting between companies
+
+### Tax Report Discovery
+
+- ServiceFusion "Invoice Report" has Tax Total and Tax Rate Name columns (empty)
+- ServiceFusion "Tax Report" has actual tax data grouped by county
+- Tax Report format: County name in column A, tax rate, tax collected
+- Michele needs tax reporting for paid invoices only
+- Plan: Separate tax report page with county/rate breakdown
+
+### Files Modified
+
+- `backend/api/app.py` - Auto-split logic, tax fields, fixed company_id references
+- `backend/api/branding.py` - Added company_id 0, updated Kleanit FL colors
+- `backend/api/templates/index.html` - LKit branding, dropdown cleanup
+- `backend/api/templates/upload.html` - LKit branding, dropdown cleanup
+- `backend/api/static/lkit-logo.svg` - NEW logo file
+
+### Testing Results
+
+- ✅ Auto-split working: 1,138 Charlotte + 202 FL customers
+- ✅ All FL customers have `*FL*` in name
+- ✅ LKit branding displays on page load
+- ✅ Company selection works cleanly
+- ✅ Paid invoices import (108 in test dataset)
+- ✅ Tax fields added to database (awaiting tax report import)
+
+### Time Spent
+~4 hours (auto-split logic, branding system, tax discovery, debugging)
+
+### Next Session Goals
+
+1. **Build Tax Report Page**
+   - Upload ServiceFusion Tax Report (different format than Invoice Report)
+   - Display breakdown by county and tax rate
+   - Show customer tax totals
+   - Date range filtering
+
+2. **Batch Statement Generation**
+   - Generate PDFs for all customers at once
+   - Bulk download as ZIP file
+
+3. **Email Functionality**
+   - Send individual statements via email
+   - Batch email option
+
+### Decisions Made
+
+- Import all invoices (paid + unpaid) to support both statement and tax workflows
+- Statement generator filters for unpaid only
+- Tax report will be separate page with separate data structure
+- LKit branding provides professional "unselected" state
+- Auto-split happens at import time (not at query time)
+
+### Key Learnings
+
+- Company IDs in database don't match alphabetical order (Charlotte=1, Get a Grip=2)
+- ServiceFusion has multiple report types - need right one for each use case
+- Paid vs unpaid invoices serve different business purposes (AR vs tax compliance)
+- UX details matter: dropdown behavior affects user confidence
+

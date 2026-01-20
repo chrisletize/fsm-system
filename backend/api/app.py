@@ -152,14 +152,15 @@ def generate_statement(customer_id):
 
 @app.route('/api/summary')
 def get_summary():
-    """Get overall summary stats"""
+    """Get overall summary stats with aging buckets"""
     company_id = request.args.get('company_id', 2, type=int)
     
     conn = get_db_connection()
     cur = conn.cursor()
     
+    # Get basic summary stats
     cur.execute("""
-        SELECT 
+        SELECT
             COUNT(DISTINCT c.id) as customer_count,
             COUNT(i.id) as invoice_count,
             SUM(i.invoice_total_due) as total_due
@@ -168,8 +169,46 @@ def get_summary():
         WHERE c.company_id = %s
           AND i.invoice_total_due > 0
     """, (company_id,))
-    
     summary = cur.fetchone()
+    
+    # Calculate aging buckets
+    cur.execute("""
+        SELECT
+            SUM(CASE 
+                WHEN CURRENT_DATE - i.invoice_date <= 30 THEN i.invoice_total_due 
+                ELSE 0 
+            END) as current,
+            SUM(CASE 
+                WHEN CURRENT_DATE - i.invoice_date > 30 AND CURRENT_DATE - i.invoice_date <= 60 THEN i.invoice_total_due 
+                ELSE 0 
+            END) as days_30,
+            SUM(CASE 
+                WHEN CURRENT_DATE - i.invoice_date > 60 AND CURRENT_DATE - i.invoice_date <= 90 THEN i.invoice_total_due 
+                ELSE 0 
+            END) as days_60,
+            SUM(CASE 
+                WHEN CURRENT_DATE - i.invoice_date > 90 THEN i.invoice_total_due 
+                ELSE 0 
+            END) as days_90
+        FROM invoices i
+        WHERE i.company_id = %s
+          AND i.invoice_total_due > 0
+    """, (company_id,))
+    aging = cur.fetchone()
+    
+    cur.close()
+    conn.close()
+    
+    # Format response
+    return jsonify({
+        'customer_count': summary['customer_count'],
+        'invoice_count': summary['invoice_count'],
+        'total_due': float(summary['total_due']) if summary['total_due'] is not None else 0.0,
+        'current': float(aging['current']) if aging['current'] is not None else 0.0,
+        'days_30': float(aging['days_30']) if aging['days_30'] is not None else 0.0,
+        'days_60': float(aging['days_60']) if aging['days_60'] is not None else 0.0,
+        'days_90': float(aging['days_90']) if aging['days_90'] is not None else 0.0
+    })
     
     cur.close()
     conn.close()
@@ -197,6 +236,28 @@ def upload_file():
     if not allowed_file(file.filename):
         return jsonify({'error': 'Only .xlsx and .xls files allowed'}), 400
     
+    # Get selected company
+    company_id = request.form.get('company_id')
+    if not company_id:
+        return jsonify({'error': 'No company selected'}), 400
+    
+    try:
+        # Save file temporarily
+        filename = secure_filename(file.filename)
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(filepath)
+        
+        # Parse and import
+        result = import_servicefusion_excel(filepath, int(company_id))
+        
+        # Clean up
+        os.remove(filepath)
+        
+        return jsonify(result)
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/clear-company-data/<int:company_id>', methods=['DELETE'])
 def clear_company_data(company_id):
     """Delete all invoices and customers for a company"""
@@ -221,28 +282,6 @@ def clear_company_data(company_id):
             'invoices_deleted': invoices_deleted,
             'customers_deleted': customers_deleted
         })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-    
-    # Get selected company
-    company_id = request.form.get('company_id')
-    if not company_id:
-        return jsonify({'error': 'No company selected'}), 400
-    
-    try:
-        # Save file temporarily
-        filename = secure_filename(file.filename)
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        file.save(filepath)
-        
-        # Parse and import
-        result = import_servicefusion_excel(filepath, int(company_id))
-        
-        # Clean up
-        os.remove(filepath)
-        
-        return jsonify(result)
-    
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -277,10 +316,23 @@ def import_servicefusion_excel(filepath, company_id):
             customer_name = row[col_map['Customer Name']]
             invoice_date = row[col_map['Invoice Date']]
             invoice_total = float(row[col_map['Invoice Total']] or 0)
+            
+            # AUTO-SPLIT: If uploading to Kleanit Charlotte (2) and customer has *FL*, route to Kleanit FL (4)
+            target_company_id = company_id
+            print(f"DEBUG: Processing '{customer_name}' - company_id={company_id}, has FL={'*FL*' in str(customer_name)}")
+            if company_id == 1 and customer_name and '*FL*' in str(customer_name):
+                target_company_id = 4  # Kleanit South Florida
+                print(f"DEBUG: ✓ Routing '{customer_name}' to Kleanit FL")
+
+            # Extract tax data
+            tax_total = float(row[col_map.get('Tax Total')] or 0)
+            tax_rate_name = row[col_map.get('Tax Rate Name')]
+            
+            invoice_total = float(row[col_map['Invoice Total']] or 0)
             amount_due = float(row[col_map['Invoice Total Due']] or 0)
             
             # Skip if no invoice number or already paid
-            if not invoice_number or amount_due <= 0:
+            if not invoice_number:
                 stats['skipped'] += 1
                 continue
             
@@ -288,7 +340,7 @@ def import_servicefusion_excel(filepath, company_id):
             cur.execute("""
                 SELECT id FROM customers 
                 WHERE company_id = %s AND customer_name = %s
-            """, (company_id, customer_name))
+            """, (target_company_id, customer_name))
             
             customer = cur.fetchone()
             
@@ -301,7 +353,7 @@ def import_servicefusion_excel(filepath, company_id):
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 """, (
-                    company_id,
+                    target_company_id,
                     customer_name,
                     row[col_map.get('Contact Email 1')],
                     row[col_map.get('Contact Phone 1')],
@@ -318,7 +370,7 @@ def import_servicefusion_excel(filepath, company_id):
             cur.execute("""
                 SELECT id FROM invoices 
                 WHERE company_id = %s AND invoice_number = %s
-            """, (company_id, invoice_number))
+            """, (target_company_id, invoice_number))
             
             existing = cur.fetchone()
             
@@ -329,6 +381,8 @@ def import_servicefusion_excel(filepath, company_id):
                         customer_id = %s,
                         invoice_date = %s,
                         invoice_total = %s,
+                        tax_total = %s,
+                        tax_rate_name = %s,
                         invoice_total_due = %s,
                         invoice_status = %s
                     WHERE id = %s
@@ -341,7 +395,7 @@ def import_servicefusion_excel(filepath, company_id):
                         company_id, customer_id, invoice_number,
                         invoice_date, invoice_status, invoice_total, invoice_total_due
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """, (company_id, customer_id_val, invoice_number,
+                """, (target_company_id, customer_id_val, invoice_number,
                       invoice_date, 'Unpaid', invoice_total, amount_due))
                 stats['inserted'] += 1
         

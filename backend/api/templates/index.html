@@ -89,9 +89,20 @@
         
         .summary-cards {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            grid-template-columns: repeat(3, 1fr);
             gap: 20px;
             margin-bottom: 30px;
+        }
+        
+        .summary-card:nth-child(4),
+        .summary-card:nth-child(5),
+        .summary-card:nth-child(6),
+        .summary-card:nth-child(7) {
+            grid-column: span 1;
+        }
+        
+        .summary-card:nth-child(4) {
+            grid-column: 1;
         }
         
         .summary-card {
@@ -346,6 +357,7 @@
             <div class="company-selector">
                 <label for="company-select">Select Company:</label>
                 <select id="company-select" onchange="loadData()">
+                    <option value="0" selected>Select a company to begin</option>
                     <option value="">Loading companies...</option>
                 </select>
             </div>
@@ -369,6 +381,22 @@
             <div class="summary-card total">
                 <h3>Total Outstanding</h3>
                 <div class="value" id="total-due">$0.00</div>
+            </div>
+            <div class="summary-card">
+                <h3>Current</h3>
+                <div class="value" id="aging-current">$0.00</div>
+            </div>
+            <div class="summary-card">
+                <h3>31-60 Days</h3>
+                <div class="value" id="aging-30">$0.00</div>
+            </div>
+            <div class="summary-card">
+                <h3>61-90 Days</h3>
+                <div class="value" id="aging-60">$0.00</div>
+            </div>
+            <div class="summary-card">
+                <h3>90+ Days</h3>
+                <div class="value" id="aging-90">$0.00</div>
             </div>
         </div>
 
@@ -399,7 +427,7 @@
 
     <script>
         let allCustomers = [];
-        let currentCompanyId = 2; // Default to Get a Grip
+        let currentCompanyId = 0; // Default to Letize Kit
         
         // Load companies on page load
         async function loadCompanies() {
@@ -408,7 +436,7 @@
                 const companies = await response.json();
                 
                 const select = document.getElementById('company-select');
-                select.innerHTML = companies.map(c => 
+                select.innerHTML = '<option value="0">Select a company to begin</option>' + companies.map(c =>
                     `<option value="${c.id}" ${c.id === currentCompanyId ? 'selected' : ''}>${c.name}</option>`
                 ).join('');
             } catch (error) {
@@ -438,7 +466,7 @@
         document.documentElement.style.setProperty('--secondary-color', branding.secondary_color);
         document.documentElement.style.setProperty('--accent-color', branding.accent_color);
         document.documentElement.style.setProperty('--background-color', branding.background_color);
-        
+
         // Update logo
         const logoImg = document.querySelector('.logo-header img');
         if (logoImg) {
@@ -462,10 +490,13 @@
             try {
                 const response = await fetch(`/api/summary?company_id=${currentCompanyId}`);
                 const summary = await response.json();
-                
                 document.getElementById('customer-count').textContent = summary.customer_count;
                 document.getElementById('invoice-count').textContent = summary.invoice_count;
                 document.getElementById('total-due').textContent = '$' + summary.total_due.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                document.getElementById('aging-current').textContent = '$' + summary.current.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                document.getElementById('aging-30').textContent = '$' + summary.days_30.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                document.getElementById('aging-60').textContent = '$' + summary.days_60.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                document.getElementById('aging-90').textContent = '$' + summary.days_90.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
             } catch (error) {
                 console.error('Error loading summary:', error);
             }
@@ -650,6 +681,7 @@
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', () => {
             loadCompanies();
+            loadBranding(); // Load default LKit branding
         });
     </script>
 </body>
