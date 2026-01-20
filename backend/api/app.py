@@ -13,8 +13,11 @@ import openpyxl
 from werkzeug.utils import secure_filename
 import os
 import sys
-from datetime import date
+from datetime import datetime, date
+from nc_tax_rates import get_tax_breakdown, get_county_rate_display
 from branding import get_branding
+from io import BytesIO
+import zipfile
 
 # Add scripts directory to path so we can import our PDF generator
 sys.path.append(os.path.join(os.path.dirname(__file__), '../../scripts'))
@@ -112,7 +115,10 @@ def get_companies():
 def get_company_branding(company_id):
     """Get branding configuration for a company"""
     branding = get_branding(company_id)
-    return jsonify(branding)
+    # Add /static/ prefix to logo path
+    branding_with_url = branding.copy()
+    branding_with_url['logo_url'] = f"/static/{branding['logo']}"
+    return jsonify(branding_with_url)
 
 @app.route('/api/generate-statement/<int:customer_id>')
 def generate_statement(customer_id):
@@ -411,6 +417,462 @@ def import_servicefusion_excel(filepath, company_id):
     conn.close()
     
     return stats
+# ========================================
+# TAX REPORT API ENDPOINTS
+# Add these to your existing app.py file
+# ========================================
+
+from datetime import datetime
+import openpyxl
+from io import BytesIO
+from flask import send_file
+
+# Route for tax report page
+@app.route('/tax-report')
+def tax_report():
+    """Tax report page"""
+    return render_template('tax-report.html')
+
+# API: Get tax data for a company
+@app.route('/api/tax-data/<int:company_id>')
+def get_tax_data(company_id):
+    """Get all tax transactions for a company with state/county/transit breakdown"""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    cur.execute("""
+        SELECT 
+            id,
+            county,
+            invoice_date,
+            invoice_number,
+            customer_name,
+            job_number,
+            total_sales,
+            taxable_amount,
+            tax_rate,
+            tax_collected
+        FROM tax_transactions
+        WHERE company_id = %s
+        ORDER BY county, invoice_date
+    """, (company_id,))
+    
+    transactions = cur.fetchall()
+    cur.close()
+    conn.close()
+    
+    # Convert to list of dicts with Decimal to float AND add tax breakdown
+    result = []
+    for t in transactions:
+        tax_collected = float(t['tax_collected'])
+        breakdown = get_tax_breakdown(t['county'], tax_collected)
+        
+        result.append({
+            'id': t['id'],
+            'county': t['county'],
+            'invoice_date': t['invoice_date'].isoformat() if t['invoice_date'] else None,
+            'invoice_number': t['invoice_number'],
+            'customer_name': t['customer_name'],
+            'job_number': t['job_number'],
+            'total_sales': float(t['total_sales']),
+            'taxable_amount': float(t['taxable_amount']),
+            'tax_rate': t['tax_rate'],
+            'tax_collected': tax_collected,
+            'state_tax': breakdown['state'],
+            'county_tax': breakdown['county'],
+            'transit_tax': breakdown['transit']
+        })
+    
+    return jsonify(result)
+
+# API: Upload tax report Excel file
+@app.route('/api/upload-tax', methods=['POST'])
+def upload_tax_report():
+    """Upload and import ServiceFusion Tax Report"""
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+    
+    file = request.files['file']
+    company_id = request.form.get('company_id')
+    
+    if not company_id:
+        return jsonify({'error': 'No company selected'}), 400
+    
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+    
+    if not allowed_file(file.filename):
+        return jsonify({'error': 'Invalid file type'}), 400
+    
+    try:
+        # Save file temporarily
+        filename = secure_filename(file.filename)
+        filepath = os.path.join('/tmp', filename)
+        file.save(filepath)
+        
+        # Parse Excel file
+        wb = openpyxl.load_workbook(filepath)
+        ws = wb.active
+        
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        inserted = 0
+        updated = 0
+        skipped = 0
+        errors = []
+        
+        current_county = None
+        
+        # Start from row 2 (after headers)
+        for row_num in range(2, ws.max_row + 1):
+            try:
+                # Get cell values
+                col_a = ws.cell(row=row_num, column=1).value  # County name
+                invoice_date = ws.cell(row=row_num, column=2).value
+                invoice_number = ws.cell(row=row_num, column=3).value
+                customer_name = ws.cell(row=row_num, column=4).value
+                job_number = ws.cell(row=row_num, column=5).value
+                total_sales = ws.cell(row=row_num, column=6).value
+                taxable_amount = ws.cell(row=row_num, column=7).value
+                tax_rate = ws.cell(row=row_num, column=8).value
+                tax_collected = ws.cell(row=row_num, column=9).value
+                
+                # County name in column A
+                if col_a and isinstance(col_a, str) and col_a.strip():
+                    current_county = col_a.strip()
+                
+                # Skip empty rows
+                if not invoice_number:
+                    skipped += 1
+                    continue
+                
+                # Parse invoice date
+                if isinstance(invoice_date, datetime):
+                    invoice_date_str = invoice_date.strftime('%Y-%m-%d')
+                elif isinstance(invoice_date, str):
+                    try:
+                        parsed_date = datetime.strptime(invoice_date, '%m/%d/%Y')
+                        invoice_date_str = parsed_date.strftime('%Y-%m-%d')
+                    except:
+                        invoice_date_str = invoice_date
+                else:
+                    skipped += 1
+                    continue
+                
+                # Convert values
+                total_sales_val = float(total_sales) if total_sales else 0
+                taxable_amount_val = float(taxable_amount) if taxable_amount else 0
+                tax_collected_val = float(tax_collected) if tax_collected else 0
+                tax_rate_str = str(tax_rate) if tax_rate else '0%'
+                
+                # Check if transaction already exists
+                cur.execute("""
+                    SELECT id FROM tax_transactions 
+                    WHERE company_id = %s AND invoice_number = %s
+                """, (company_id, str(invoice_number)))
+                
+                existing = cur.fetchone()
+                
+                if existing:
+                    # Update existing
+                    cur.execute("""
+                        UPDATE tax_transactions SET
+                            county = %s,
+                            invoice_date = %s,
+                            customer_name = %s,
+                            job_number = %s,
+                            total_sales = %s,
+                            taxable_amount = %s,
+                            tax_rate = %s,
+                            tax_collected = %s
+                        WHERE id = %s
+                    """, (current_county, invoice_date_str, customer_name or '',
+                         job_number or '', total_sales_val, taxable_amount_val,
+                         tax_rate_str, tax_collected_val, existing['id']))
+                    updated += 1
+                else:
+                    # Insert new
+                    cur.execute("""
+                        INSERT INTO tax_transactions (
+                            company_id, county, invoice_date, invoice_number,
+                            customer_name, job_number, total_sales, taxable_amount,
+                            tax_rate, tax_collected
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (company_id, current_county, invoice_date_str, str(invoice_number),
+                         customer_name or '', job_number or '', total_sales_val,
+                         taxable_amount_val, tax_rate_str, tax_collected_val))
+                    inserted += 1
+                
+            except Exception as e:
+                errors.append(f"Row {row_num}: {str(e)}")
+                continue
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        # Clean up temp file
+        os.remove(filepath)
+        
+        return jsonify({
+            'inserted': inserted,
+            'updated': updated,
+            'skipped': skipped,
+            'errors': errors
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# API: Export tax data to Excel
+@app.route('/api/export-tax/<int:company_id>')
+def export_tax_data(company_id):
+    """Export tax data to Excel"""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    # Get company name
+    cur.execute("SELECT name FROM companies WHERE id = %s", (company_id,))
+    company = cur.fetchone()
+    company_name = company['name'] if company else 'Unknown'
+    
+    # Get all tax transactions
+    cur.execute("""
+        SELECT 
+            county,
+            invoice_date,
+            invoice_number,
+            customer_name,
+            job_number,
+            total_sales,
+            taxable_amount,
+            tax_rate,
+            tax_collected
+        FROM tax_transactions
+        WHERE company_id = %s
+        ORDER BY county, invoice_date
+    """, (company_id,))
+    
+    transactions = cur.fetchall()
+    cur.close()
+    conn.close()
+    
+    # Create Excel workbook
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Tax Report'
+    
+    # Headers
+    headers = ['County', 'Invoice Date', 'Invoice #', 'Customer', 'Job #', 
+               'Total Sales', 'Taxable Amount', 'Tax Rate', 'Tax Collected']
+    ws.append(headers)
+    
+    # Data rows
+    current_county = None
+    county_totals = {}
+    
+    for t in transactions:
+        county = t['county']
+        
+        # Track county totals
+        if county not in county_totals:
+            county_totals[county] = {
+                'sales': 0,
+                'taxable': 0,
+                'tax': 0
+            }
+        
+        county_totals[county]['sales'] += float(t['total_sales'])
+        county_totals[county]['taxable'] += float(t['taxable_amount'])
+        county_totals[county]['tax'] += float(t['tax_collected'])
+        
+        ws.append([
+            county,
+            t['invoice_date'].strftime('%m/%d/%Y') if t['invoice_date'] else '',
+            t['invoice_number'],
+            t['customer_name'],
+            t['job_number'] or '',
+            float(t['total_sales']),
+            float(t['taxable_amount']),
+            t['tax_rate'],
+            float(t['tax_collected'])
+        ])
+    
+    # Add summary sheet
+    summary_ws = wb.create_sheet('Summary')
+    summary_ws.append(['County', 'Total Sales', 'Taxable Amount', 'Tax Collected'])
+    
+    for county, totals in sorted(county_totals.items()):
+        summary_ws.append([
+            county,
+            totals['sales'],
+            totals['taxable'],
+            totals['tax']
+        ])
+    
+    # Grand total
+    summary_ws.append([])
+    summary_ws.append([
+        'GRAND TOTAL',
+        sum(t['sales'] for t in county_totals.values()),
+        sum(t['taxable'] for t in county_totals.values()),
+        sum(t['tax'] for t in county_totals.values())
+    ])
+    
+    # Save to BytesIO
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    # Generate filename
+    today = datetime.now().strftime('%Y-%m-%d')
+    filename = f'TaxReport_{company_name.replace(" ", "_")}_{today}.xlsx'
+    
+    return send_file(
+        output,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name=filename
+    )
+
+# API: Clear tax data for a company
+@app.route('/api/clear-tax-data/<int:company_id>', methods=['DELETE'])
+def clear_tax_data(company_id):
+    """Clear all tax transactions for a company"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        cur.execute("DELETE FROM tax_transactions WHERE company_id = %s", (company_id,))
+        deleted_count = cur.rowcount
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'deleted': deleted_count,
+            'message': f'Deleted {deleted_count} tax transactions'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ========================================
+# BATCH STATEMENT GENERATION ENDPOINT
+# Add this to your app.py file
+# ========================================
+
+import zipfile
+from io import BytesIO
+from datetime import datetime
+
+# Add this import at the top if not already there:
+# from flask import send_file
+
+def clean_customer_name(name):
+    """Convert customer name to proper Title Case with spaces"""
+    # Replace underscores with spaces
+    clean = name.replace('_', ' ')
+    # Title case (capitalizes first letter of each word)
+    clean = clean.title()
+    return clean
+
+@app.route('/api/generate-batch-statements', methods=['POST'])
+def generate_batch_statements():
+    """Generate PDF statements for multiple customers and return as ZIP file"""
+    try:
+        data = request.get_json()
+        customer_ids = data.get('customer_ids', [])
+        company_id = data.get('company_id')
+        
+        if not customer_ids:
+            return jsonify({'error': 'No customers selected'}), 400
+        
+        if not company_id:
+            return jsonify({'error': 'No company selected'}), 400
+        
+        # Import the PDF generation function
+        sys.path.insert(0, '/home/chrisletize/fsm-system/scripts')
+        from generate_pdf_statement import generate_pdf_statement
+        
+        # Create temp directory for PDFs
+        temp_dir = '/tmp/batch_statements'
+        os.makedirs(temp_dir, exist_ok=True)
+        
+        # Create ZIP file in memory
+        zip_buffer = BytesIO()
+        
+        # Get company name for filename
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM companies WHERE id = %s", (company_id,))
+        company = cur.fetchone()
+        company_name = company['name'] if company else 'Company'
+        cur.close()
+        conn.close()
+        
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            # Generate PDF for each customer
+            for customer_id in customer_ids:
+                try:
+                    # Get customer name
+                    conn = get_db_connection()
+                    cur = conn.cursor()
+                    cur.execute("SELECT customer_name FROM customers WHERE id = %s AND company_id = %s", 
+                               (customer_id, company_id))
+                    customer = cur.fetchone()
+                    cur.close()
+                    conn.close()
+                    
+                    if not customer:
+                        continue
+                    
+                    customer_name = customer['customer_name']
+                    
+                    # Generate PDF to temp file
+                    safe_name = customer_name.replace(' ', '_').replace('/', '_')
+                    temp_pdf = f"{temp_dir}/statement_{safe_name}.pdf"
+                    
+                    # Generate the PDF
+                    result = generate_pdf_statement(customer_name, temp_pdf)
+                    
+                    if result and os.path.exists(result):
+                        # Add PDF to ZIP
+                        with open(result, 'rb') as pdf_file:
+                            zip_file.writestr(f'Statement - {clean_customer_name(customer_name)}.pdf', pdf_file.read())
+                        
+                        # Clean up temp file
+                        os.remove(result)
+                    
+                except Exception as e:
+                    print(f"Error generating statement for customer {customer_id}: {e}")
+                    continue
+        
+        # Clean up temp directory
+        try:
+            os.rmdir(temp_dir)
+        except:
+            pass
+        
+        # Prepare ZIP for download
+        zip_buffer.seek(0)
+        
+        # Generate filename
+        today = datetime.now().strftime('%Y-%m-%d')
+        filename = f'Statements_{company_name.replace(" ", "_")}_{today}.zip'
+        
+        return send_file(
+            zip_buffer,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=filename
+        )
+        
+    except Exception as e:
+        print(f"Error in batch generation: {e}")
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     print("\n" + "="*60)
