@@ -542,3 +542,112 @@ After FL split import:
 - Mecklenburg passed additional 1% transit tax (effective July 2026)
 - State always takes exactly 4.75%, counties get the rest
 - Tax filing requires state vs county breakdown for reporting
+---
+
+## Session 7 - Batch Statement Generation (2026-01-20)
+
+### What We Built
+
+1. **Batch Statement Generation System**
+   - Checkboxes next to each customer (QuickBooks-style interface)
+   - "Select All" checkbox (positioned left of search bar)
+   - Batch generate button appears when customers selected
+   - Shows count: "5 customers selected"
+   - Downloads all selected statements as single ZIP file
+   - ZIP filename format: `Statements_CompanyName_2026-01-20.zip`
+
+2. **Clean PDF Filenames**
+   - Format: "Statement - Customer Name.pdf"
+   - Proper Title Case capitalization
+   - Spaces instead of underscores
+   - Professional appearance for email/sharing
+
+3. **Multi-Company Support**
+   - Works for all 4 companies
+   - Properly queries customers by company_id
+   - Generates PDFs with correct company branding
+
+### Technical Implementation
+
+**Files Modified:**
+- `index.html` - Added checkbox UI, select all, batch button
+- `app.py` - Added batch endpoint, helper function for name cleaning
+- Added imports: `zipfile`, `from io import BytesIO`
+
+**Key Functions:**
+- `clean_customer_name()` - Converts names to Title Case with spaces
+- `generate_batch_statements()` - Creates ZIP with multiple PDFs
+- `toggleCustomer()` - JavaScript to handle checkbox selection
+- `toggleSelectAll()` - Select/deselect all customers at once
+
+**How It Works:**
+1. User selects customers via checkboxes
+2. JavaScript tracks selected customer IDs in a Set
+3. Batch button sends customer IDs to backend
+4. Backend loops through each customer:
+   - Queries customer name by customer_id and company_id
+   - Calls `generate_pdf_statement()` for each
+   - Adds PDF to ZIP with clean filename
+5. Returns ZIP file for download
+
+### Bug Fixes
+
+1. **Empty ZIP Files**
+   - Problem: `temp_pdf` variable not defined before use
+   - Solution: Added `temp_pdf = f"{temp_dir}/statement_{safe_name}.pdf"` line
+
+2. **Wrong Company PDFs**
+   - Problem: Not filtering customers by company_id
+   - Solution: Added `AND company_id = %s` to customer query
+
+3. **Select All Position**
+   - Problem: On right side of search bar
+   - Solution: Moved to left side for consistency with checkboxes
+
+### Testing Results
+
+✅ Batch generation works for all 4 companies
+✅ Select All checkbox works correctly
+✅ Individual checkboxes highlight selected customers
+✅ ZIP contains properly named PDFs: "Statement - Customer Name.pdf"
+✅ Title Case capitalization working
+✅ Single statement generation still works
+✅ Empty ZIP bug fixed
+
+### Time Spent
+~2 hours (batch UI, backend implementation, debugging, testing)
+
+### Next Session Goals
+
+1. **Email Functionality**
+   - Send individual statements via email
+   - Email validation
+   - SMTP configuration
+
+2. **Batch Email**
+   - Email all selected customers at once
+   - Progress indicator
+   - Success/failure reporting
+
+3. **Cleanup & Polish**
+   - Loading spinners during generation
+   - Better progress feedback
+   - Error handling improvements
+   - Mobile responsiveness
+
+### Decisions Made
+
+- ZIP file format for batch downloads (simpler than multiple downloads)
+- Title Case for all PDF filenames (professional appearance)
+- Select All on left side (consistency with checkboxes)
+- Kept individual "Generate PDF" buttons (flexibility)
+- Temporary files cleaned up after ZIP creation
+
+### Key Learnings
+
+- Python's `str.title()` handles Title Case conversion
+- ZIP files can be created in-memory with BytesIO
+- Set data structure perfect for tracking selections
+- Nano's Ctrl+R can insert entire files at cursor position
+- Empty ZIP files happen when temp file path undefined
+- Multi-company requires filtering at every query level
