@@ -127,7 +127,7 @@ def generate_statement(customer_id):
     # Get customer name
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT customer_name FROM customers WHERE id = %s", (customer_id,))
+    cur.execute("SELECT customer_name, company_id FROM customers WHERE id = %s", (customer_id,))
     result = cur.fetchone()
     cur.close()
     conn.close()
@@ -136,6 +136,7 @@ def generate_statement(customer_id):
         return jsonify({'error': 'Customer not found'}), 404
     
     customer_name = result['customer_name']
+    customer_company_id = result['company_id']
     
     # Generate PDF
     output_dir = '/tmp/statements'
@@ -145,7 +146,7 @@ def generate_statement(customer_id):
     output_file = f"{output_dir}/statement_{safe_name}_{date.today().strftime('%Y%m%d')}.pdf"
     
     try:
-        result = generate_pdf_statement(customer_name, output_file)
+        result = generate_pdf_statement(customer_name, output_file, customer_company_id)
         if result:
             return send_file(result, 
                            mimetype='application/pdf',
@@ -820,7 +821,7 @@ def generate_batch_statements():
                     # Get customer name
                     conn = get_db_connection()
                     cur = conn.cursor()
-                    cur.execute("SELECT customer_name FROM customers WHERE id = %s AND company_id = %s", 
+                    cur.execute("SELECT customer_name, company_id FROM customers WHERE id = %s AND company_id = %s",
                                (customer_id, company_id))
                     customer = cur.fetchone()
                     cur.close()
@@ -830,13 +831,14 @@ def generate_batch_statements():
                         continue
                     
                     customer_name = customer['customer_name']
+                    customer_company_id = customer['company_id']
                     
                     # Generate PDF to temp file
                     safe_name = customer_name.replace(' ', '_').replace('/', '_')
                     temp_pdf = f"{temp_dir}/statement_{safe_name}.pdf"
                     
                     # Generate the PDF
-                    result = generate_pdf_statement(customer_name, temp_pdf)
+                    result = generate_pdf_statement(customer_name, temp_pdf, customer_company_id)
                     
                     if result and os.path.exists(result):
                         # Add PDF to ZIP

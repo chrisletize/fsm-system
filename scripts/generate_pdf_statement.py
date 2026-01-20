@@ -48,7 +48,7 @@ def get_aging_bucket(days):
     else:
         return "90+ DAYS"
 
-def generate_pdf_statement(customer_name_search, output_file=None):
+def generate_pdf_statement(customer_name_search, output_file=None, company_id=None):
     """Generate a professional PDF statement for a customer"""
     
     conn = get_db_connection()
@@ -64,8 +64,9 @@ def generate_pdf_statement(customer_name_search, output_file=None):
         FROM customers c
         JOIN companies co ON c.company_id = co.id
         WHERE c.customer_name ILIKE %s
+          AND c.company_id = %s
         LIMIT 1
-    """, (f'%{customer_name_search}%',))
+    """, (customer_name_search, company_id))
     
     customer = cur.fetchone()
     if not customer:
