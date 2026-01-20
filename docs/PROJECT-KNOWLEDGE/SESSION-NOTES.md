@@ -1,5 +1,25 @@
 # Session Notes
 
+# SESSION NOTES
+
+## 🚨 END OF SESSION CHECKLIST 🚨
+**ALWAYS do this before ending a session:**
+1. ✅ Update SESSION-NOTES.md with what we built
+2. ✅ Update CURRENT-STATUS.md 
+3. ✅ **BACKUP CODE TO GITHUB:**
+```bash
+   cd ~/fsm-system
+   git add backend/ scripts/
+   git status  # Review what's being committed
+   git commit -m "Session X: Brief description of work"
+   git push
+```
+4. ✅ Verify push succeeded: Check https://github.com/chrisletize/fsm-system
+
+**Your code is ONLY safe when it's on GitHub!**
+
+---
+
 ## 2026-01-14: Session 1 - Initial Setup
 
 ### What We Did
