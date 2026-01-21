@@ -5,7 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FSM Statement Generator</title>
     <style>
-        * {
+        :root {
+            /* Default to Get a Grip colors */
+            --primary-color: #8B1538;
+            --secondary-color: #F5F5DC;
+            --accent-color: #2C2C2C;
+            --background-color: #FFF5F0;
+        }
+            * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
@@ -13,9 +20,10 @@
         
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
-            background: linear-gradient(135deg, #8B1538 0%, #2C2C2C 100%);
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--accent-color) 100%);
             min-height: 100vh;
             padding: 20px;
+            transition: background 0.3s ease;
         }
         
         .container {
@@ -58,18 +66,18 @@
             font-size: 16px;
         }
         
-        .company-selector {
+        .companySelector {
             margin-top: 20px;
         }
         
-        .company-selector label {
+        .companySelector label {
             display: block;
             margin-bottom: 8px;
             color: #4a5568;
             font-weight: 600;
         }
         
-        .company-selector select {
+        .companySelector select {
             padding: 10px 15px;
             font-size: 16px;
             border: 2px solid #e2e8f0;
@@ -81,9 +89,20 @@
         
         .summary-cards {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            grid-template-columns: repeat(3, 1fr);
             gap: 20px;
             margin-bottom: 30px;
+        }
+        
+        .summary-card:nth-child(4),
+        .summary-card:nth-child(5),
+        .summary-card:nth-child(6),
+        .summary-card:nth-child(7) {
+            grid-column: span 1;
+        }
+        
+        .summary-card:nth-child(4) {
+            grid-column: 1;
         }
         
         .summary-card {
@@ -338,12 +357,16 @@
             <div class="company-selector">
                 <label for="company-select">Select Company:</label>
                 <select id="company-select" onchange="loadData()">
+                    <option value="0" selected>Select a company to begin</option>
                     <option value="">Loading companies...</option>
                 </select>
             </div>
 
             <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #e2e8f0;">
-                <a href="/upload" style="display: inline-block; padding: 12px 24px; background: #F5F5DC; color: #8B1538; text-decoration: none; border-radius: 6px; font-weight: 600; transition: all 0.2s; border: 2px solid #8B1538;">
+                <a href="/tax-report" style="display: inline-block; padding: 12px 24px; background: var(--primary-color); color: white; text-decoration: none; border-radius: 8px; font-weight: 600; margin-right: 10px;">
+                    📊 Tax Report
+                </a>
+                <a href="/upload" style="display: inline-block; padding: 12px 24px; background: var(--primary-color); color: white; text-decoration: none; border-radius: 8px; font-weight: 600;">
                     📤 Upload Invoices
                 </a>
             </div>
@@ -362,8 +385,34 @@
                 <h3>Total Outstanding</h3>
                 <div class="value" id="total-due">$0.00</div>
             </div>
+            <div class="summary-card">
+                <h3>Current</h3>
+                <div class="value" id="aging-current">$0.00</div>
+            </div>
+            <div class="summary-card">
+                <h3>31-60 Days</h3>
+                <div class="value" id="aging-30">$0.00</div>
+            </div>
+            <div class="summary-card">
+                <h3>61-90 Days</h3>
+                <div class="value" id="aging-60">$0.00</div>
+            </div>
+            <div class="summary-card">
+                <h3>90+ Days</h3>
+                <div class="value" id="aging-90">$0.00</div>
+            </div>
         </div>
-        
+
+        <!-- Clear Data Button -->
+        <div style="margin: 20px 0; text-align: center;">
+            <button id="clearDataBtn" 
+                    style="background-color: #dc3545; color: white; padding: 12px 24px; 
+                           border: none; border-radius: 5px; cursor: pointer; font-size: 16px;
+                           display: none;">
+                🗑️ Clear All Data for This Company
+            </button>
+        </div>
+
         <div class="customers-section">
             <div class="section-header">
                 <h2>Customers with Outstanding Balances</h2>
@@ -381,7 +430,7 @@
 
     <script>
         let allCustomers = [];
-        let currentCompanyId = 2; // Default to Get a Grip
+        let currentCompanyId = 0; // Default to Letize Kit
         
         // Load companies on page load
         async function loadCompanies() {
@@ -390,7 +439,7 @@
                 const companies = await response.json();
                 
                 const select = document.getElementById('company-select');
-                select.innerHTML = companies.map(c => 
+                select.innerHTML = '<option value="0">Select a company to begin</option>' + companies.map(c =>
                     `<option value="${c.id}" ${c.id === currentCompanyId ? 'selected' : ''}>${c.name}</option>`
                 ).join('');
             } catch (error) {
@@ -402,22 +451,55 @@
         async function loadData() {
             const select = document.getElementById('company-select');
             currentCompanyId = parseInt(select.value);
-            
+    
             await Promise.all([
+                loadBranding(),
                 loadSummary(),
                 loadCustomers()
             ]);
         }
+        // Load and apply company branding
+        async function loadBranding() {
+            try {
+                const response = await fetch(`/api/branding/${currentCompanyId}`);
+                const branding = await response.json();
         
+        // Update CSS variables
+        document.documentElement.style.setProperty('--primary-color', branding.primary_color);
+        document.documentElement.style.setProperty('--secondary-color', branding.secondary_color);
+        document.documentElement.style.setProperty('--accent-color', branding.accent_color);
+        document.documentElement.style.setProperty('--background-color', branding.background_color);
+
+        // Update logo
+        const logoImg = document.querySelector('.logo-header img');
+        if (logoImg) {
+            logoImg.src = `/static/${branding.logo}`;
+            logoImg.alt = `${branding.name} Logo`;
+        }
+        
+        // Update page title
+        const titleElement = document.querySelector('.logo-header h1');
+        if (titleElement && branding.display_name) {
+            // Keep the emoji, just update company name
+            titleElement.innerHTML = `📄 ${branding.display_name}`;
+        }
+        
+            } catch (error) {
+                console.error('Error loading branding:', error);
+            }
+        }
         // Load summary stats
         async function loadSummary() {
             try {
                 const response = await fetch(`/api/summary?company_id=${currentCompanyId}`);
                 const summary = await response.json();
-                
                 document.getElementById('customer-count').textContent = summary.customer_count;
                 document.getElementById('invoice-count').textContent = summary.invoice_count;
                 document.getElementById('total-due').textContent = '$' + summary.total_due.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                document.getElementById('aging-current').textContent = '$' + summary.current.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                document.getElementById('aging-30').textContent = '$' + summary.days_30.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                document.getElementById('aging-60').textContent = '$' + summary.days_60.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                document.getElementById('aging-90').textContent = '$' + summary.days_90.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
             } catch (error) {
                 console.error('Error loading summary:', error);
             }
@@ -438,7 +520,51 @@
                 listEl.innerHTML = '<div class="error">Error loading customers. Please refresh the page.</div>';
             }
         }
+        // Clear company data
+        const clearBtn = document.getElementById('clearDataBtn');
+        if (clearBtn) {
+            clearBtn.addEventListener('click', async () => {
+                const companyId = document.getElementById('company-select').value;
+                const companyName = document.getElementById('company-select').selectedOptions[0].text;
         
+                if (!confirm(`Are you sure you want to delete ALL invoices and customers for ${companyName}?\n\nThis cannot be undone!`)) {
+                    return;
+                }
+        
+                if (!confirm(`FINAL WARNING: This will permanently delete all data for ${companyName}. Continue?`)) {
+                    return;
+                }
+        
+                try {
+                    const response = await fetch(`/api/clear-company-data/${companyId}`, {
+                        method: 'DELETE'
+                    });
+                    const data = await response.json();
+            
+                    if (data.success) {
+                        alert(`✅ Deleted ${data.invoices_deleted} invoices and ${data.customers_deleted} customers`);
+                        loadSummary();
+                        loadCustomers();
+                    } else {
+                        alert('Error: ' + data.error);
+                    }
+                } catch (error) {
+                    alert('Error clearing data: ' + error);
+                }
+            });
+
+            // Show/hide clear button when company selected
+            const companySelect = document.getElementById('company-select');
+            if (companySelect) {
+                companySelect.addEventListener('change', () => {
+                    if (companySelect.value) {
+                        clearBtn.style.display = 'inline-block';
+                    } else {
+                        clearBtn.style.display = 'none';
+                    }
+                });
+            }
+        }
         // Render customer cards
         function renderCustomers(customers) {
             const listEl = document.getElementById('customer-list');
@@ -558,7 +684,7 @@
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', () => {
             loadCompanies();
-            loadData();
+            loadBranding(); // Load default LKit branding
         });
     </script>
 </body>

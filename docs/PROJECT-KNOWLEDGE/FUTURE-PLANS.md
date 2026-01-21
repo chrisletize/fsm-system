@@ -21,6 +21,21 @@
 
 **Success Criteria**: Michele uses it monthly, prefers it over manual methods
 
+## Phase 0.5: Statement & Tax Report Enhancements
+
+**Tax Report Improvements:**
+- Export tax report to PDF (printable format)
+  - Summary page with state/county totals
+  - Detailed breakdown by county
+  - Customer tax totals list
+  - Professional formatting for tax filing
+- Print-friendly CSS for direct browser printing
+- Optional: Email tax report to accountant
+
+**Statement Generator Improvements:**
+- Date range filter for statements
+- Statement preview before generating
+- Batch email with progress tracking
 ---
 
 ## Phase 1: Core FSM Features

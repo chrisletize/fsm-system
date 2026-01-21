@@ -575,6 +575,11 @@ def upload_tax_report():
                 
                 existing = cur.fetchone()
                 
+                # Skip FL customers for Kleanit Charlotte
+                if company_id == '1' and customer_name and '*FL*' in customer_name.upper():
+                    skipped += 1
+                    continue
+
                 if existing:
                     # Update existing
                     cur.execute("""

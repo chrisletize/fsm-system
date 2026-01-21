@@ -451,8 +451,26 @@
         async function loadTaxData() {
             const companyId = document.getElementById('company-select').value;
             currentCompanyId = companyId;
+            allTaxData = [];  // Clear old data
             
             await loadBranding(companyId);
+
+            // Special handling for Kleanit FL - no sales tax in Florida
+            if (companyId === '4') {
+                document.getElementById('county-breakdown').innerHTML = `
+                    <div class="empty-state">
+                        <h3>No Sales Tax in Florida</h3>
+                        <p>Florida does not have state sales tax. Tax reporting not applicable.</p>
+                    </div>
+                `;
+                document.getElementById('customer-totals').innerHTML = `
+                    <div class="empty-state">
+                        <p>Tax reporting not required</p>
+                    </div>
+                `;
+                updateSummary({});
+                return;
+            }
             
             // Show/hide clear button
             const clearBtn = document.getElementById('clear-btn');
@@ -480,6 +498,11 @@
                     <div class="empty-state">
                         <h3>No tax data found</h3>
                         <p>Upload a tax report for this company</p>
+                    </div>
+                `;
+                document.getElementById('customer-totals').innerHTML = `
+                    <div class="empty-state">
+                        <p>No customer data to display</p>
                     </div>
                 `;
                 updateSummary({});
@@ -562,6 +585,14 @@
         
         // Display customer tax totals
         function displayCustomerTotals(data) {
+            if (!data || data.length === 0) {
+                document.getElementById('customer-totals').innerHTML = `
+                    <div class="empty-state">
+                        <p>No customer data to display</p>
+                    </div>
+                `;
+                return;
+            }
             const byCustomer = {};
             data.forEach(row => {
                 if (!byCustomer[row.customer_name]) {
