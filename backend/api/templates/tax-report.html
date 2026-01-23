@@ -3,38 +3,39 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tax Report - FSM Statement Generator</title>
+    <title>Tax Report (Cash Basis) - FSM</title>
     <style>
         :root {
             --primary-color: #8b7a9e;
             --secondary-color: #b8a3d1;
+            --accent-color: #4a4a4a;
             --background: #ede5f5;
             --text-dark: #2d2d2d;
             --text-light: #666;
             --border: #ddd;
             --success: #28a745;
-            --warning: #ffc107;
             --danger: #dc3545;
         }
-        
+
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
-        
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background: var(--background);
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--accent-color) 100%);
             min-height: 100vh;
             padding: 20px;
+            transition: background 0.5s ease;
         }
-        
+
         .container {
             max-width: 1400px;
             margin: 0 auto;
         }
-        
+
         .header {
             background: white;
             padding: 30px;
@@ -46,29 +47,29 @@
             align-items: center;
             transition: all 0.3s ease;
         }
-        
+
         .logo-section {
             display: flex;
             align-items: center;
             gap: 20px;
         }
-        
+
         .logo {
             height: 60px;
             width: auto;
         }
-        
+
         h1 {
             color: var(--primary-color);
             font-size: 28px;
             font-weight: 600;
         }
-        
+
         .nav-buttons {
             display: flex;
             gap: 10px;
         }
-        
+
         .btn {
             padding: 12px 24px;
             border: none;
@@ -80,29 +81,39 @@
             text-decoration: none;
             display: inline-block;
         }
-        
+
         .btn-primary {
             background: var(--primary-color);
             color: white;
         }
-        
+
         .btn-primary:hover {
             background: var(--secondary-color);
             transform: translateY(-2px);
             box-shadow: 0 4px 12px rgba(0,0,0,0.15);
         }
-        
+
         .btn-secondary {
             background: white;
             color: var(--primary-color);
             border: 2px solid var(--primary-color);
         }
-        
+
         .btn-secondary:hover {
             background: var(--primary-color);
             color: white;
         }
-        
+
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #c82333;
+            transform: translateY(-2px);
+        }
+
         .controls {
             background: white;
             padding: 25px;
@@ -110,26 +121,26 @@
             box-shadow: 0 2px 8px rgba(0,0,0,0.1);
             margin-bottom: 30px;
         }
-        
+
         .control-group {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            grid-template-columns: 2fr 1fr 1fr;
             gap: 20px;
             margin-bottom: 20px;
         }
-        
+
         .form-group {
             display: flex;
             flex-direction: column;
             gap: 8px;
         }
-        
+
         label {
             font-weight: 600;
             color: var(--text-dark);
             font-size: 14px;
         }
-        
+
         select, input[type="date"] {
             padding: 12px;
             border: 2px solid var(--border);
@@ -138,20 +149,87 @@
             transition: all 0.2s;
             background: white;
         }
-        
+
         select:focus, input[type="date"]:focus {
             outline: none;
             border-color: var(--primary-color);
             box-shadow: 0 0 0 3px rgba(139, 122, 158, 0.1);
         }
-        
+
+        .info-banner {
+            background: #d1ecf1;
+            color: #0c5460;
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #17a2b8;
+        }
+
+        .upload-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .upload-section {
+            background: #f8f9fa;
+            border: 2px dashed var(--border);
+            border-radius: 8px;
+            padding: 25px;
+            text-align: center;
+            transition: all 0.2s;
+        }
+
+        .upload-section.dragover {
+            border-color: var(--primary-color);
+            background: rgba(139, 122, 158, 0.05);
+        }
+
+        .upload-section.uploaded {
+            border-color: var(--success);
+            background: #d4edda;
+        }
+
+        .upload-section input[type="file"] {
+            display: none;
+        }
+
+        .upload-section h3 {
+            color: var(--text-dark);
+            font-size: 16px;
+            margin-bottom: 10px;
+        }
+
+        .upload-section p {
+            color: var(--text-light);
+            font-size: 13px;
+            margin-bottom: 15px;
+        }
+
+.btn-process {
+            background: var(--success);
+            color: white;
+            padding: 12px 30px;
+            white-space: nowrap;
+        }
+
+        .btn-process:hover {
+            background: #218838;
+        }
+
+        .btn-process:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
         .summary-cards {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
             gap: 20px;
             margin-bottom: 30px;
         }
-        
+
         .summary-card {
             background: white;
             padding: 25px;
@@ -159,7 +237,7 @@
             box-shadow: 0 2px 8px rgba(0,0,0,0.1);
             border-left: 4px solid var(--primary-color);
         }
-        
+
         .summary-card h3 {
             color: var(--text-light);
             font-size: 14px;
@@ -168,13 +246,13 @@
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
-        
+
         .summary-card .value {
             color: var(--text-dark);
             font-size: 32px;
             font-weight: 700;
         }
-        
+
         .section {
             background: white;
             padding: 30px;
@@ -182,7 +260,7 @@
             box-shadow: 0 2px 8px rgba(0,0,0,0.1);
             margin-bottom: 30px;
         }
-        
+
         .section-header {
             display: flex;
             justify-content: space-between;
@@ -191,20 +269,20 @@
             padding-bottom: 15px;
             border-bottom: 2px solid var(--border);
         }
-        
+
         .section-header h2 {
             color: var(--text-dark);
             font-size: 22px;
             font-weight: 600;
         }
-        
+
         .county-group {
             margin-bottom: 30px;
             border: 2px solid var(--border);
             border-radius: 8px;
             overflow: hidden;
         }
-        
+
         .county-header {
             background: var(--primary-color);
             color: white;
@@ -213,26 +291,32 @@
             justify-content: space-between;
             align-items: center;
         }
-        
+
         .county-name {
             font-size: 18px;
             font-weight: 600;
         }
-        
+
+        .county-breakdown {
+            font-size: 13px;
+            margin-top: 5px;
+            opacity: 0.9;
+        }
+
         .county-total {
             font-size: 20px;
             font-weight: 700;
         }
-        
+
         table {
             width: 100%;
             border-collapse: collapse;
         }
-        
+
         thead {
             background: #f8f9fa;
         }
-        
+
         th {
             padding: 12px;
             text-align: left;
@@ -242,80 +326,151 @@
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
-        
+
         td {
             padding: 12px;
             border-bottom: 1px solid var(--border);
             color: var(--text-dark);
         }
-        
+
         tbody tr:hover {
             background: #f8f9fa;
         }
-        
+
         .text-right {
             text-align: right;
         }
-        
+
         .loading {
             text-align: center;
             padding: 40px;
             color: var(--text-light);
         }
-        
+
         .empty-state {
             text-align: center;
             padding: 60px 20px;
             color: var(--text-light);
         }
-        
+
         .empty-state h3 {
             font-size: 20px;
             margin-bottom: 10px;
         }
-        
-        .upload-section {
-            background: #f8f9fa;
-            border: 2px dashed var(--border);
-            border-radius: 8px;
-            padding: 30px;
-            text-align: center;
-            margin-bottom: 20px;
-        }
-        
-        .upload-section.dragover {
-            border-color: var(--primary-color);
-            background: rgba(139, 122, 158, 0.05);
-        }
-        
-        #tax-file {
-            display: none;
-        }
-        
+
         .customer-totals {
             max-height: 400px;
             overflow-y: auto;
         }
-        
-        .btn-danger {
+
+        .clear-data-btn {
+            display: none;
+        }
+
+        .clear-data-btn.visible {
+            display: inline-block;
+        }
+
+        /* Help Modal Styles */
+        .help-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 1000;
+            overflow-y: auto;
+            padding: 20px;
+        }
+
+        .help-modal.active {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .help-content {
+            background: white;
+            border-radius: 12px;
+            max-width: 800px;
+            width: 100%;
+            padding: 40px;
+            position: relative;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        .help-close {
+            position: absolute;
+            top: 20px;
+            right: 20px;
             background: var(--danger);
             color: white;
             border: none;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 24px;
+            line-height: 1;
+            font-weight: bold;
         }
-        
-        .btn-danger:hover {
+
+        .help-close:hover {
             background: #c82333;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
         }
-        
-        .clear-data-btn {
-            display: none;
-            margin-left: 10px;
+
+        .help-content h2 {
+            color: var(--primary-color);
+            margin-bottom: 20px;
+            font-size: 28px;
         }
-        
-        .clear-data-btn.visible {
-            display: inline-block;
+
+        .help-content h3 {
+            color: var(--text-dark);
+            margin-top: 25px;
+            margin-bottom: 15px;
+            font-size: 20px;
+        }
+
+        .help-content p {
+            color: var(--text-dark);
+            line-height: 1.6;
+            margin-bottom: 15px;
+        }
+
+        .help-content ul {
+            margin-left: 20px;
+            margin-bottom: 15px;
+        }
+
+        .help-content li {
+            color: var(--text-dark);
+            margin-bottom: 8px;
+            line-height: 1.6;
+        }
+
+        .help-content strong {
+            color: var(--primary-color);
+        }
+
+        .help-step {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid var(--primary-color);
+        }
+
+        .help-example {
+            background: #d1ecf1;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 15px 0;
+            border-left: 4px solid #17a2b8;
         }
     </style>
 </head>
@@ -325,49 +480,68 @@
             <div class="logo-section">
                 <img src="/static/lkit-logo.svg" alt="Company Logo" class="logo" id="company-logo">
                 <div>
-                    <h1>Tax Report</h1>
-                    <p style="color: var(--text-light); margin-top: 5px;">Sales Tax Reporting & Analysis</p>
+                    <h1>Tax Report (Cash Basis)</h1>
+                    <p style="color: var(--text-light); margin-top: 5px;">NC Sales Tax Reporting</p>
                 </div>
             </div>
             <div class="nav-buttons">
-                <button id="clear-btn" class="btn btn-danger clear-data-btn" onclick="clearTaxData()">
-                    🗑️ Clear Tax Data
+                <button id="clear-btn" class="btn btn-danger clear-data-btn" onclick="clearData()">
+                    🗑️ Clear Data
                 </button>
                 <a href="/" class="btn btn-secondary">← Statements</a>
                 <a href="/upload" class="btn btn-secondary">Upload Data</a>
             </div>
         </div>
-        
+
         <div class="controls">
             <div class="control-group">
                 <div class="form-group">
                     <label for="company-select">Select Company:</label>
-                    <select id="company-select" onchange="loadTaxData()">
+                    <select id="company-select" onchange="companyChanged()">
                         <option value="0">Select a company to begin</option>
+                        <option value="1">Kleanit Charlotte</option>
+                        <option value="2">Get a Grip Resurfacing of Charlotte</option>
+                        <option value="3">CTS of Raleigh</option>
                     </select>
                 </div>
-                <div class="form-group">
-                    <label for="date-from">From Date:</label>
-                    <input type="date" id="date-from" onchange="filterByDate()">
-                </div>
-                <div class="form-group">
-                    <label for="date-to">To Date:</label>
-                    <input type="date" id="date-to" onchange="filterByDate()">
+            </div>
+
+            <div class="info-banner">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <strong>📋 Cash-Basis Reporting:</strong> Export <strong>Tax Report</strong> with NO date filter (all invoices). Export <strong>Transaction Report</strong> filtered by payment date (e.g., 12/1-12/31). Our system matches them to show tax collected in that month.
+                    </div>
+                    <button class="btn btn-secondary" onclick="showHelp()" style="margin-left: 20px; white-space: nowrap;">
+                        ❓ Detailed Instructions
+                    </button>
                 </div>
             </div>
-            
-            <div class="upload-section" id="upload-zone">
-                <p style="margin-bottom: 15px; font-size: 16px; color: var(--text-dark);">
-                    📊 Upload ServiceFusion Tax Report
-                </p>
-                <input type="file" id="tax-file" accept=".xlsx,.xls" onchange="uploadTaxFile()">
-                <label for="tax-file" class="btn btn-primary">Choose File</label>
-                <p style="margin-top: 10px; font-size: 13px; color: var(--text-light);">
-                    Or drag and drop Excel file here
-                </p>
+
+            <div class="upload-grid">
+                <div class="upload-section" id="tax-upload-zone">
+                    <h3>📊 Step 1: Tax Report</h3>
+                    <p>ServiceFusion Tax Report (invoice#, job#, tax amounts)</p>
+                    <input type="file" id="tax-file" accept=".xlsx,.xls">
+                    <label for="tax-file" class="btn btn-primary">Choose File</label>
+                    <p id="tax-file-name" style="margin-top: 10px; color: var(--success); font-weight: 600;"></p>
+                </div>
+
+                <div class="upload-section" id="transaction-upload-zone">
+                    <h3>💰 Step 2: Transaction Report</h3>
+                    <p>Customer Transaction Report (job#, payment dates)</p>
+                    <input type="file" id="transaction-file" accept=".xlsx,.xls">
+                    <label for="transaction-file" class="btn btn-primary">Choose File</label>
+                    <p id="transaction-file-name" style="margin-top: 10px; color: var(--success); font-weight: 600;"></p>
+                </div>
+            </div>
+
+            <div style="text-align: center;">
+                <button id="process-btn" class="btn btn-process" onclick="processReports()" disabled>
+                    Generate Report
+                </button>
             </div>
         </div>
-        
+
         <div class="summary-cards">
             <div class="summary-card">
                 <h3>Total State Tax</h3>
@@ -382,24 +556,23 @@
                 <div class="value" id="tax-collected">$0.00</div>
             </div>
             <div class="summary-card">
-                <h3>Total Counties</h3>
-                <div class="value" id="county-count">-</div>
+                <h3>Paid Invoices</h3>
+                <div class="value" id="invoice-count">-</div>
             </div>
         </div>
-        
+
         <div class="section">
             <div class="section-header">
                 <h2>Tax by County</h2>
-                <button class="btn btn-primary" onclick="exportToExcel()">Export to Excel</button>
             </div>
             <div id="county-breakdown">
                 <div class="empty-state">
                     <h3>No tax data loaded</h3>
-                    <p>Select a company and upload a tax report to begin</p>
+                    <p>Select a company and process tax reports to begin</p>
                 </div>
             </div>
         </div>
-        
+
         <div class="section">
             <div class="section-header">
                 <h2>Customer Tax Totals</h2>
@@ -412,207 +585,357 @@
         </div>
     </div>
 
+    <!-- Help Modal -->
+    <div id="help-modal" class="help-modal" onclick="closeHelpIfBackdrop(event)">
+        <div class="help-content">
+            <button class="help-close" onclick="closeHelp()">×</button>
+            
+            <h2>📚 How to Generate Accurate Cash-Basis Tax Reports</h2>
+            
+            <p><strong>Why This Matters:</strong> NC requires reporting tax based on PAYMENT DATE (cash basis), not invoice date. This means a June invoice paid in December counts toward December's tax liability.</p>
+
+            <div class="help-step">
+                <h3>1️⃣ Export Tax Report (All Invoices)</h3>
+                <ul>
+                    <li>Go to <strong>ServiceFusion → Reports → Tax Report</strong></li>
+                    <li><strong>Date Range:</strong> Select ENTIRE YEAR (or longer)
+                        <ul>
+                            <li>Example: 1/1/2025 - 12/31/2025</li>
+                            <li><strong>Do NOT filter to just current month</strong></li>
+                        </ul>
+                    </li>
+                    <li><strong>Why?</strong> You need ALL invoices, even old ones that might get paid this month</li>
+                    <li>Export to Excel</li>
+                    <li>Save as: TaxReport_[dates].xlsx</li>
+                </ul>
+            </div>
+
+            <div class="help-step">
+                <h3>2️⃣ Export Transaction Report (Current Month Only)</h3>
+                <ul>
+                    <li>Go to <strong>ServiceFusion → Reports → Customer Transaction Report</strong></li>
+                    <li><strong>Date Range:</strong> Select ONLY the month you're filing
+                        <ul>
+                            <li>Example: 12/1/2025 - 12/31/2025</li>
+                        </ul>
+                    </li>
+                    <li><strong>Why?</strong> You only want payments COLLECTED in this specific month</li>
+                    <li>Export to Excel</li>
+                    <li>Save as: TransactionReport_[dates].xlsx</li>
+                </ul>
+            </div>
+
+            <div class="help-step">
+                <h3>3️⃣ Upload Both Files Here</h3>
+                <ul>
+                    <li>Select your company from dropdown</li>
+                    <li>Upload Tax Report (Step 1 file)</li>
+                    <li>Upload Transaction Report (Step 2 file)</li>
+                    <li>Click "Generate Report"</li>
+                </ul>
+            </div>
+
+            <div class="help-step">
+                <h3>4️⃣ What The System Does</h3>
+                <ul>
+                    <li>Matches invoices to payments by Job Number</li>
+                    <li>Shows ONLY invoices that were paid in your selected month</li>
+                    <li>Calculates state vs county tax breakdown</li>
+                    <li><strong>Result:</strong> Accurate cash-basis tax report for NC filing</li>
+                </ul>
+            </div>
+
+            <div class="help-example">
+                <h3>💡 Example</h3>
+                <p><strong>Scenario:</strong></p>
+                <ul>
+                    <li>June invoice: $1,000 + $70 tax</li>
+                    <li>Customer pays in December</li>
+                </ul>
+                <p><strong>How it works:</strong></p>
+                <ul>
+                    <li><strong>Tax Report</strong> (full year): Has this invoice</li>
+                    <li><strong>Transaction Report</strong> (December): Has this payment</li>
+                    <li><strong>Result:</strong> $70 tax counts toward DECEMBER, not June</li>
+                </ul>
+            </div>
+
+            <h3>🔧 Troubleshooting</h3>
+            <ul>
+                <li><strong>"Numbers seem low"</strong> → Tax Report might be filtered by date. Re-export with full year.</li>
+                <li><strong>"Jobs missing"</strong> → Make sure Transaction Report includes ALL payment types.</li>
+                <li><strong>"Totals don't match"</strong> → Verify both files are for the same company.</li>
+                <li><strong>"Some invoices not showing"</strong> → Those jobs haven't been paid yet in your selected month.</li>
+            </ul>
+        </div>
+    </div>
+
     <script>
         let currentCompanyId = 0;
-        let allTaxData = [];
-        
-        // Load companies on page load
-        async function loadCompanies() {
-            try {
-                const response = await fetch('/api/companies');
-                const companies = await response.json();
-                
-                const select = document.getElementById('company-select');
-                select.innerHTML = '<option value="0">Select a company to begin</option>';
-                companies.forEach(c => {
-                    select.innerHTML += `<option value="${c.id}">${c.name}</option>`;
-                });
-            } catch (error) {
-                console.error('Error loading companies:', error);
+        let taxReportData = null;
+        let transactionReportData = null;
+        let companyData = {};  // Store data per company: { companyId: processedReport }
+
+        // Company changed
+        function companyChanged() {
+            const companyId = parseInt(document.getElementById('company-select').value);
+            currentCompanyId = companyId;
+
+            // Clear uploaded files when switching companies
+            taxReportData = null;
+            transactionReportData = null;
+            document.getElementById('tax-file').value = '';
+            document.getElementById('transaction-file').value = '';
+            document.getElementById('tax-file-name').textContent = '';
+            document.getElementById('transaction-file-name').textContent = '';
+            document.getElementById('tax-upload-zone').classList.remove('uploaded');
+            document.getElementById('transaction-upload-zone').classList.remove('uploaded');
+            checkReadyToProcess();
+
+            if (companyId > 0) {
+                document.getElementById('clear-btn').classList.add('visible');
+                loadBranding(companyId);
+
+                // Show data if this company has been processed before
+                if (companyData[companyId]) {
+                    displayTaxData(companyData[companyId]);
+                } else {
+                    clearDisplay();
+                }
+            } else {
+                document.getElementById('clear-btn').classList.remove('visible');
+                loadBranding(0);
+                clearDisplay();
             }
         }
-        
-        // Load branding for selected company
+
+        // Load branding
         async function loadBranding(companyId) {
             try {
                 const response = await fetch(`/api/branding/${companyId}`);
                 const branding = await response.json();
-                
+
                 document.documentElement.style.setProperty('--primary-color', branding.primary_color);
                 document.documentElement.style.setProperty('--secondary-color', branding.secondary_color);
-                document.documentElement.style.setProperty('--background', branding.background_color);
+                document.documentElement.style.setProperty('--accent-color', branding.accent_color || branding.primary_color);
                 document.getElementById('company-logo').src = branding.logo_url;
             } catch (error) {
                 console.error('Error loading branding:', error);
             }
         }
-        
-        // Load tax data for selected company
-        async function loadTaxData() {
-            const companyId = document.getElementById('company-select').value;
-            currentCompanyId = companyId;
-            allTaxData = [];  // Clear old data
-            
-            await loadBranding(companyId);
 
-            // Special handling for Kleanit FL - no sales tax in Florida
-            if (companyId === '4') {
-                document.getElementById('county-breakdown').innerHTML = `
-                    <div class="empty-state">
-                        <h3>No Sales Tax in Florida</h3>
-                        <p>Florida does not have state sales tax. Tax reporting not applicable.</p>
-                    </div>
-                `;
-                document.getElementById('customer-totals').innerHTML = `
-                    <div class="empty-state">
-                        <p>Tax reporting not required</p>
-                    </div>
-                `;
-                updateSummary({});
-                return;
+        // File uploads
+        document.getElementById('tax-file').addEventListener('change', function(e) {
+            if (e.target.files[0]) {
+                taxReportData = e.target.files[0];
+                document.getElementById('tax-file-name').textContent = `✓ ${taxReportData.name}`;
+                document.getElementById('tax-upload-zone').classList.add('uploaded');
+                checkReadyToProcess();
             }
-            
-            // Show/hide clear button
-            const clearBtn = document.getElementById('clear-btn');
-            if (companyId === '0') {
-                clearBtn.classList.remove('visible');
-                clearDisplay();
-                return;
+        });
+
+        document.getElementById('transaction-file').addEventListener('change', function(e) {
+            if (e.target.files[0]) {
+                transactionReportData = e.target.files[0];
+                document.getElementById('transaction-file-name').textContent = `✓ ${transactionReportData.name}`;
+                document.getElementById('transaction-upload-zone').classList.add('uploaded');
+                checkReadyToProcess();
+            }
+        });
+
+        function checkReadyToProcess() {
+            const btn = document.getElementById('process-btn');
+            const missingItems = [];
+    
+            if (!taxReportData) missingItems.push('Tax Report');
+            if (!transactionReportData) missingItems.push('Transaction Report');
+            if (currentCompanyId === 0) missingItems.push('Company Selection');
+    
+            if (missingItems.length === 0) {
+                btn.disabled = false;
+                btn.textContent = 'Generate Report';
             } else {
-                clearBtn.classList.add('visible');
-            }
-            
-            try {
-                const response = await fetch(`/api/tax-data/${companyId}`);
-                allTaxData = await response.json();
-                displayTaxData(allTaxData);
-            } catch (error) {
-                console.error('Error loading tax data:', error);
+                btn.disabled = true;
+                btn.textContent = `Need: ${missingItems.join(', ')}`;
             }
         }
-        
-        // Display tax data grouped by county
-        function displayTaxData(data) {
-            if (!data || data.length === 0) {
-                document.getElementById('county-breakdown').innerHTML = `
-                    <div class="empty-state">
-                        <h3>No tax data found</h3>
-                        <p>Upload a tax report for this company</p>
-                    </div>
-                `;
-                document.getElementById('customer-totals').innerHTML = `
-                    <div class="empty-state">
-                        <p>No customer data to display</p>
-                    </div>
-                `;
-                updateSummary({});
+
+        // Drag and drop for tax report
+        const taxUploadZone = document.getElementById('tax-upload-zone');
+        const transactionUploadZone = document.getElementById('transaction-upload-zone');
+
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            taxUploadZone.addEventListener(eventName, preventDefaults, false);
+            transactionUploadZone.addEventListener(eventName, preventDefaults, false);
+        });
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            taxUploadZone.addEventListener(eventName, () => {
+                taxUploadZone.classList.add('dragover');
+            });
+            transactionUploadZone.addEventListener(eventName, () => {
+                transactionUploadZone.classList.add('dragover');
+            });
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            taxUploadZone.addEventListener(eventName, () => {
+                taxUploadZone.classList.remove('dragover');
+            });
+            transactionUploadZone.addEventListener(eventName, () => {
+                transactionUploadZone.classList.remove('dragover');
+            });
+        });
+
+        taxUploadZone.addEventListener('drop', function(e) {
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                document.getElementById('tax-file').files = files;
+                taxReportData = files[0];
+                document.getElementById('tax-file-name').textContent = `✓ ${taxReportData.name}`;
+                taxUploadZone.classList.add('uploaded');
+                checkReadyToProcess();
+            }
+        });
+
+        transactionUploadZone.addEventListener('drop', function(e) {
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                document.getElementById('transaction-file').files = files;
+                transactionReportData = files[0];
+                document.getElementById('transaction-file-name').textContent = `✓ ${transactionReportData.name}`;
+                transactionUploadZone.classList.add('uploaded');
+                checkReadyToProcess();
+            }
+        });
+
+        // Process reports
+        async function processReports() {
+            if (!taxReportData || !transactionReportData || currentCompanyId === 0) return;
+
+            document.getElementById('county-breakdown').innerHTML = '<div class="loading">Processing reports and matching payments...</div>';
+            document.getElementById('customer-totals').innerHTML = '<div class="loading">Loading...</div>';
+
+            const formData = new FormData();
+            formData.append('tax_report', taxReportData);
+            formData.append('transaction_report', transactionReportData);
+            formData.append('company_id', currentCompanyId);
+
+            try {
+                const response = await fetch('/api/process-tax-report', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    // Store data for this company
+                    companyData[currentCompanyId] = data.report;
+                    displayTaxData(data.report);
+                } else {
+                    alert(`Error: ${data.error}`);
+                    clearDisplay();
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert(`Error processing reports: ${error.message}`);
+                clearDisplay();
+            }
+        }
+
+        // Display tax data
+        function displayTaxData(report) {
+            if (!report || !report.counties || report.counties.length === 0) {
+                clearDisplay();
                 return;
             }
-            
-            // Group by county
-            const byCounty = {};
-            data.forEach(row => {
-                if (!byCounty[row.county]) {
-                    byCounty[row.county] = [];
-                }
-                byCounty[row.county].push(row);
-            });
-            
-            // Display county groups
+
+            // Display county breakdown
             let html = '';
-            Object.keys(byCounty).sort().forEach(county => {
-                const transactions = byCounty[county];
-                const countyTotal = transactions.reduce((sum, t) => sum + parseFloat(t.tax_collected), 0);
-                const stateTotal = transactions.reduce((sum, t) => sum + parseFloat(t.state_tax || 0), 0);
-                const countyTaxTotal = transactions.reduce((sum, t) => sum + parseFloat(t.county_tax || 0), 0);
-                const transitTotal = transactions.reduce((sum, t) => sum + parseFloat(t.transit_tax || 0), 0);
+            report.counties.forEach(county => {
+                const stateRate = 4.75;
+                const countyRate = (county.tax_rate - stateRate).toFixed(2);
                 
                 html += `
                     <div class="county-group">
                         <div class="county-header">
                             <div>
-                                <span class="county-name">${county} County</span>
-                                <div style="font-size: 13px; margin-top: 5px; opacity: 0.9;">
-                                    State: $${stateTotal.toFixed(2)} | County: $${countyTaxTotal.toFixed(2)}${transitTotal > 0 ? ` | Transit: $${transitTotal.toFixed(2)}` : ''}
+                                <div class="county-name">${county.name} County - ${county.tax_rate}%</div>
+                                <div class="county-breakdown">
+                                    State: $${county.state_tax.toFixed(2)} | County: $${county.county_tax.toFixed(2)}
                                 </div>
                             </div>
-                            <span class="county-total">$${countyTotal.toFixed(2)}</span>
+                            <div class="county-total">$${county.total_tax.toFixed(2)}</div>
                         </div>
                         <table>
                             <thead>
                                 <tr>
-                                    <th>Date</th>
-                                    <th>Invoice #</th>
                                     <th>Customer</th>
-                                    <th class="text-right">Total Sales</th>
-                                    <th class="text-right">Taxable</th>
-                                    <th>Tax Rate</th>
+                                    <th>Payment Date</th>
+                                    <th class="text-right">Invoice Amount</th>
                                     <th class="text-right">Tax</th>
                                 </tr>
                             </thead>
                             <tbody>
                 `;
-                
-                transactions.forEach(t => {
+
+                county.customers.forEach(cust => {
+                    const paymentDate = new Date(cust.payment_date).toLocaleDateString('en-US');
                     html += `
                         <tr>
-                            <td>${new Date(t.invoice_date).toLocaleDateString()}</td>
-                            <td>${t.invoice_number}</td>
-                            <td>${t.customer_name}</td>
-                            <td class="text-right">$${parseFloat(t.total_sales).toFixed(2)}</td>
-                            <td class="text-right">$${parseFloat(t.taxable_amount).toFixed(2)}</td>
-                            <td>${t.tax_rate}</td>
-                            <td class="text-right">$${parseFloat(t.tax_collected).toFixed(2)}</td>
+                            <td>${cust.customer_name}</td>
+                            <td>${paymentDate}</td>
+                            <td class="text-right">$${cust.total_sales.toFixed(2)}</td>
+                            <td class="text-right">$${cust.tax.toFixed(2)}</td>
                         </tr>
                     `;
                 });
-                
+
                 html += `
                             </tbody>
                         </table>
                     </div>
                 `;
             });
-            
+
             document.getElementById('county-breakdown').innerHTML = html;
-            
+
             // Display customer totals
-            displayCustomerTotals(data);
-            
+            displayCustomerTotals(report);
+
             // Update summary
-            updateSummary(byCounty);
+            updateSummary(report);
         }
-        
-        // Display customer tax totals
-        function displayCustomerTotals(data) {
-            if (!data || data.length === 0) {
-                document.getElementById('customer-totals').innerHTML = `
-                    <div class="empty-state">
-                        <p>No customer data to display</p>
-                    </div>
-                `;
-                return;
-            }
-            const byCustomer = {};
-            data.forEach(row => {
-                if (!byCustomer[row.customer_name]) {
-                    byCustomer[row.customer_name] = {
-                        count: 0,
-                        total_sales: 0,
-                        taxable: 0,
-                        tax: 0
-                    };
-                }
-                byCustomer[row.customer_name].count++;
-                byCustomer[row.customer_name].total_sales += parseFloat(row.total_sales);
-                byCustomer[row.customer_name].taxable += parseFloat(row.taxable_amount);
-                byCustomer[row.customer_name].tax += parseFloat(row.tax_collected);
+
+        // Display customer totals
+        function displayCustomerTotals(report) {
+            const customerMap = {};
+            
+            report.counties.forEach(county => {
+                county.customers.forEach(cust => {
+                    if (!customerMap[cust.customer_name]) {
+                        customerMap[cust.customer_name] = {
+                            count: 0,
+                            total_sales: 0,
+                            tax: 0
+                        };
+                    }
+                    customerMap[cust.customer_name].count++;
+                    customerMap[cust.customer_name].total_sales += cust.total_sales;
+                    customerMap[cust.customer_name].tax += cust.tax;
+                });
             });
-            
-            const customers = Object.keys(byCustomer).sort((a, b) => 
-                byCustomer[b].tax - byCustomer[a].tax
+
+            const customers = Object.keys(customerMap).sort((a, b) =>
+                customerMap[b].tax - customerMap[a].tax
             );
-            
+
             let html = `
                 <table>
                     <thead>
@@ -620,61 +943,46 @@
                             <th>Customer</th>
                             <th class="text-right">Transactions</th>
                             <th class="text-right">Total Sales</th>
-                            <th class="text-right">Taxable Amount</th>
                             <th class="text-right">Tax Collected</th>
                         </tr>
                     </thead>
                     <tbody>
             `;
-            
+
             customers.forEach(customer => {
-                const data = byCustomer[customer];
+                const data = customerMap[customer];
                 html += `
                     <tr>
                         <td>${customer}</td>
                         <td class="text-right">${data.count}</td>
                         <td class="text-right">$${data.total_sales.toFixed(2)}</td>
-                        <td class="text-right">$${data.taxable.toFixed(2)}</td>
                         <td class="text-right">$${data.tax.toFixed(2)}</td>
                     </tr>
                 `;
             });
-            
+
             html += `
                     </tbody>
                 </table>
             `;
-            
+
             document.getElementById('customer-totals').innerHTML = html;
         }
-        
-        // Update summary cards
-        function updateSummary(byCounty) {
-            const countyCount = Object.keys(byCounty).length;
-            let totalStateTax = 0;
-            let totalCountyTax = 0;
-            let totalTax = 0;
-            
-            Object.values(byCounty).forEach(transactions => {
-                transactions.forEach(t => {
-                    totalStateTax += parseFloat(t.state_tax || 0);
-                    totalCountyTax += parseFloat(t.county_tax || 0) + parseFloat(t.transit_tax || 0);
-                    totalTax += parseFloat(t.tax_collected);
-                });
-            });
-            
-            document.getElementById('county-count').textContent = countyCount || '-';
-            document.getElementById('state-tax').textContent = totalStateTax > 0 ? `$${totalStateTax.toFixed(2)}` : '$0.00';
-            document.getElementById('county-tax').textContent = totalCountyTax > 0 ? `$${totalCountyTax.toFixed(2)}` : '$0.00';
-            document.getElementById('tax-collected').textContent = totalTax > 0 ? `$${totalTax.toFixed(2)}` : '$0.00';
+
+        // Update summary
+        function updateSummary(report) {
+            document.getElementById('state-tax').textContent = `$${report.totals.state_tax.toFixed(2)}`;
+            document.getElementById('county-tax').textContent = `$${report.totals.county_tax.toFixed(2)}`;
+            document.getElementById('tax-collected').textContent = `$${report.totals.total_tax.toFixed(2)}`;
+            document.getElementById('invoice-count').textContent = report.totals.invoice_count;
         }
-        
+
         // Clear display
         function clearDisplay() {
             document.getElementById('county-breakdown').innerHTML = `
                 <div class="empty-state">
-                    <h3>No company selected</h3>
-                    <p>Select a company to view tax data</p>
+                    <h3>No tax data loaded</h3>
+                    <p>Upload and process tax reports to begin</p>
                 </div>
             `;
             document.getElementById('customer-totals').innerHTML = `
@@ -682,143 +990,62 @@
                     <p>No customer data to display</p>
                 </div>
             `;
-            document.getElementById('county-count').textContent = '-';
             document.getElementById('state-tax').textContent = '$0.00';
             document.getElementById('county-tax').textContent = '$0.00';
             document.getElementById('tax-collected').textContent = '$0.00';
+            document.getElementById('invoice-count').textContent = '-';
         }
-        
-        // Filter by date range
-        function filterByDate() {
-            const dateFrom = document.getElementById('date-from').value;
-            const dateTo = document.getElementById('date-to').value;
+
+        // Clear data
+        function clearData() {
+            if (!confirm('Clear all uploaded files and results for this company?')) return;
             
-            if (!dateFrom && !dateTo) {
-                displayTaxData(allTaxData);
-                return;
+            // Clear uploaded files
+            taxReportData = null;
+            transactionReportData = null;
+            
+            document.getElementById('tax-file').value = '';
+            document.getElementById('transaction-file').value = '';
+            document.getElementById('tax-file-name').textContent = '';
+            document.getElementById('transaction-file-name').textContent = '';
+            document.getElementById('tax-upload-zone').classList.remove('uploaded');
+            document.getElementById('transaction-upload-zone').classList.remove('uploaded');
+            
+            // Clear processed data for this company
+            if (currentCompanyId > 0) {
+                delete companyData[currentCompanyId];
             }
             
-            const filtered = allTaxData.filter(row => {
-                const invoiceDate = new Date(row.invoice_date);
-                if (dateFrom && invoiceDate < new Date(dateFrom)) return false;
-                if (dateTo && invoiceDate > new Date(dateTo)) return false;
-                return true;
-            });
-            
-            displayTaxData(filtered);
+            checkReadyToProcess();
+            clearDisplay();
         }
-        
-        // Upload tax file
-        async function uploadTaxFile() {
-            const fileInput = document.getElementById('tax-file');
-            const file = fileInput.files[0];
-            
-            if (!file) return;
-            
-            if (currentCompanyId === 0 || currentCompanyId === '0') {
-                alert('Please select a company first');
-                return;
-            }
-            
-            const formData = new FormData();
-            formData.append('file', file);
-            formData.append('company_id', currentCompanyId);
-            
-            try {
-                const response = await fetch('/api/upload-tax', {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                const result = await response.json();
-                
-                if (response.ok) {
-                    alert(`✅ Import Complete\n• ${result.inserted} transactions added\n• ${result.updated} transactions updated\n• ${result.skipped} rows skipped`);
-                    loadTaxData();
-                } else {
-                    alert(`Error: ${result.error}`);
-                }
-            } catch (error) {
-                console.error('Upload error:', error);
-                alert('Error uploading file');
-            }
-            
-            fileInput.value = '';
-        }
-        
-        // Drag and drop
-        const uploadZone = document.getElementById('upload-zone');
-        
-        uploadZone.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            uploadZone.classList.add('dragover');
-        });
-        
-        uploadZone.addEventListener('dragleave', () => {
-            uploadZone.classList.remove('dragover');
-        });
-        
-        uploadZone.addEventListener('drop', (e) => {
-            e.preventDefault();
-            uploadZone.classList.remove('dragover');
-            
-            const file = e.dataTransfer.files[0];
-            if (file) {
-                document.getElementById('tax-file').files = e.dataTransfer.files;
-                uploadTaxFile();
-            }
-        });
-        
-        // Export to Excel
-        function exportToExcel() {
-            if (currentCompanyId === 0 || currentCompanyId === '0') {
-                alert('Please select a company first');
-                return;
-            }
-            
-            window.location.href = `/api/export-tax/${currentCompanyId}`;
-        }
-        
-        // Clear all tax data for current company
-        async function clearTaxData() {
-            if (currentCompanyId === 0 || currentCompanyId === '0') {
-                alert('Please select a company first');
-                return;
-            }
-            
-            const companySelect = document.getElementById('company-select');
-            const companyName = companySelect.options[companySelect.selectedIndex].text;
-            
-            if (!confirm(`⚠️ Are you sure you want to delete ALL tax data for ${companyName}?`)) {
-                return;
-            }
-            
-            if (!confirm(`🚨 This cannot be undone! Delete all tax transactions for ${companyName}?`)) {
-                return;
-            }
-            
-            try {
-                const response = await fetch(`/api/clear-tax-data/${currentCompanyId}`, {
-                    method: 'DELETE'
-                });
-                
-                const result = await response.json();
-                
-                if (response.ok) {
-                    alert(`✅ Deleted ${result.deleted} tax transactions`);
-                    loadTaxData();  // Reload to show empty state
-                } else {
-                    alert(`Error: ${result.error}`);
-                }
-            } catch (error) {
-                console.error('Error clearing data:', error);
-                alert('Error clearing tax data');
-            }
-        }
-        
-        // Initialize on page load
-        loadCompanies();
+
+        // Initialize
         loadBranding(0);
+
+        // Help modal functions
+        function showHelp() {
+            document.getElementById('help-modal').classList.add('active');
+            document.body.style.overflow = 'hidden'; // Prevent scrolling behind modal
+        }
+
+        function closeHelp() {
+            document.getElementById('help-modal').classList.remove('active');
+            document.body.style.overflow = 'auto';
+        }
+
+        function closeHelpIfBackdrop(event) {
+            if (event.target.id === 'help-modal') {
+                closeHelp();
+            }
+        }
+
+        // Close modal with Escape key
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                closeHelp();
+            }
+        });
     </script>
 </body>
 </html>

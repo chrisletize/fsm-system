@@ -18,6 +18,8 @@ from nc_tax_rates import get_tax_breakdown, get_county_rate_display
 from branding import get_branding
 from io import BytesIO
 import zipfile
+from tax_processor import process_tax_report
+import tempfile
 
 # Add scripts directory to path so we can import our PDF generator
 sys.path.append(os.path.join(os.path.dirname(__file__), '../../scripts'))
@@ -880,6 +882,43 @@ def generate_batch_statements():
     except Exception as e:
         print(f"Error in batch generation: {e}")
         return jsonify({'error': str(e)}), 500
+
+@app.route('/tax-report')
+def tax_report_page():
+    """Display the cash-basis tax report page"""
+    return render_template('tax-report.html')
+
+@app.route('/api/process-tax-report', methods=['POST'])
+def api_process_tax_report():
+    """Process tax report and transaction report to create cash-basis tax breakdown"""
+    try:
+        tax_file = request.files.get('tax_report')
+        transaction_file = request.files.get('transaction_report')
+        company_id = request.form.get('company_id')
+        
+        if not all([tax_file, transaction_file, company_id]):
+            return jsonify({'success': False, 'error': 'Missing required fields'})
+        
+        # Save uploaded files temporarily
+        tax_path = os.path.join(tempfile.gettempdir(), f'tax_report_{company_id}.xlsx')
+        transaction_path = os.path.join(tempfile.gettempdir(), f'transaction_report_{company_id}.xlsx')
+        
+        tax_file.save(tax_path)
+        transaction_file.save(transaction_path)
+        
+        # Process the reports (no date filtering)
+        result = process_tax_report(tax_path, transaction_path, company_id)
+        
+        # Clean up temp files
+        os.remove(tax_path)
+        os.remove(transaction_path)
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)})
 
 if __name__ == '__main__':
     print("\n" + "="*60)
