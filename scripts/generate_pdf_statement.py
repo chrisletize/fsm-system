@@ -173,7 +173,7 @@ def generate_pdf_statement(customer_name_search=None, output_file=None, company_
     title_style = ParagraphStyle(
         'CustomTitle',
         parent=styles['Heading1'],
-        fontSize=24,
+        fontSize=18,
         textColor=PRIMARY_COLOR,
         spaceAfter=30,
         alignment=TA_CENTER
@@ -182,7 +182,7 @@ def generate_pdf_statement(customer_name_search=None, output_file=None, company_
     heading_style = ParagraphStyle(
         'CustomHeading',
         parent=styles['Heading2'],
-        fontSize=14,
+        fontSize=12,
         textColor=PRIMARY_COLOR,
         spaceAfter=12
     )
@@ -207,9 +207,7 @@ def generate_pdf_statement(customer_name_search=None, output_file=None, company_
     customer_data = [
         ["Customer Information"],
         ["Account Name:", name],
-        ["Account Number:", account_num or "N/A"],
     ]
-    
     if addr1:
         customer_data.append(["Address:", addr1])
         if addr2:
@@ -240,45 +238,6 @@ def generate_pdf_statement(customer_name_search=None, output_file=None, company_
     ]))
     
     elements.append(customer_table)
-    elements.append(Spacer(1, 0.3*inch))
-    
-    # Aging summary
-    elements.append(Paragraph("<b>AGING SUMMARY</b>", heading_style))
-    
-    aging_data = [
-        ["Aging Period", "Amount Due"],
-        ["Current", f"${aging_buckets['CURRENT']:,.2f}"],
-        ["31-60 Days", f"${aging_buckets['31-60 DAYS']:,.2f}"],
-        ["61-90 Days", f"${aging_buckets['61-90 DAYS']:,.2f}"],
-        ["Over 90 Days", f"${aging_buckets['90+ DAYS']:,.2f}"],
-        ["TOTAL AMOUNT DUE", f"${total_due:,.2f}"],
-    ]
-    
-    aging_table = Table(aging_data, colWidths=[4*inch, 2*inch])
-    aging_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), PRIMARY_COLOR),
-        ('TEXTCOLOR', (0, 0), (-1, 0), HEADER_TEXT_COLOR),
-        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 11),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-        ('BACKGROUND', (0, 1), (-1, -2), colors.lightgrey),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black),
-        ('ALIGN', (1, 1), (1, -1), 'RIGHT'),
-        ('FONTNAME', (0, 1), (-1, -2), 'Helvetica'),
-        ('FONTSIZE', (0, 1), (-1, -2), 10),
-        ('TOPPADDING', (0, 1), (-1, -2), 6),
-        ('BOTTOMPADDING', (0, 1), (-1, -2), 6),
-        # Total row styling
-        ('BACKGROUND', (0, -1), (-1, -1), PRIMARY_COLOR),
-        ('TEXTCOLOR', (0, -1), (-1, -1), HEADER_TEXT_COLOR),
-        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, -1), (-1, -1), 12),
-        ('TOPPADDING', (0, -1), (-1, -1), 8),
-        ('BOTTOMPADDING', (0, -1), (-1, -1), 8),
-    ]))
-    
-    elements.append(aging_table)
     elements.append(Spacer(1, 0.3*inch))
     
     # Invoice details
