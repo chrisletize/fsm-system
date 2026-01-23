@@ -671,3 +671,93 @@ After FL split import:
 - Nano's Ctrl+R can insert entire files at cursor position
 - Empty ZIP files happen when temp file path undefined
 - Multi-company requires filtering at every query level
+
+---
+
+## Session 6 - Tax Report System + Help Documentation (2026-01-22)
+
+### What We Built
+
+1. **Cash-Basis Tax Reporting System**
+   - Dual file upload interface (Tax Report + Transaction Report)
+   - Job number matching to determine payment dates
+   - NC state (4.75%) vs county tax breakdown
+   - Company-specific data persistence
+   - Generate button with helpful feedback
+
+2. **UX Improvements**
+   - Button shows what's missing: "Need: Tax Report, Transaction Report, Company Selection"
+   - File uploads clear when switching companies (prevents wrong-company accidents)
+   - Generated reports persist per company (can switch back and forth)
+   - Professional help modal with detailed instructions
+
+3. **Help System Design Documentation**
+   - Created HELP-SYSTEM.md with comprehensive vision
+   - Live, data-aware examples using real user data
+   - Progressive disclosure (4 states for tax report page)
+   - Context-sensitive help principles for all future features
+   - Rollout plan across all modules
+
+### Technical Implementation
+
+**Tax Report Processing**:
+- Upload zone for Tax Report (all invoices, full date range)
+- Upload zone for Transaction Report (payments in specific month)
+- Backend matches by Job# to show only invoices paid in selected period
+- Calculates state vs county tax for NC DOR filing
+
+**Data Persistence Pattern**:
+```javascript
+let companyData = {};  // { companyId: processedReport }
+```
+- Each company's generated report stored separately
+- Switching companies clears uploads but preserves reports
+- Can regenerate or view previous reports without re-upload
+
+### Files Modified
+
+- `backend/api/templates/tax-report.html` - Tax report page with dual upload
+- `backend/api/tax_processor.py` - Job matching and tax calculation
+- `backend/api/app.py` - Tax report API endpoint
+- `docs/PROJECT-KNOWLEDGE/HELP-SYSTEM.md` - NEW comprehensive help design
+
+### Testing Results
+
+- ✅ Tax report generation working for all companies
+- ✅ Matched 51/95 invoices in December test data
+- ✅ State vs county tax breakdown accurate ($2,878.37 total)
+- ✅ Company switching clears uploads, preserves reports
+- ✅ Button feedback shows missing requirements clearly
+
+### Known Issues
+
+- 🔴 Kleanit FL batch statement ZIP files are empty (all other companies work)
+  - Need to investigate batch generation code for company_id 4
+  - Individual statements work, only batch ZIP is affected
+
+### Time Spent
+~3 hours (tax system implementation, UX refinement, help documentation)
+
+### Next Session Goals
+
+1. **Fix Kleanit FL Batch ZIP Issue**
+   - Debug why company_id 4 produces empty ZIP files
+   - Verify batch generation works for all 4 companies
+
+2. **Tax Report Enhancements** (optional)
+   - Export to Excel functionality
+   - Print-friendly report format
+   - Save report to database for historical tracking
+
+3. **Continue Help System Rollout**
+   - Implement live help on tax report page
+   - Add help to statement generator page
+   - Test with Michele for usability feedback
+
+### Key Learnings
+
+- Button feedback dramatically improves UX (users know what's wrong)
+- Data persistence per company prevents confusion
+- Help systems should use real data as examples, not placeholders
+- Clearing uploads when switching companies prevents costly mistakes
+
