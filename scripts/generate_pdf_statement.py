@@ -48,25 +48,40 @@ def get_aging_bucket(days):
     else:
         return "90+ DAYS"
 
-def generate_pdf_statement(customer_name_search, output_file=None, company_id=None):
+def generate_pdf_statement(customer_name_search=None, output_file=None, company_id=None, customer_id=None):
     """Generate a professional PDF statement for a customer"""
     
     conn = get_db_connection()
     cur = conn.cursor()
     
     # Find customer and company
-    cur.execute("""
-        SELECT c.id, c.customer_name, c.account_number,
-               c.contact_email, c.contact_phone,
-               c.service_location_address_1, c.service_location_address_2,
-               c.service_location_city, c.service_location_state, c.service_location_zip,
-               co.name as company_name
-        FROM customers c
-        JOIN companies co ON c.company_id = co.id
-        WHERE c.customer_name ILIKE %s
-          AND c.company_id = %s
-        LIMIT 1
-    """, (customer_name_search, company_id))
+    if customer_id:
+        # Use customer_id for exact lookup (more reliable)
+        cur.execute("""
+            SELECT c.id, c.customer_name, c.account_number,
+                   c.contact_email, c.contact_phone,
+                   c.service_location_address_1, c.service_location_address_2,
+                   c.service_location_city, c.service_location_state, c.service_location_zip,
+                   co.name as company_name
+            FROM customers c
+            JOIN companies co ON c.company_id = co.id
+            WHERE c.id = %s AND c.company_id = %s
+            LIMIT 1
+        """, (customer_id, company_id))
+    else:
+        # Fallback to name search for CLI usage
+        cur.execute("""
+            SELECT c.id, c.customer_name, c.account_number,
+                   c.contact_email, c.contact_phone,
+                   c.service_location_address_1, c.service_location_address_2,
+                   c.service_location_city, c.service_location_state, c.service_location_zip,
+                   co.name as company_name
+            FROM customers c
+            JOIN companies co ON c.company_id = co.id
+            WHERE c.customer_name ILIKE %s
+              AND c.company_id = %s
+            LIMIT 1
+        """, (customer_name_search, company_id))
     
     customer = cur.fetchone()
     if not customer:

@@ -844,13 +844,20 @@ def generate_batch_statements():
                     safe_name = customer_name.replace(' ', '_').replace('/', '_')
                     temp_pdf = f"{temp_dir}/statement_{safe_name}.pdf"
                     
-                    # Generate the PDF
-                    result = generate_pdf_statement(customer_name, temp_pdf, customer_company_id)
+                    # Generate the PDF using customer_id (more reliable than name matching)
+                    result = generate_pdf_statement(
+                        customer_name_search=None,
+                        output_file=temp_pdf,
+                        company_id=customer_company_id,
+                        customer_id=customer_id
+                    )
                     
                     if result and os.path.exists(result):
                         # Add PDF to ZIP
                         with open(result, 'rb') as pdf_file:
-                            zip_file.writestr(f'Statement - {clean_customer_name(customer_name)}.pdf', pdf_file.read())
+                            # Remove asterisks and extra spaces to avoid Windows ZIP preview issues
+                            clean_name = clean_customer_name(customer_name).replace('*', '').replace('  ', ' ').strip()
+                            zip_file.writestr(f'Statement - {clean_name}.pdf', pdf_file.read())
                         
                         # Clean up temp file
                         os.remove(result)
