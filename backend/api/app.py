@@ -890,10 +890,6 @@ def generate_batch_statements():
         print(f"Error in batch generation: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/tax-report')
-def tax_report_page():
-    """Display the cash-basis tax report page"""
-    return render_template('tax-report.html')
 
 @app.route('/api/process-tax-report', methods=['POST'])
 def api_process_tax_report():
@@ -902,30 +898,318 @@ def api_process_tax_report():
         tax_file = request.files.get('tax_report')
         transaction_file = request.files.get('transaction_report')
         company_id = request.form.get('company_id')
-        
+
         if not all([tax_file, transaction_file, company_id]):
             return jsonify({'success': False, 'error': 'Missing required fields'})
-        
+
         # Save uploaded files temporarily
         tax_path = os.path.join(tempfile.gettempdir(), f'tax_report_{company_id}.xlsx')
         transaction_path = os.path.join(tempfile.gettempdir(), f'transaction_report_{company_id}.xlsx')
-        
+
         tax_file.save(tax_path)
         transaction_file.save(transaction_path)
-        
-        # Process the reports (no date filtering)
+
+        # Process the reports
         result = process_tax_report(tax_path, transaction_path, company_id)
-        
+
         # Clean up temp files
         os.remove(tax_path)
         os.remove(transaction_path)
-        
+
         return jsonify(result)
-        
+
     except Exception as e:
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)})
+
+
+# ========================================
+# OUTLOOK INTEGRATION ENDPOINTS
+# ========================================
+
+@app.route('/api/prepare-outlook-email/<int:customer_id>', methods=['POST'])
+def prepare_outlook_email(customer_id):
+    """Generate PowerShell script + PDF for single customer email"""
+    try:
+        data = request.get_json()
+        company_id = data.get('company_id')
+
+        if not company_id:
+            return jsonify({'error': 'No company selected'}), 400
+
+        # Get customer info
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+                c.customer_name,
+                c.contact_email,
+                co.name as company_name,
+                SUM(i.invoice_total_due) as total_due
+            FROM customers c
+            JOIN companies co ON c.company_id = co.id
+            LEFT JOIN invoices i ON c.id = i.customer_id AND i.invoice_total_due > 0
+            WHERE c.id = %s AND c.company_id = %s
+            GROUP BY c.id, c.customer_name, c.contact_email, co.name
+        """, (customer_id, company_id))
+
+        customer = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        if not customer:
+            return jsonify({'error': 'Customer not found'}), 404
+
+        if not customer['contact_email']:
+            return jsonify({'error': 'Customer has no email address on file'}), 400
+
+        customer_name = customer['customer_name']
+
+        # Map to official company names
+        company_name_map = {
+            'Kleanit Charlotte': 'Kleanit',
+            'Get a Grip Resurfacing of Charlotte': 'Get a Grip Resurfacing of Charlotte',
+            'CTS of Raleigh': 'CTS of Raleigh',
+            'Kleanit South Florida': 'Kleanit'
+        }
+        company_name = company_name_map.get(customer['company_name'], customer['company_name'])
+
+        total_due = float(customer['total_due']) if customer['total_due'] else 0.0
+
+        # Generate PDF statement
+        temp_dir = '/tmp/outlook_email'
+        os.makedirs(temp_dir, exist_ok=True)
+
+        safe_name = customer_name.replace(' ', '_').replace('/', '_')
+        pdf_filename = f"Statement_{safe_name}_{datetime.now().strftime('%Y%m%d')}.pdf"
+        pdf_path = os.path.join(temp_dir, pdf_filename)
+
+        # Generate the PDF
+        result_pdf = generate_pdf_statement(customer_name, pdf_path, company_id)
+
+        if not result_pdf or not os.path.exists(result_pdf):
+            return jsonify({'error': 'Failed to generate PDF statement'}), 500
+
+        # Import Outlook functions
+        from outlook_integration import generate_individual_email_script, save_script_to_file
+
+        # Generate PowerShell script
+        script_content = generate_individual_email_script(
+            customer_name=customer_name,
+            customer_email=customer['contact_email'],
+            company_name=company_name,
+            total_due=total_due,
+            pdf_filename=pdf_filename
+        )
+
+        script_filename = f"Email_{safe_name}.ps1"
+        script_path = os.path.join(temp_dir, script_filename)
+        save_script_to_file(script_content, script_path)
+
+        # Create ZIP file
+        zip_buffer = BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            readme = f"""Outlook Email Package for {customer_name}
+=====================================
+
+Contents:
+1. {script_filename} - PowerShell script
+2. {pdf_filename} - Customer statement
+
+Instructions:
+1. Extract all files to a folder
+2. Right-click {script_filename}
+3. Select "Run with PowerShell"
+4. Review the draft in Outlook
+5. Click Send when ready
+
+Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+            zip_file.writestr('README.txt', readme)
+            zip_file.write(script_path, script_filename)
+            zip_file.write(result_pdf, pdf_filename)
+
+        # Clean up
+        os.remove(script_path)
+        os.remove(result_pdf)
+        try:
+            os.rmdir(temp_dir)
+        except:
+            pass
+
+        zip_buffer.seek(0)
+
+        return send_file(
+            zip_buffer,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=f'Email_{safe_name}.zip'
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/prepare-outlook-batch', methods=['POST'])
+def prepare_outlook_batch():
+    """Generate PowerShell script + PDFs for batch emails"""
+    try:
+        data = request.get_json()
+        customer_ids = data.get('customer_ids', [])
+        company_id = data.get('company_id')
+
+        if not customer_ids:
+            return jsonify({'error': 'No customers selected'}), 400
+
+        if not company_id:
+            return jsonify({'error': 'No company selected'}), 400
+
+        # Get company name
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM companies WHERE id = %s", (company_id,))
+        company = cur.fetchone()
+        
+        # Map to official company names
+        company_name_map = {
+            'Kleanit Charlotte': 'Kleanit',
+            'Get a Grip Resurfacing of Charlotte': 'Get a Grip Resurfacing of Charlotte',
+            'CTS of Raleigh': 'CTS of Raleigh',
+            'Kleanit South Florida': 'Kleanit'
+        }
+        company_name = company_name_map.get(company['name'], company['name']) if company else 'Company'
+        cur.close()
+        conn.close()
+
+        # Create temp directory
+        temp_dir = '/tmp/outlook_batch'
+        os.makedirs(temp_dir, exist_ok=True)
+
+        customers_data = []
+        pdf_files = []
+
+        # Generate PDFs and collect customer data
+        for customer_id in customer_ids:
+            try:
+                conn = get_db_connection()
+                cur = conn.cursor()
+                cur.execute("""
+                    SELECT
+                        c.customer_name,
+                        c.contact_email,
+                        SUM(i.invoice_total_due) as total_due
+                    FROM customers c
+                    LEFT JOIN invoices i ON c.id = i.customer_id AND i.invoice_total_due > 0
+                    WHERE c.id = %s AND c.company_id = %s
+                    GROUP BY c.id, c.customer_name, c.contact_email
+                """, (customer_id, company_id))
+
+                customer = cur.fetchone()
+                cur.close()
+                conn.close()
+
+                if not customer or not customer['contact_email']:
+                    continue
+
+                customer_name = customer['customer_name']
+                total_due = float(customer['total_due']) if customer['total_due'] else 0.0
+
+                clean_name = clean_customer_name(customer_name)
+                pdf_filename = f"Statement - {clean_name}.pdf"
+                pdf_path = os.path.join(temp_dir, pdf_filename)
+
+                result_pdf = generate_pdf_statement(customer_name, pdf_path, company_id)
+
+                if result_pdf and os.path.exists(result_pdf):
+                    customers_data.append({
+                        'name': customer_name,
+                        'email': customer['contact_email'],
+                        'total_due': total_due,
+                        'pdf_filename': pdf_filename
+                    })
+                    pdf_files.append((result_pdf, pdf_filename))
+
+            except Exception as e:
+                print(f"Error processing customer {customer_id}: {e}")
+                continue
+
+        if not customers_data:
+            return jsonify({'error': 'No valid customers to process'}), 400
+
+        # Import Outlook functions
+        from outlook_integration import generate_batch_email_script, save_script_to_file
+
+        # Generate batch script
+        script_content = generate_batch_email_script(
+            customers_data=customers_data,
+            company_name=company_name
+        )
+
+        script_filename = f"Batch_Email_{len(customers_data)}_Customers.ps1"
+        script_path = os.path.join(temp_dir, script_filename)
+        save_script_to_file(script_content, script_path)
+
+        # Create ZIP
+        zip_buffer = BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            readme = f"""Outlook Batch Email Package
+============================
+
+Company: {company_name}
+Customers: {len(customers_data)}
+Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+Instructions:
+1. Extract all files
+2. Right-click {script_filename}
+3. Select "Run with PowerShell"
+4. Review customer list and confirm
+5. Open Outlook Drafts folder
+6. Review and send each email
+
+Customers:
+"""
+            for customer in customers_data:
+                readme += f"  • {customer['name']} <{customer['email']}> - ${customer['total_due']:,.2f}\n"
+
+            zip_file.writestr('README.txt', readme)
+            zip_file.write(script_path, script_filename)
+
+            for pdf_path, pdf_filename in pdf_files:
+                zip_file.write(pdf_path, pdf_filename)
+
+        # Clean up
+        os.remove(script_path)
+        for pdf_path, _ in pdf_files:
+            try:
+                os.remove(pdf_path)
+            except:
+                pass
+        try:
+            os.rmdir(temp_dir)
+        except:
+            pass
+
+        zip_buffer.seek(0)
+
+        today = datetime.now().strftime('%Y-%m-%d')
+        filename = f'Batch_Email_{company_name.replace(" ", "_")}_{len(customers_data)}_customers_{today}.zip'
+
+        return send_file(
+            zip_buffer,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=filename
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
 
 if __name__ == '__main__':
     print("\n" + "="*60)
@@ -934,5 +1218,5 @@ if __name__ == '__main__':
     print(f"Access at: http://localhost:5000")
     print("Press Ctrl+C to stop")
     print("="*60 + "\n")
-    
+
     app.run(host='0.0.0.0', port=5000, debug=True)
