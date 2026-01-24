@@ -1,5 +1,25 @@
 # Session Notes
 
+# SESSION NOTES
+
+## 🚨 END OF SESSION CHECKLIST 🚨
+**ALWAYS do this before ending a session:**
+1. ✅ Update SESSION-NOTES.md with what we built
+2. ✅ Update CURRENT-STATUS.md 
+3. ✅ **BACKUP CODE TO GITHUB:**
+```bash
+   cd ~/fsm-system
+   git add backend/ scripts/
+   git status  # Review what's being committed
+   git commit -m "Session X: Brief description of work"
+   git push
+```
+4. ✅ Verify push succeeded: Check https://github.com/chrisletize/fsm-system
+
+**Your code is ONLY safe when it's on GitHub!**
+
+---
+
 ## 2026-01-14: Session 1 - Initial Setup
 
 ### What We Did
@@ -420,3 +440,234 @@ After FL split import:
 - Paid vs unpaid invoices serve different business purposes (AR vs tax compliance)
 - UX details matter: dropdown behavior affects user confidence
 
+---
+
+## Session 6 - Tax Report with State/County Breakdown (2026-01-20)
+
+### What We Built
+
+1. **Complete Tax Report System**
+   - Separate page at `/tax-report`
+   - Upload ServiceFusion Tax Report Excel files
+   - County-grouped display with transaction details
+   - Date range filtering
+   - Export to Excel functionality
+
+2. **State vs County Tax Breakdown**
+   - Created NC tax rate database (all 100 counties)
+   - Hardcoded rates: 6.75%, 7.00%, 7.25%, 7.50%
+   - State: Always 4.75%
+   - County: 2.00% or 2.25%
+   - Transit: 0.50% (Mecklenburg, Wake, Durham, Orange only)
+   - Each transaction calculates state/county/transit portions
+
+3. **Summary Cards**
+   - Total State Tax - Shows all 4.75% portions going to state
+   - Total County Tax - Shows county + transit combined
+   - Total Tax Collected - Grand total
+   - Total Counties - Number of counties with transactions
+
+4. **County Breakdown Display**
+   - Each county header shows: "State: $X | County: $Y | Transit: $Z"
+   - Makes it clear where tax money goes
+   - Example: Mecklenburg shows $3,283 state + $1,380 county + $346 transit
+
+5. **Navigation System**
+   - Added Tax Report button to main statement page
+   - Added Tax Report button to upload page
+   - All 3 pages now interconnected
+   - Easy navigation between Statements / Tax Report / Upload
+
+6. **Clear Data Button**
+   - Added to tax report page (matches statement generator)
+   - Double confirmation before deletion
+   - Only shows when company selected
+
+### Technical Implementation
+
+**Files Created:**
+- `nc_tax_rates.py` - NC county tax rate database with breakdown calculator
+- `tax-report.html` - Tax report page with state/county display
+- Tax report API endpoints in `app.py`
+
+**Database:**
+- `tax_transactions` table with county, rates, amounts
+- Separate from invoices (paid vs unpaid workflow)
+
+**Key Functions:**
+- `get_tax_breakdown()` - Calculates state/county/transit portions
+- `get_county_rate_display()` - Formats rate display strings
+
+### Bug Fixes
+
+1. **Customer Totals Not Clearing**
+   - Fixed: clearDisplay() now resets customer totals section
+   - Previously persisted when switching companies
+
+2. **Background Colors**
+   - Fixed: Removed gradient, using solid company colors
+   - Better distinction between companies
+
+3. **Logo Display**
+   - Fixed: Branding API now returns logo_url with /static/ prefix
+   - All company logos display correctly
+
+### Testing Results
+
+✅ Uploaded December 2025 Get a Grip tax data (208 transactions)
+✅ 10 counties displaying correctly
+✅ Tax breakdown math verified:
+   - Total State: $3,284 (4.75%)
+   - Total County: $1,726 (2.00-2.25% + 0.50% transit)
+   - Total: $5,010
+✅ Mecklenburg transit tax calculated correctly
+✅ Navigation between all pages working
+✅ Export to Excel functional
+
+### Time Spent
+~3 hours (tax rate research, implementation, testing, navigation)
+
+### Next Session Goals
+
+1. **Batch Statement Generation**
+   - Generate PDFs for multiple customers at once
+   - Checkbox selection system (QuickBooks-style)
+   - "Select All" functionality
+   - Optional date range filtering
+   - Download as ZIP file
+
+2. **Email Functionality**
+   - Send statements via email
+   - Batch email option
+   - Email validation
+
+3. **Cleanup & Polish**
+   - Loading spinners
+   - Better error messages
+   - Confirmation dialogs
+   - Mobile responsiveness
+
+### Decisions Made
+
+- Tax report uses separate table from invoices (different workflows)
+- State/county breakdown calculated proportionally from total rate
+- Transit tax grouped with county tax in summary (simpler for filing)
+- NC tax rates hardcoded (more reliable than trying to parse from data)
+- Navigation buttons on all pages for easy movement
+
+### Key Learnings
+
+- NC has 4 counties with transit tax (0.5%)
+- Most counties are either 6.75% or 7.00%
+- Mecklenburg passed additional 1% transit tax (effective July 2026)
+- State always takes exactly 4.75%, counties get the rest
+- Tax filing requires state vs county breakdown for reporting
+---
+
+## Session 7 - Batch Statement Generation (2026-01-20)
+
+### What We Built
+
+1. **Batch Statement Generation System**
+   - Checkboxes next to each customer (QuickBooks-style interface)
+   - "Select All" checkbox (positioned left of search bar)
+   - Batch generate button appears when customers selected
+   - Shows count: "5 customers selected"
+   - Downloads all selected statements as single ZIP file
+   - ZIP filename format: `Statements_CompanyName_2026-01-20.zip`
+
+2. **Clean PDF Filenames**
+   - Format: "Statement - Customer Name.pdf"
+   - Proper Title Case capitalization
+   - Spaces instead of underscores
+   - Professional appearance for email/sharing
+
+3. **Multi-Company Support**
+   - Works for all 4 companies
+   - Properly queries customers by company_id
+   - Generates PDFs with correct company branding
+
+### Technical Implementation
+
+**Files Modified:**
+- `index.html` - Added checkbox UI, select all, batch button
+- `app.py` - Added batch endpoint, helper function for name cleaning
+- Added imports: `zipfile`, `from io import BytesIO`
+
+**Key Functions:**
+- `clean_customer_name()` - Converts names to Title Case with spaces
+- `generate_batch_statements()` - Creates ZIP with multiple PDFs
+- `toggleCustomer()` - JavaScript to handle checkbox selection
+- `toggleSelectAll()` - Select/deselect all customers at once
+
+**How It Works:**
+1. User selects customers via checkboxes
+2. JavaScript tracks selected customer IDs in a Set
+3. Batch button sends customer IDs to backend
+4. Backend loops through each customer:
+   - Queries customer name by customer_id and company_id
+   - Calls `generate_pdf_statement()` for each
+   - Adds PDF to ZIP with clean filename
+5. Returns ZIP file for download
+
+### Bug Fixes
+
+1. **Empty ZIP Files**
+   - Problem: `temp_pdf` variable not defined before use
+   - Solution: Added `temp_pdf = f"{temp_dir}/statement_{safe_name}.pdf"` line
+
+2. **Wrong Company PDFs**
+   - Problem: Not filtering customers by company_id
+   - Solution: Added `AND company_id = %s` to customer query
+
+3. **Select All Position**
+   - Problem: On right side of search bar
+   - Solution: Moved to left side for consistency with checkboxes
+
+### Testing Results
+
+✅ Batch generation works for all 4 companies
+✅ Select All checkbox works correctly
+✅ Individual checkboxes highlight selected customers
+✅ ZIP contains properly named PDFs: "Statement - Customer Name.pdf"
+✅ Title Case capitalization working
+✅ Single statement generation still works
+✅ Empty ZIP bug fixed
+
+### Time Spent
+~2 hours (batch UI, backend implementation, debugging, testing)
+
+### Next Session Goals
+
+1. **Email Functionality**
+   - Send individual statements via email
+   - Email validation
+   - SMTP configuration
+
+2. **Batch Email**
+   - Email all selected customers at once
+   - Progress indicator
+   - Success/failure reporting
+
+3. **Cleanup & Polish**
+   - Loading spinners during generation
+   - Better progress feedback
+   - Error handling improvements
+   - Mobile responsiveness
+
+### Decisions Made
+
+- ZIP file format for batch downloads (simpler than multiple downloads)
+- Title Case for all PDF filenames (professional appearance)
+- Select All on left side (consistency with checkboxes)
+- Kept individual "Generate PDF" buttons (flexibility)
+- Temporary files cleaned up after ZIP creation
+
+### Key Learnings
+
+- Python's `str.title()` handles Title Case conversion
+- ZIP files can be created in-memory with BytesIO
+- Set data structure perfect for tracking selections
+- Nano's Ctrl+R can insert entire files at cursor position
+- Empty ZIP files happen when temp file path undefined
+- Multi-company requires filtering at every query level

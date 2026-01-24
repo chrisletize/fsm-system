@@ -761,3 +761,60 @@ let companyData = {};  // { companyId: processedReport }
 - Help systems should use real data as examples, not placeholders
 - Clearing uploads when switching companies prevents costly mistakes
 
+
+## Session: 2026-01-24 - Tax Report PDF Generation & Bug Fix
+
+### Implemented Features
+1. **PDF Tax Report Generation**
+   - Created `scripts/generate_pdf_tax_report.py` - professional PDF generator
+   - Added API endpoint `/api/generate-tax-report-pdf` in `app.py`
+   - Added "Download PDF Report" button to tax-report.html
+   - PDF features:
+     - Company branding (logos, colors)
+     - Executive summary with state/county tax breakdown
+     - County-by-county detail with customer transactions
+     - Customer tax totals summary
+     - Black & white printing optimized (strong borders, alternating rows)
+
+2. **Critical Tax Calculation Bug Fix**
+   - **Problem**: County tax showing negative values for Kleanit Charlotte
+   - **Root Cause**: State tax calculated as flat 4.75% of sales instead of proportion of collected tax
+   - **Fix**: Changed calculation to use proportions based on tax rate
+     - Example: Mecklenburg 7.25% → State gets 65.52% of tax, County gets 34.48%
+   - **Impact**: All tax calculations now mathematically correct
+   
+3. **FL Customer Filtering**
+   - Added automatic filtering of `*FL*` customers for Kleanit Charlotte (company_id = 1)
+   - Prevents data contamination between Charlotte and South Florida operations
+
+### Files Modified
+- `backend/api/app.py` - Added PDF generation endpoint
+- `backend/api/templates/tax-report.html` - Added PDF download button and JavaScript
+- `backend/api/tax_processor.py` - Fixed state/county tax calculation formula
+- `scripts/generate_pdf_tax_report.py` - New file
+
+### Testing Results
+- Kleanit Charlotte December 2025 report:
+  - 71 invoices with tax collected
+  - Total Tax: $329.23
+  - State Tax: $216.61 (correct, positive)
+  - County Tax: $112.62 (correct, positive - was negative before fix)
+
+### Technical Details
+**Old (Wrong) Calculation:**
+```python
+state_tax = taxable_amount * 0.0475  # Flat percentage
+county_tax = total_tax - state_tax   # Could go negative
+```
+
+**New (Correct) Calculation:**
+```python
+state_proportion = 4.75 / tax_rate     # e.g., 4.75 / 7.25 = 65.52%
+state_tax = total_tax * state_proportion
+county_tax = total_tax - state_tax     # Always positive
+```
+
+### Service Restart Command
+```bash
+sudo systemctl restart fsm-statements.service
+```

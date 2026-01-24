@@ -90,3 +90,14 @@ None - system stable
 - **Get a Grip Charlotte** (ID 2): Data ready for import
 - **CTS of Raleigh** (ID 3): Data ready for import  
 - **Kleanit South Florida** (ID 4): 202 customers, $35,059.00 outstanding
+
+## Tax Report PDF Generation - COMPLETE ✅
+
+Tax reports can now be downloaded as professional PDFs:
+- Executive summary with tax breakdown
+- County-by-county details
+- Customer tax totals
+- Company branding
+- B&W print-optimized
+
+**Critical Bug Fixed**: State vs county tax calculation now uses proportions instead of flat percentages, eliminating negative county tax values.
