@@ -13,8 +13,6 @@ import openpyxl
 from werkzeug.utils import secure_filename
 import os
 import sys
-import uuid
-import shutil
 from datetime import datetime, date
 from nc_tax_rates import get_tax_breakdown, get_county_rate_display
 from branding import get_branding
@@ -808,7 +806,7 @@ def generate_batch_statements():
         from generate_pdf_statement import generate_pdf_statement
         
         # Create temp directory for PDFs
-        temp_dir = f'/tmp/batch_statements_{uuid.uuid4().hex[:8]}'
+        temp_dir = '/tmp/batch_statements'
         os.makedirs(temp_dir, exist_ok=True)
         
         # Create ZIP file in memory
@@ -869,9 +867,10 @@ def generate_batch_statements():
                     continue
         
         # Clean up temp directory
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        # Prepare ZIP for download
-        zip_buffer.seek(0)
+        try:
+            os.rmdir(temp_dir)
+        except:
+            pass
         
         # Prepare ZIP for download
         zip_buffer.seek(0)
@@ -979,7 +978,7 @@ def prepare_outlook_email(customer_id):
         total_due = float(customer['total_due']) if customer['total_due'] else 0.0
 
         # Generate PDF statement
-        temp_dir = f'/tmp/outlook_email_{uuid.uuid4().hex[:8]}'
+        temp_dir = '/tmp/outlook_email'
         os.makedirs(temp_dir, exist_ok=True)
 
         safe_name = customer_name.replace(' ', '_').replace('/', '_')
@@ -1034,7 +1033,11 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         # Clean up
         os.remove(script_path)
         os.remove(result_pdf)
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        try:
+            os.rmdir(temp_dir)
+        except:
+            pass
+
         zip_buffer.seek(0)
 
         return send_file(
@@ -1082,7 +1085,7 @@ def prepare_outlook_batch():
         conn.close()
 
         # Create temp directory
-        temp_dir = f'/tmp/outlook_batch_{uuid.uuid4().hex[:8]}'
+        temp_dir = '/tmp/outlook_batch'
         os.makedirs(temp_dir, exist_ok=True)
 
         customers_data = []
@@ -1114,7 +1117,7 @@ def prepare_outlook_batch():
                 customer_name = customer['customer_name']
                 total_due = float(customer['total_due']) if customer['total_due'] else 0.0
 
-                clean_name = clean_customer_name(customer_name).replace('*', '').replace('  ', ' ').strip()
+                clean_name = clean_customer_name(customer_name)
                 pdf_filename = f"Statement - {clean_name}.pdf"
                 pdf_path = os.path.join(temp_dir, pdf_filename)
 
@@ -1185,7 +1188,11 @@ Customers:
                 os.remove(pdf_path)
             except:
                 pass
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        try:
+            os.rmdir(temp_dir)
+        except:
+            pass
+
         zip_buffer.seek(0)
 
         today = datetime.now().strftime('%Y-%m-%d')

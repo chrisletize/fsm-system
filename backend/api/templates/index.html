@@ -1060,6 +1060,8 @@ async function prepareBatchOutlookEmails() {
     const originalText = btn.textContent;
     btn.textContent = `⏳ Preparing ${customersWithEmail.length} emails...`;
     btn.disabled = true;
+    const companySelectDropdown = document.getElementById('company-select');
+    companySelectDropdown.disabled = true;
 
     try {
         const response = await fetch('/api/prepare-outlook-batch', {
@@ -1100,6 +1102,7 @@ async function prepareBatchOutlookEmails() {
         setTimeout(() => {
             btn.textContent = originalText;
             btn.disabled = false;
+            companySelectDropdown.disabled = false;
         }, 3000);
 
     } catch (error) {
@@ -1107,6 +1110,7 @@ async function prepareBatchOutlookEmails() {
         alert('Error preparing batch emails: ' + error.message);
         btn.textContent = originalText;
         btn.disabled = false;
+        companySelectDropdown.disabled = false;
     }
 }
     </script>

@@ -100,7 +100,12 @@ def generate_pdf_statement(customer_name_search=None, output_file=None, company_
     # Set colors and logo from branding
     PRIMARY_COLOR = colors.HexColor(branding['primary_color'])
     ACCENT_COLOR = colors.HexColor(branding['accent_color'])
-    SECONDARY_COLOR = colors.HexColor(branding['secondary_color'])
+    # Use cream color for Kleanit invoice backgrounds (better readability)
+    if company_id in [1, 4]:  # Kleanit Charlotte and Kleanit South Florida
+        SECONDARY_COLOR = colors.HexColor('#F5F5DC')  # Cream
+    else:
+        SECONDARY_COLOR = colors.HexColor(branding['secondary_color'])
+    HEADER_TEXT_COLOR = colors.whitesmoke  # White text works on all primary colors
     HEADER_TEXT_COLOR = colors.whitesmoke  # White text works on all primary colors
     LOGO_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'assets', branding['logo'])
     
