@@ -134,3 +134,87 @@ psql -h localhost -U fsm_user -d fsm_system -c "SELECT id, name FROM companies;"
 - System more robust against race conditions and file conflicts
 - PDF generation now professional and consistent across all companies
 - Ready for Michele to use once dropdown disable is debugged
+---
+
+## Session 6 - Batch Email Bug Fixes & Dropdown Fix (2026-01-27 to 2026-01-28)
+
+### What We Fixed
+
+1. **Temp Directory Collisions (CRITICAL)**
+   - All batch operations shared `/tmp/outlook_batch` causing file contamination
+   - Implemented UUID-based unique temp directories for each request
+   - Added to three locations: batch statements, individual email, batch email
+   - Result: No more cross-contamination between sequential batches
+
+2. **Windows Filename Incompatibility**
+   - Kleanit Florida customer names with `*` characters failed to extract on Windows
+   - Windows treats `*` as wildcard, causing empty folders
+   - Solution: Strip `*` characters from filenames before zip creation
+   - Michele confirmed Windows extraction now works
+
+3. **Inadequate Cleanup**
+   - `os.rmdir()` only works on empty directories, leaving stale files
+   - Replaced with `shutil.rmtree(temp_dir, ignore_errors=True)`
+   - Applied to all three batch operation locations
+   - Forces removal even if files are locked
+
+4. **PDF Readability**
+   - Kleanit statements had colored backgrounds (green/blue) harder to read
+   - Overrode secondary color to cream (#F5F5DC) for Kleanit companies
+   - All companies now have uniform cream backgrounds
+   - Optimized for black-and-white printing
+
+5. **Company Dropdown Disable (COMPLETED)**
+   - Added code to disable dropdown during batch operations
+   - Added console logging for debugging
+   - Added null checks before manipulating dropdown
+   - Tested successfully - dropdown now locks during batch operations
+
+### Files Modified
+
+**Backend:**
+- `backend/api/app.py`
+  - Added: `import uuid`, `import shutil`
+  - Lines 811, 982, 1085: Unique temp directories
+  - Lines ~871, ~1037, ~1188: Robust cleanup
+  - Line 1117: Strip asterisks from filenames
+
+**PDF Generator:**
+- `scripts/generate_pdf_statement.py`
+  - Lines 102-106: Cream backgrounds for Kleanit
+
+**Frontend:**
+- `backend/api/templates/index.html`
+  - Lines 1063-1071: Dropdown disable with debugging
+  - Lines 1112-1115: Re-enable on success
+  - Lines 1123-1126: Re-enable on error
+
+### Testing Results
+
+**✅ All Tests Passing:**
+- Batch email generation for all companies with correct data
+- No file contamination between batches
+- Windows extraction of Kleanit Florida files
+- PDF backgrounds uniform across companies
+- Temp directory cleanup reliable
+- Dropdown disable/enable working correctly
+- Console shows proper DEBUG messages
+
+### Time Spent
+~4 hours (investigation, fixes, testing, documentation)
+
+### System Status
+**100% Production-Ready** - All bugs resolved, system stable for daily use ✅
+
+### Next Steps
+- Plan next sprint: Tax enhancements OR Mobile app foundation
+- Continue daily monitoring for any issues
+- Gather Michele's feedback on additional features
+
+### Key Learnings
+- UUID isolation prevents concurrent operation conflicts
+- Cross-platform testing essential (Linux dev vs Windows prod)
+- Robust cleanup with shutil.rmtree > os.rmdir
+- DOM manipulation needs defensive null checks
+- Console logging invaluable for frontend debugging
+- Real user testing finds issues synthetic tests miss

@@ -1061,7 +1061,14 @@ async function prepareBatchOutlookEmails() {
     btn.textContent = `⏳ Preparing ${customersWithEmail.length} emails...`;
     btn.disabled = true;
     const companySelectDropdown = document.getElementById('company-select');
-    companySelectDropdown.disabled = true;
+    console.log('DEBUG: Dropdown element:', companySelectDropdown);
+    console.log('DEBUG: Current company ID:', currentCompanyId);
+    if (companySelectDropdown) {
+        companySelectDropdown.disabled = true;
+        console.log('DEBUG: Dropdown disabled successfully');
+    } else {
+        console.error('ERROR: company-select element not found!');
+    }
 
     try {
         const response = await fetch('/api/prepare-outlook-batch', {
@@ -1102,7 +1109,10 @@ async function prepareBatchOutlookEmails() {
         setTimeout(() => {
             btn.textContent = originalText;
             btn.disabled = false;
-            companySelectDropdown.disabled = false;
+            if (companySelectDropdown) {
+                companySelectDropdown.disabled = false;
+                console.log('DEBUG: Dropdown re-enabled (success)');
+            }
         }, 3000);
 
     } catch (error) {
@@ -1110,7 +1120,10 @@ async function prepareBatchOutlookEmails() {
         alert('Error preparing batch emails: ' + error.message);
         btn.textContent = originalText;
         btn.disabled = false;
-        companySelectDropdown.disabled = false;
+        if (companySelectDropdown) {
+            companySelectDropdown.disabled = false;
+            console.log('DEBUG: Dropdown re-enabled (error)');
+        }
     }
 }
     </script>
