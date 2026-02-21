@@ -1101,30 +1101,60 @@
         async function downloadPDF(index) {
             const { jsPDF } = window.jspdf;
             const reportElement = document.getElementById(`report-${index}`);
-            
             if (!reportElement) {
                 alert('Report not found');
                 return;
             }
-
             try {
+                // Temporarily expand all bucket-content boxes (max-height is CSS class-based)
+                const scrollBoxes = reportElement.querySelectorAll('.bucket-content');
+                const origStyles = [];
+                scrollBoxes.forEach(el => {
+                    origStyles.push({el, maxHeight: el.style.maxHeight, overflow: el.style.overflow});
+                    el.style.maxHeight = 'none';
+                    el.style.overflow = 'visible';
+                });
+
                 const canvas = await html2canvas(reportElement, {
                     scale: 2,
                     useCORS: true,
                     logging: false,
-                    backgroundColor: '#ffffff'
+                    backgroundColor: '#ffffff',
+                    windowHeight: reportElement.scrollHeight,
+                    height: reportElement.scrollHeight
                 });
 
+                // Restore original styles
+                origStyles.forEach(({el, maxHeight, overflow}) => {
+                    el.style.maxHeight = maxHeight;
+                    el.style.overflow = overflow;
+                });
+
+                const imgData = canvas.toDataURL('image/png');
                 const imgWidth = 210;
                 const imgHeight = (canvas.height * imgWidth) / canvas.width;
+                const pageHeight = 297;
                 const pdf = new jsPDF('p', 'mm', 'a4');
-                const imgData = canvas.toDataURL('image/png');
-                
-                pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, imgHeight);
-                
+
+                if (imgHeight <= pageHeight) {
+                    // Single page
+                    pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, imgHeight);
+                } else {
+                    // Multi-page
+                    let position = 0;
+                    let remainingHeight = imgHeight;
+                    let firstPage = true;
+                    while (remainingHeight > 0) {
+                        if (!firstPage) pdf.addPage();
+                        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+                        position -= pageHeight;
+                        remainingHeight -= pageHeight;
+                        firstPage = false;
+                    }
+                }
+
                 const filename = `${currentCompany.name}_Recency_Report_${new Date().toISOString().split('T')[0]}.pdf`;
                 pdf.save(filename);
-                
                 alert('PDF downloaded successfully!');
             } catch (error) {
                 console.error('Error generating PDF:', error);
