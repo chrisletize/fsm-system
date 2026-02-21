@@ -316,7 +316,8 @@
         async function loadCompanies() {
             try {
                 const response = await fetch('/api/companies');
-                const companies = await response.json();
+                const data = await response.json();
+                const companies = data.companies;
                 
                 companies.forEach(company => {
                     const option = document.createElement('option');

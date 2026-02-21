@@ -7,6 +7,7 @@ Simple Flask app for Michele to generate statements
 from flask import Flask, render_template, send_file, jsonify, request
 from flask_cors import CORS
 import psycopg2
+import pandas as pd
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 import openpyxl
@@ -20,6 +21,7 @@ from nc_tax_rates import get_tax_breakdown, get_county_rate_display
 from branding import get_branding
 from io import BytesIO
 import zipfile
+import re
 from tax_processor import process_tax_report
 import tempfile
 
@@ -40,6 +42,33 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+def strip_excel_comments(input_path):
+    """Remove corrupt comment XML from .xlsx files before openpyxl loads them."""
+    temp_fd, temp_path = tempfile.mkstemp(suffix='.xlsx')
+    os.close(temp_fd)
+    with zipfile.ZipFile(input_path, 'r') as zin:
+        with zipfile.ZipFile(temp_path, 'w') as zout:
+            for item in zin.infolist():
+                data = zin.read(item.filename)
+                if 'comments' in item.filename.lower() and item.filename.endswith('.xml'):
+                    continue
+                if item.filename.endswith('.rels') and 'worksheets' in item.filename:
+                    text = data.decode('utf-8')
+                    text = re.sub(
+                        r'<Relationship[^>]*Target="[^"]*comments[^"]*"[^>]*/?>',
+                        '', text, flags=re.IGNORECASE
+                    )
+                    data = text.encode('utf-8')
+                if item.filename == '[Content_Types].xml':
+                    text = data.decode('utf-8')
+                    text = re.sub(
+                        r'<Override[^>]*PartName="[^"]*comments[^"]*"[^>]*/?>',
+                        '', text, flags=re.IGNORECASE
+                    )
+                    data = text.encode('utf-8')
+                zout.writestr(item, data)
+    return temp_path
+
 def get_db_connection():
     return psycopg2.connect(
         host=os.getenv('DB_HOST'),
@@ -103,17 +132,27 @@ def get_customers():
 
 @app.route('/api/companies')
 def get_companies():
-    """Get list of companies"""
+    """Get list of companies with branding"""
     conn = get_db_connection()
     cur = conn.cursor()
-    
     cur.execute("SELECT id, name FROM companies ORDER BY name")
-    companies = cur.fetchall()
-    
+    companies_data = cur.fetchall()
     cur.close()
     conn.close()
     
-    return jsonify(companies)
+    # Add branding info to each company
+    companies = []
+    for company in companies_data:
+        branding = get_branding(company['id'])
+        companies.append({
+            'id': company['id'],
+            'name': company['name'],
+            'logo_path': branding['logo'],
+            'primary_color': branding['primary_color'],
+            'secondary_color': branding['secondary_color']
+        })
+    
+    return jsonify({'companies': companies})
 
 @app.route('/api/branding/<int:company_id>')
 def get_company_branding(company_id):
@@ -158,8 +197,13 @@ def generate_statement(customer_id):
                            download_name=f"statement_{safe_name}.pdf")
         else:
             return jsonify({'error': 'Failed to generate statement'}), 500
+
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        import traceback
+        return jsonify({
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
 
 @app.route('/api/summary')
 def get_summary():
@@ -1242,6 +1286,406 @@ def generate_tax_report_pdf():
     except Exception as e:
         import traceback
         traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/recency-report')
+def recency_report():
+    """Customer Recency Report Generator page"""
+    return render_template('recency_report.html')
+
+@app.route('/api/recency/upload', methods=['POST'])
+def upload_recency_data():
+    """Upload and process ServiceFusion Customer Revenue Report"""
+    try:
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file uploaded'}), 400
+
+        file = request.files['file']
+        company_id = request.form.get('company_id')
+
+        if not company_id:
+            return jsonify({'error': 'No company selected'}), 400
+
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+
+        # Save uploaded file to temp location
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx')
+        file.save(temp_file.name)
+        temp_file.close()
+        # Strip corrupt comments from ServiceFusion Excel files
+        cleaned_path = strip_excel_comments(temp_file.name)
+        os.unlink(temp_file.name)  # Done with original
+
+        # Read cleaned file with pandas (header is auto-detected as row 0)
+        df = pd.read_excel(cleaned_path, engine='openpyxl')
+        os.unlink(cleaned_path)
+        
+        # Verify required columns
+        if 'Customer' not in df.columns or 'Date' not in df.columns:
+            return jsonify({'error': 'Excel file missing required columns (Customer, Date)'}), 400
+
+        # Process rows
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        processed = 0
+        inserted = 0
+        updated = 0
+        errors = []
+
+        for idx, row in df.iterrows():
+            try:
+                customer_name = row.get('Customer')
+                date_value = row.get('Date')
+
+                if pd.isna(customer_name) or pd.isna(date_value):
+                    continue
+
+                customer_name = str(customer_name).strip()
+
+                # Parse date
+                if isinstance(date_value, pd.Timestamp):
+                    job_date = date_value.date()
+                elif isinstance(date_value, datetime):
+                    job_date = date_value.date()
+                elif isinstance(date_value, str):
+                    try:
+                        job_date = datetime.strptime(date_value, '%m/%d/%Y').date()
+                    except:
+                        continue
+                else:
+                    continue
+
+                # Find or create customer
+                cur.execute("""
+                    SELECT id FROM customers
+                    WHERE customer_name = %s AND company_id = %s
+                    LIMIT 1
+                """, (customer_name, company_id))
+
+                customer = cur.fetchone()
+
+                if not customer:
+                    # Create new customer
+                    cur.execute("""
+                        INSERT INTO customers (customer_name, company_id, created_at)
+                        VALUES (%s, %s, NOW())
+                        RETURNING id
+                    """, (customer_name, company_id))
+                    result = cur.fetchone()
+                    customer_id_val = result['id'] if result else None
+                    conn.commit()
+                else:
+                    customer_id_val = customer['id']
+
+                # Insert or ignore job date (UPSERT)
+                cur.execute("""
+                    INSERT INTO customer_job_dates (customer_id, job_date, source, created_at, created_by)
+                    VALUES (%s, %s, 'servicefusion_import', NOW(), 'recency_upload')
+                    ON CONFLICT (customer_id, job_date) DO NOTHING
+                    RETURNING id
+                """, (customer_id_val, job_date))
+
+                result = cur.fetchone()
+                if result and result.get('id'):
+                    inserted += 1
+                else:
+                    updated += 1
+
+                processed += 1
+
+                # Commit every 100 rows
+                if processed % 100 == 0:
+                    conn.commit()
+
+            except Exception as e:
+                import traceback
+                error_detail = f"Row {idx}: {str(e)}\n{traceback.format_exc()}"
+                errors.append(error_detail)
+                print(f"ERROR: {error_detail}")
+                continue
+
+        # Final commit
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return jsonify({
+            'success': True,
+            'processed': processed,
+            'inserted': inserted,
+            'updated': updated,
+            'errors': errors[:10]
+        })
+
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
+
+@app.route('/api/recency/report', methods=['POST'])
+def generate_recency_report():
+    """Generate recency report for selected company"""
+    try:
+        data = request.get_json()
+        company_id = data.get('company_id')
+        
+        if not company_id:
+            return jsonify({'error': 'No company selected'}), 400
+        
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Get most recent job date for each customer
+        query = """
+            SELECT 
+                c.id,
+                c.customer_name,
+                MAX(jd.job_date) as last_job_date,
+                CURRENT_DATE - MAX(jd.job_date) as days_since
+            FROM customers c
+            INNER JOIN customer_job_dates jd ON c.id = jd.customer_id
+            WHERE c.company_id = %s
+            GROUP BY c.id, c.customer_name
+            ORDER BY days_since DESC
+        """
+        
+        cur.execute(query, (company_id,))
+        customers = cur.fetchall()
+        
+        cur.close()
+        conn.close()
+        
+        # Convert to JSON-serializable format
+        result = []
+        for customer in customers:
+            result.append({
+                'id': customer['id'],
+                'name': customer['customer_name'],
+                'lastJobDate': customer['last_job_date'].isoformat() if customer['last_job_date'] else None,
+                'daysSince': customer['days_since']
+            })
+        
+        return jsonify({
+            'success': True,
+            'customers': result
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/recency/validate', methods=['POST'])
+def validate_recency_upload():
+    """Pre-validate a recency upload file before committing data"""
+    try:
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file uploaded'}), 400
+
+        file = request.files['file']
+        company_id = int(request.form.get('company_id'))
+
+        # Save and clean file
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx')
+        file.save(temp_file.name)
+        temp_file.close()
+        cleaned_path = strip_excel_comments(temp_file.name)
+        os.unlink(temp_file.name)
+
+        df = pd.read_excel(cleaned_path, engine='openpyxl')
+        os.unlink(cleaned_path)
+
+        if 'Customer' not in df.columns:
+            return jsonify({'error': 'Missing Customer column'}), 400
+
+        # Define allowed states per company
+        allowed_states = {
+            1: ['nc', 'north carolina', 'sc', 'south carolina', 'fl', 'florida'],  # Kleanit Charlotte
+            2: ['nc', 'north carolina', 'sc', 'south carolina'],                   # Get a Grip
+            3: ['nc', 'north carolina'],                                            # CTS - strict NC only
+            4: ['fl', 'florida'],                                                   # Kleanit South Florida
+        }
+
+        company_allowed = allowed_states.get(company_id, [])
+
+        # Scan state column
+        state_warnings = []
+        state_counts = {}
+        total_rows = 0
+
+        if 'Service Location State' in df.columns:
+            for _, row in df.iterrows():
+                customer = row.get('Customer')
+                state = row.get('Service Location State')
+                if pd.isna(customer) or pd.isna(state):
+                    continue
+                total_rows += 1
+                state_str = str(state).strip().lower()
+                state_counts[state_str] = state_counts.get(state_str, 0) + 1
+                if state_str not in company_allowed:
+                    state_warnings.append(str(state).strip())
+
+        # Check customer name match rate against existing customers
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT customer_name FROM customers WHERE company_id = %s", (company_id,))
+        existing = set(r['customer_name'].strip().lower() for r in cur.fetchall())
+        cur.close()
+        conn.close()
+
+        file_customers = set()
+        for _, row in df.iterrows():
+            customer = row.get('Customer')
+            if not pd.isna(customer):
+                file_customers.add(str(customer).strip().lower())
+
+        match_count = sum(1 for c in file_customers if c in existing)
+        match_rate = round((match_count / len(file_customers) * 100), 1) if file_customers else 0
+
+        # Build warnings
+        warnings = []
+
+        if state_warnings:
+            bad_states = list(set(state_warnings))
+            warnings.append({
+                'type': 'state',
+                'message': f"{len(state_warnings)} rows have unexpected states: {', '.join(bad_states)}"
+            })
+
+        if len(existing) > 0 and match_rate < 20:
+            warnings.append({
+                'type': 'customer_match',
+                'message': f"Only {match_rate}% of customers in this file match existing {company_id and 'this company'}'s customers ({match_count} of {len(file_customers)}). This may be the wrong company's report."
+            })
+
+        return jsonify({
+            'valid': len(warnings) == 0,
+            'warnings': warnings,
+            'summary': {
+                'total_rows': total_rows,
+                'unique_customers': len(file_customers),
+                'match_rate': match_rate,
+                'state_counts': state_counts
+            }
+        })
+
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+@app.route('/api/recency/batches/<int:company_id>', methods=['GET'])
+def get_recency_batches(company_id):
+    """Get upload batches grouped by timestamp for a company"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT
+                DATE_TRUNC('minute', jd.created_at) as batch_time,
+                COUNT(*) as record_count,
+                MIN(jd.job_date) as earliest_job,
+                MAX(jd.job_date) as latest_job
+            FROM customer_job_dates jd
+            JOIN customers c ON jd.customer_id = c.id
+            WHERE c.company_id = %s
+            GROUP BY DATE_TRUNC('minute', jd.created_at)
+            ORDER BY batch_time DESC
+        """, (company_id,))
+
+        batches = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        return jsonify({
+            'success': True,
+            'batches': [{
+                'batch_time': b['batch_time'].isoformat(),
+                'record_count': b['record_count'],
+                'earliest_job': b['earliest_job'].isoformat() if b['earliest_job'] else None,
+                'latest_job': b['latest_job'].isoformat() if b['latest_job'] else None
+            } for b in batches]
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/recency/clear-batch', methods=['POST'])
+def clear_recency_batch():
+    """Delete all job dates from a specific upload batch"""
+    try:
+        data = request.get_json()
+        company_id = int(data.get('company_id'))
+        batch_time = data.get('batch_time')
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+            DELETE FROM customer_job_dates
+            WHERE id IN (
+                SELECT jd.id
+                FROM customer_job_dates jd
+                JOIN customers c ON jd.customer_id = c.id
+                WHERE c.company_id = %s
+                AND DATE_TRUNC('minute', jd.created_at) = DATE_TRUNC('minute', %s::timestamptz)
+            )
+        """, (company_id, batch_time))
+
+        deleted = cur.rowcount
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return jsonify({'success': True, 'deleted': deleted})
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/recency/stats', methods=['GET'])
+def recency_stats():
+    """Get statistics about stored job dates by company"""
+    try:
+        company_id = request.args.get('company_id')
+        
+        if not company_id:
+            return jsonify({'error': 'No company selected'}), 400
+        
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Get stats
+        cur.execute("""
+            SELECT 
+                COUNT(DISTINCT c.id) as total_customers,
+                COUNT(jd.id) as total_job_dates,
+                MIN(jd.job_date) as earliest_date,
+                MAX(jd.job_date) as latest_date
+            FROM customers c
+            LEFT JOIN customer_job_dates jd ON c.id = jd.customer_id
+            WHERE c.company_id = %s
+        """, (company_id,))
+        
+        stats = cur.fetchone()
+        
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'stats': {
+                'totalCustomers': stats['total_customers'],
+                'totalJobDates': stats['total_job_dates'],
+                'earliestDate': stats['earliest_date'].isoformat() if stats['earliest_date'] else None,
+                'latestDate': stats['latest_date'].isoformat() if stats['latest_date'] else None
+            }
+        })
+        
+    except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':

@@ -10,6 +10,7 @@ import openpyxl
 from datetime import datetime
 from collections import defaultdict
 import re
+from nc_tax_rates import get_tax_breakdown
 
 def parse_date(date_value):
     """Parse various date formats from ServiceFusion exports"""
@@ -161,8 +162,6 @@ def process_tax_report(tax_file_path, transaction_file_path, company_id):
             'customers': []
         })
         
-        NC_STATE_RATE = 4.75  # North Carolina state sales tax rate
-        
         for record in matched_records:
             county = record['county']
             
@@ -187,37 +186,28 @@ def process_tax_report(tax_file_path, transaction_file_path, company_id):
         counties_list = []
         total_state_tax = 0
         total_county_tax = 0
+        total_transit_tax = 0
         total_tax = 0
         total_invoices = len(matched_records)
         
         for county_name, county_data in sorted(counties_data.items()):
-            # FIXED CALCULATION: Use proportion of tax rate, not flat percentage
-            # Example: Mecklenburg 7.25% = 4.75% state + 2.50% county
-            # State gets: 4.75 / 7.25 = 65.5% of collected tax
-            # County gets: 2.50 / 7.25 = 34.5% of collected tax
-            
-            tax_rate = county_data['tax_rate']
             total_tax_collected = county_data['total_tax']
-            
-            # Calculate state portion as proportion of total tax collected
-            state_proportion = NC_STATE_RATE / tax_rate
-            state_tax = total_tax_collected * state_proportion
-            
-            # Calculate county portion (remaining tax)
-            county_tax = total_tax_collected - state_tax
-            
+            breakdown = get_tax_breakdown(county_name, total_tax_collected)
+
             counties_list.append({
                 'name': county_data['name'],
                 'tax_rate': county_data['tax_rate'],
                 'taxable_amount': county_data['taxable_amount'],
                 'total_tax': county_data['total_tax'],
-                'state_tax': state_tax,
-                'county_tax': county_tax,
+                'state_tax': breakdown['state'],
+                'county_tax': breakdown['county'],
+                'transit_tax': breakdown['transit'],
                 'customers': sorted(county_data['customers'], key=lambda x: x['customer_name'])
             })
-            
-            total_state_tax += state_tax
-            total_county_tax += county_tax
+
+            total_state_tax += breakdown['state']
+            total_county_tax += breakdown['county']
+            total_transit_tax += breakdown['transit']
             total_tax += county_data['total_tax']
         
         return {
@@ -227,6 +217,7 @@ def process_tax_report(tax_file_path, transaction_file_path, company_id):
                     'total_tax': round(total_tax, 2),
                     'state_tax': round(total_state_tax, 2),
                     'county_tax': round(total_county_tax, 2),
+                    'transit_tax': round(total_transit_tax, 2),
                     'invoice_count': total_invoices
                 },
                 'counties': counties_list

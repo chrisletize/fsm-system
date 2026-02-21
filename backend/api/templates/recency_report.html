@@ -1,0 +1,1136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Customer Recency Report - FieldKit</title>
+    <style>
+        :root {
+            --primary-color: #8B1538;
+            --secondary-color: #2C2C2C;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 30px;
+        }
+
+        .logo-header {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .logo-header img {
+            height: 60px;
+            width: auto;
+            object-fit: contain;
+        }
+
+        .title-group h1 {
+            font-size: 28px;
+            color: #333;
+            margin-bottom: 5px;
+        }
+
+        .title-group p {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .back-link {
+            display: inline-block;
+            color: var(--primary-color);
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 14px;
+            margin-bottom: 15px;
+            transition: color 0.3s ease;
+        }
+
+        .back-link:hover {
+            color: var(--secondary-color);
+        }
+
+        .company-selector {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #e2e8f0;
+        }
+
+        .company-selector label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #333;
+        }
+
+        .company-selector select {
+            width: 100%;
+            max-width: 400px;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 16px;
+            background: white;
+            cursor: pointer;
+            transition: border-color 0.3s ease;
+        }
+
+        .company-selector select:focus {
+            outline: none;
+            border-color: var(--primary-color);
+        }
+
+        .upload-section {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 30px;
+            display: none;
+        }
+
+        .upload-section.active {
+            display: block;
+        }
+
+        .stats-banner {
+            background: #e8f5e9;
+            border: 2px solid #4caf50;
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .stats-banner.active {
+            display: block;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 10px;
+        }
+
+        .stat-item {
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #2e7d32;
+        }
+
+        .stat-label {
+            font-size: 13px;
+            color: #558b2f;
+            margin-top: 4px;
+        }
+
+        .file-input-wrapper {
+            position: relative;
+            width: 100%;
+            margin-bottom: 20px;
+        }
+
+        .file-input-wrapper input[type="file"] {
+            position: absolute;
+            opacity: 0;
+            width: 100%;
+            height: 100%;
+            cursor: pointer;
+        }
+
+        .file-input-label {
+            display: block;
+            padding: 40px;
+            border: 3px dashed #ddd;
+            border-radius: 8px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: #fafafa;
+        }
+
+        .file-input-label:hover {
+            border-color: var(--primary-color);
+            background: #f5f5f5;
+        }
+
+        .file-list {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #f9f9f9;
+            border-radius: 8px;
+            display: none;
+        }
+
+        .file-list.active {
+            display: block;
+        }
+
+        .file-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 15px;
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            margin-bottom: 10px;
+        }
+
+        .file-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .file-item-name {
+            font-size: 14px;
+            font-weight: 500;
+            flex: 1;
+        }
+
+        .file-item-size {
+            font-size: 12px;
+            color: #999;
+            margin: 0 15px;
+        }
+
+        .remove-file-btn {
+            background: #e74c3c;
+            color: white;
+            border: none;
+            padding: 6px 14px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .remove-file-btn:hover {
+            background: #c0392b;
+        }
+
+        .upload-btn {
+            width: 100%;
+            padding: 15px;
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.3s ease;
+        }
+
+        .upload-btn:hover {
+            background: var(--secondary-color);
+        }
+
+        .upload-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .generate-btn {
+            width: 100%;
+            padding: 15px;
+            background: #4caf50;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 20px;
+            transition: background 0.3s ease;
+        }
+
+        .generate-btn:hover {
+            background: #388e3c;
+        }
+
+        .generate-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 30px;
+            color: #666;
+        }
+
+        .loading.active {
+            display: block;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid var(--primary-color);
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .report-section {
+            background: white;
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 30px;
+            display: none;
+        }
+
+        .report-section.active {
+            display: block;
+        }
+
+        .report-header {
+            border-bottom: 3px solid var(--primary-color);
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+        }
+
+        .report-header h2 {
+            font-size: 24px;
+            color: var(--primary-color);
+            margin-bottom: 5px;
+        }
+
+        .report-meta {
+            font-size: 14px;
+            color: #666;
+        }
+
+        .bucket {
+            margin-bottom: 40px;
+        }
+
+        .bucket-header {
+            background: var(--primary-color);
+            color: white;
+            padding: 12px 20px;
+            border-radius: 8px 8px 0 0;
+            font-size: 18px;
+            font-weight: 600;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .bucket-count {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 14px;
+        }
+
+        .bucket-content {
+            border: 2px solid var(--primary-color);
+            border-top: none;
+            border-radius: 0 0 8px 8px;
+            padding: 20px;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .customer-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 12px 15px;
+            border-bottom: 1px solid #eee;
+            transition: background 0.2s ease;
+        }
+
+        .customer-row:last-child {
+            border-bottom: none;
+        }
+
+        .customer-row:hover {
+            background: #f9f9f9;
+        }
+
+        .customer-name {
+            font-weight: 500;
+            flex: 1;
+        }
+
+        .customer-days {
+            color: #666;
+            font-size: 14px;
+            margin-left: 20px;
+        }
+
+        .empty-bucket {
+            color: #999;
+            font-style: italic;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .action-buttons {
+            text-align: center;
+            margin-top: 30px;
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+        }
+
+        .pdf-btn, .print-btn {
+            padding: 12px 30px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .pdf-btn {
+            background: #2196F3;
+            border: none;
+            color: white;
+        }
+
+        .pdf-btn:hover {
+            background: #1976D2;
+        }
+
+        .print-btn {
+            background: white;
+            border: 2px solid var(--primary-color);
+            color: var(--primary-color);
+        }
+
+        .print-btn:hover {
+            background: var(--primary-color);
+            color: white;
+        }
+
+        @media print {
+            body {
+                background: white;
+                padding: 0;
+            }
+
+            .header, .upload-section, .action-buttons {
+                display: none;
+            }
+
+            .report-section {
+                box-shadow: none;
+                page-break-after: always;
+            }
+
+            .bucket-content {
+                max-height: none;
+                overflow: visible;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <a href="/" class="back-link">← Back to FieldKit Home</a>
+            
+            <div class="logo-header">
+                <img src="/static/get-a-grip-logo.jpg" alt="Company Logo" id="companyLogo">
+                <div class="title-group">
+                    <h1>📊 Customer Recency Report</h1>
+                    <p>Analyze when customers last scheduled work</p>
+                </div>
+            </div>
+
+            <div class="company-selector">
+                <label for="company-select">Select Company:</label>
+                <select id="company-select" onchange="loadCompany()">
+                    <option value="">Loading companies...</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="upload-section" id="uploadSection">
+            <div class="stats-banner" id="statsBanner">
+                <h3 style="margin-bottom: 10px;">📈 Current Data</h3>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-value" id="statCustomers">0</div>
+                        <div class="stat-label">Customers</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="statJobDates">0</div>
+                        <div class="stat-label">Job Dates</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="statEarliest">-</div>
+                        <div class="stat-label">Earliest Date</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="statLatest">-</div>
+                        <div class="stat-label">Latest Date</div>
+                    </div>
+                </div>
+            </div>
+
+            <h3 style="margin-bottom: 15px;">Upload ServiceFusion Reports</h3>
+            <p style="color: #666; margin-bottom: 20px; font-size: 14px;">
+                Upload Customer Revenue Reports from ServiceFusion. Multiple files can be uploaded to combine data from different time periods.
+            </p>
+
+            <div class="file-input-wrapper">
+                <input type="file" id="fileInput" accept=".xlsx,.xls" multiple>
+                <label for="fileInput" class="file-input-label">
+                    <div style="font-size: 48px; margin-bottom: 10px;">📊</div>
+                    <div style="font-size: 16px; font-weight: 600; margin-bottom: 5px;">
+                        Drop Excel files here or click to browse
+                    </div>
+                    <div style="font-size: 13px; color: #999;">
+                        Supports .xlsx files from ServiceFusion
+                    </div>
+                </label>
+            </div>
+
+            <div class="file-list" id="fileList"></div>
+
+            <button class="upload-btn" id="uploadBtn" disabled>Upload & Process Files</button>
+            <button class="generate-btn" id="generateBtn" disabled>Generate Report</button>
+            <button class="btn-manage" id="manageBtn" onclick="openManageModal()" style="display:none;">🗂️ Manage Data</button>
+
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <div id="loadingText">Processing files...</div>
+            </div>
+        </div>
+
+        <div class="report-section" id="reportSection">
+            <!-- Report will be inserted here -->
+        </div>
+        <!-- Validation Warning Modal -->
+        <div id="validationModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:1000; align-items:center; justify-content:center;">
+            <div style="background:white; border-radius:12px; padding:35px; max-width:520px; width:90%; box-shadow:0 10px 40px rgba(0,0,0,0.3);">
+                <h2 style="color:#dc3545; margin-bottom:15px;">⚠️ Upload Warning</h2>
+                <p style="margin-bottom:15px; color:#444;">Potential issues detected with this file:</p>
+                <div id="validationWarningList" style="margin-bottom:20px;"></div>
+                <div id="validationSummary" style="background:#f8f9fa; padding:12px; border-radius:8px; font-size:13px; color:#666; margin-bottom:25px;"></div>
+                <div style="display:flex; gap:12px; justify-content:flex-end;">
+                    <button onclick="closeValidationModal()" style="padding:10px 24px; border:2px solid #dc3545; background:white; color:#dc3545; border-radius:8px; font-weight:600; cursor:pointer;">Cancel Upload</button>
+                    <button onclick="proceedWithUpload()" style="padding:10px 24px; background:#dc3545; color:white; border:none; border-radius:8px; font-weight:600; cursor:pointer;">Upload Anyway</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Manage Data Modal -->
+        <div id="manageModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:1000; align-items:center; justify-content:center;">
+            <div style="background:white; border-radius:12px; padding:35px; max-width:620px; width:90%; box-shadow:0 10px 40px rgba(0,0,0,0.3); max-height:80vh; overflow-y:auto;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+                    <h2 style="color:var(--primary-color);">🗂️ Manage Upload Batches</h2>
+                    <button onclick="closeManageModal()" style="background:#dc3545; color:white; border:none; width:36px; height:36px; border-radius:50%; font-size:20px; cursor:pointer; line-height:1;">×</button>
+                </div>
+                <p style="color:#666; margin-bottom:20px; font-size:14px;">Each row below represents one upload session. You can delete a batch if data was uploaded to the wrong company.</p>
+                <div id="batchList">
+                    <div style="text-align:center; padding:20px; color:#999;">Loading batches...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script>
+        let currentCompany = null;
+        let uploadedFiles = [];
+        let reportData = null;
+        let reportCache = {};
+
+// == VALIDATION & MANAGE DATA FUNCTIONS ==
+
+        let pendingUploadFiles = null;
+
+        async function validateThenUpload(files) {
+            const formData = new FormData();
+            formData.append('file', files[0]);
+            formData.append('company_id', currentCompany.id);
+
+            try {
+                const response = await fetch('/api/recency/validate', {
+                    method: 'POST',
+                    body: formData
+                });
+                const result = await response.json();
+
+                if (result.valid) {
+                    // No warnings, proceed directly
+                    doUpload(files);
+                } else {
+                    // Show warning modal
+                    pendingUploadFiles = files;
+                    const warningList = document.getElementById('validationWarningList');
+                    warningList.innerHTML = result.warnings.map(w =>
+                        `<div style="background:#fff3cd; border-left:4px solid #ffc107; padding:10px 14px; border-radius:6px; margin-bottom:10px; color:#856404;">⚠️ ${w.message}</div>`
+                    ).join('');
+
+                    const s = result.summary;
+                    document.getElementById('validationSummary').innerHTML =
+                        `Total rows: ${s.total_rows} &nbsp;|&nbsp; Unique customers: ${s.unique_customers} &nbsp;|&nbsp; Match rate vs existing: <strong>${s.match_rate}%</strong>`;
+
+                    document.getElementById('validationModal').style.display = 'flex';
+                }
+            } catch (err) {
+                console.error('Validation error:', err);
+                // If validation itself fails, just proceed with upload
+                doUpload(files);
+            }
+        }
+
+        function closeValidationModal() {
+            document.getElementById('validationModal').style.display = 'none';
+            pendingUploadFiles = null;
+        }
+
+        function proceedWithUpload() {
+            document.getElementById('validationModal').style.display = 'none';
+            if (pendingUploadFiles) {
+                doUpload(pendingUploadFiles);
+                pendingUploadFiles = null;
+            }
+        }
+
+        async function openManageModal() {
+            document.getElementById('manageModal').style.display = 'flex';
+            document.getElementById('batchList').innerHTML = '<div style="text-align:center; padding:20px; color:#999;">Loading batches...</div>';
+
+            try {
+                const response = await fetch(`/api/recency/batches/${currentCompany.id}`);
+                const result = await response.json();
+
+                if (!result.batches || result.batches.length === 0) {
+                    document.getElementById('batchList').innerHTML = '<div style="text-align:center; padding:20px; color:#999;">No upload batches found for this company.</div>';
+                    return;
+                }
+
+                document.getElementById('batchList').innerHTML = result.batches.map((b, i) => {
+                    const batchDate = new Date(b.batch_time).toLocaleString('en-US');
+                    const earliest = new Date(b.earliest_job + 'T00:00:00').toLocaleDateString('en-US');
+                    const latest = new Date(b.latest_job + 'T00:00:00').toLocaleDateString('en-US');
+                    return `
+                        <div style="border:1px solid #ddd; border-radius:8px; padding:15px; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center;">
+                            <div>
+                                <div style="font-weight:600; color:#333; margin-bottom:4px;">📅 ${batchDate}</div>
+                                <div style="font-size:13px; color:#666;">${b.record_count} job date records &nbsp;|&nbsp; Jobs from ${earliest} – ${latest}</div>
+                            </div>
+                            <button onclick="deleteBatch('${b.batch_time}')" style="padding:8px 16px; background:#dc3545; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer; white-space:nowrap;">🗑️ Delete</button>
+                        </div>
+                    `;
+                }).join('');
+
+            } catch (err) {
+                document.getElementById('batchList').innerHTML = '<div style="text-align:center; padding:20px; color:#dc3545;">Error loading batches.</div>';
+            }
+        }
+
+        function closeManageModal() {
+            document.getElementById('manageModal').style.display = 'none';
+        }
+
+        async function deleteBatch(batchTime) {
+            if (!confirm(`Delete this upload batch (${new Date(batchTime).toLocaleString('en-US')})? This cannot be undone.`)) return;
+
+            try {
+                const response = await fetch('/api/recency/clear-batch', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({company_id: currentCompany.id, batch_time: batchTime})
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    alert(`Deleted ${result.deleted} records successfully.`);
+                    openManageModal(); // Refresh batch list
+                    loadStats();       // Refresh stats banner
+                } else {
+                    alert('Error deleting batch: ' + result.error);
+                }
+            } catch (err) {
+                alert('Error deleting batch: ' + err.message);
+            }
+        }
+
+        // Load companies on page load
+        loadCompanies();
+
+        // Load LKit branding by default
+        setTimeout(() => loadBranding(0), 100);
+
+        function loadCompanies() {
+            fetch('/api/companies')
+                .then(response => response.json())
+                .then(data => {
+                    const select = document.getElementById('company-select');
+                    select.innerHTML = '<option value="">Select a company to begin</option>';
+                    
+                    data.companies.forEach(company => {
+                        const option = document.createElement('option');
+                        option.value = company.id;
+                        option.textContent = company.name;
+                        option.dataset.logo = company.logo_path;
+                        option.dataset.primaryColor = company.primary_color;
+                        option.dataset.secondaryColor = company.secondary_color;
+                        select.appendChild(option);
+                    });
+                })
+                .catch(error => {
+                    console.error('Error loading companies:', error);
+                    alert('Failed to load companies');
+                });
+        }
+
+        function loadCompany() {
+            const select = document.getElementById('company-select');
+            const selectedOption = select.options[select.selectedIndex];
+            
+            if (!select.value) {
+                document.getElementById('uploadSection').classList.remove('active');
+                document.getElementById('reportSection').classList.remove('active');
+                return;
+            }
+
+            currentCompany = {
+                id: select.value,
+                name: selectedOption.textContent,
+                logo: selectedOption.dataset.logo,
+                primaryColor: selectedOption.dataset.primaryColor,
+                secondaryColor: selectedOption.dataset.secondaryColor
+            };
+
+            // Apply branding
+            document.documentElement.style.setProperty('--primary-color', currentCompany.primaryColor);
+            document.documentElement.style.setProperty('--secondary-color', currentCompany.secondaryColor);
+            document.getElementById('companyLogo').src = `/static/${currentCompany.logo}`;
+
+            // Show upload section
+            document.getElementById('uploadSection').classList.add('active');
+            // Hide report section (will restore if cached)
+            document.getElementById('reportSection').classList.remove('active');
+            // Load stats
+            loadStats();
+            restoreCachedReport();
+        }
+
+        function loadBranding(companyId) {
+            fetch(`/api/branding/${companyId}`)
+                .then(response => response.json())
+                .then(data => {
+                    document.documentElement.style.setProperty('--primary-color', data.primary_color);
+                    document.documentElement.style.setProperty('--secondary-color', data.secondary_color);
+                    document.getElementById('companyLogo').src = data.logo_url;
+                })
+                .catch(error => {
+                    console.error('Error loading branding:', error);
+                });
+        }
+
+        function loadStats() {
+            if (!currentCompany) return;
+
+            fetch(`/api/recency/stats?company_id=${currentCompany.id}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success && data.stats.totalJobDates > 0) {
+                        document.getElementById('statCustomers').textContent = data.stats.totalCustomers;
+                        document.getElementById('statJobDates').textContent = data.stats.totalJobDates;
+                        document.getElementById('statEarliest').textContent = data.stats.earliestDate ? new Date(data.stats.earliestDate).toLocaleDateString() : '-';
+                        document.getElementById('statLatest').textContent = data.stats.latestDate ? new Date(data.stats.latestDate).toLocaleDateString() : '-';
+                        document.getElementById('statsBanner').classList.add('active');
+                        document.getElementById('generateBtn').disabled = false;
+                        document.getElementById('manageBtn').style.display = 'inline-block';
+                    } else {
+                        document.getElementById('statCustomers').textContent = '0';
+                        document.getElementById('statJobDates').textContent = '0';
+                        document.getElementById('statEarliest').textContent = '-';
+                        document.getElementById('statLatest').textContent = '-';
+                        document.getElementById('statsBanner').classList.remove('active');
+                        document.getElementById('generateBtn').disabled = true;
+                        document.getElementById('manageBtn').style.display = 'inline-block';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error loading stats:', error);
+                });
+        }
+
+        function restoreCachedReport() {
+            if (!currentCompany) return;
+            const cached = reportCache[currentCompany.id];
+            if (cached) {
+                const reportSection = document.getElementById('reportSection');
+                reportSection.innerHTML = cached.html;
+                reportSection.classList.add('active');
+                reportData = cached.data;
+            } else {
+                document.getElementById('reportSection').classList.remove('active');
+                document.getElementById('reportSection').innerHTML = '';
+            }
+        }
+
+        // File handling
+        const fileInput = document.getElementById('fileInput');
+        const fileList = document.getElementById('fileList');
+        const uploadBtn = document.getElementById('uploadBtn');
+
+        fileInput.addEventListener('change', (e) => {
+            handleFiles(Array.from(e.target.files));
+            fileInput.value = '';
+        });
+
+        function handleFiles(files) {
+            files.forEach(file => {
+                if (file.name.match(/\.(xlsx|xls)$/i)) {
+                    const exists = uploadedFiles.some(f => f.name === file.name && f.size === file.size);
+                    if (!exists) {
+                        uploadedFiles.push(file);
+                    }
+                }
+            });
+            updateFileList();
+        }
+
+        function updateFileList() {
+            if (uploadedFiles.length === 0) {
+                fileList.classList.remove('active');
+                uploadBtn.disabled = true;
+                return;
+            }
+
+            fileList.classList.add('active');
+            uploadBtn.disabled = false;
+
+            fileList.innerHTML = uploadedFiles.map((file, index) => `
+                <div class="file-item">
+                    <div class="file-item-name">${file.name}</div>
+                    <div class="file-item-size">${formatFileSize(file.size)}</div>
+                    <button class="remove-file-btn" onclick="removeFile(${index})">Remove</button>
+                </div>
+            `).join('');
+        }
+
+        function removeFile(index) {
+            uploadedFiles.splice(index, 1);
+            updateFileList();
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        // Upload files
+        uploadBtn.addEventListener('click', async () => {
+            if (!currentCompany || uploadedFiles.length === 0) return;
+            // If multiple files, validate first file as representative sample
+            await validateThenUpload(uploadedFiles);
+        });
+
+        async function doUpload(files) {
+            const loading = document.getElementById('loading');
+            const loadingText = document.getElementById('loadingText');
+            loading.classList.add('active');
+            uploadBtn.disabled = true;
+            let successCount = 0;
+            let errorCount = 0;
+            try {
+                for (let i = 0; i < files.length; i++) {
+                    loadingText.textContent = `Processing file ${i + 1} of ${files.length}...`;
+                    const formData = new FormData();
+                    formData.append('file', files[i]);
+                    formData.append('company_id', currentCompany.id);
+                    try {
+                        const response = await fetch('/api/recency/upload', {
+                            method: 'POST',
+                            body: formData
+                        });
+                        const data = await response.json();
+                        if (data.success) {
+                            successCount++;
+                        } else {
+                            errorCount++;
+                            console.error('File failed:', files[i].name, data.error);
+                        }
+                    } catch (error) {
+                        errorCount++;
+                        console.error('Upload error:', error);
+                    }
+                }
+                if (successCount > 0) {
+                    alert(`Successfully processed ${successCount} file(s)!${errorCount > 0 ? ` ${errorCount} file(s) failed.` : ''}`);
+                    uploadedFiles = [];
+                    updateFileList();
+                    loadStats();
+                } else {
+                    alert('All files failed to process. Check the console for errors.');
+                }
+            } catch (error) {
+                alert('Error uploading files: ' + error.message);
+            } finally {
+                loading.classList.remove('active');
+                uploadBtn.disabled = false;
+            }
+        }
+
+        // Generate report
+        document.getElementById('generateBtn').addEventListener('click', async () => {
+            // Always clear cache so days-since reflects today's date
+            reportCache = {};
+            if (!currentCompany) return;
+
+            const loading = document.getElementById('loading');
+            const loadingText = document.getElementById('loadingText');
+            loading.classList.add('active');
+            loadingText.textContent = 'Generating report...';
+
+            try {
+                const response = await fetch('/api/recency/report', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ company_id: currentCompany.id })
+                });
+
+                const data = await response.json();
+
+                if (!data.success) {
+                    throw new Error(data.error || 'Report generation failed');
+                }
+
+                reportData = data.customers;
+                displayReport(reportData);
+
+            } catch (error) {
+                alert('Error generating report: ' + error.message);
+            } finally {
+                loading.classList.remove('active');
+            }
+        });
+
+        function displayReport(customers) {
+            const reportSection = document.getElementById('reportSection');
+            
+            // Categorize by time buckets
+            const buckets = {
+                oneToTwo: [],
+                threeToSix: [],
+                sixToTwelve: [],
+                overTwelve: []
+            };
+
+            customers.forEach(customer => {
+                const days = customer.daysSince;
+                if (days >= 30 && days < 60) {
+                    buckets.oneToTwo.push(customer);
+                } else if (days >= 60 && days < 183) {
+                    buckets.threeToSix.push(customer);
+                } else if (days >= 183 && days < 365) {
+                    buckets.sixToTwelve.push(customer);
+                } else if (days >= 365) {
+                    buckets.overTwelve.push(customer);
+                }
+            });
+
+            // Sort each bucket
+            Object.keys(buckets).forEach(key => {
+                buckets[key].sort((a, b) => b.daysSince - a.daysSince);
+            });
+
+            // Check for FL customers (Kleanit only)
+            const hasFL = customers.some(c => c.name.includes('*FL*'));
+            let reports = [];
+
+            if (hasFL) {
+                // Split into Charlotte and FL
+                const charlotte = customers.filter(c => !c.name.includes('*FL*'));
+                const fl = customers.filter(c => c.name.includes('*FL*'));
+                
+                if (charlotte.length > 0) {
+                    reports.push({ title: 'Kleanit Charlotte', customers: charlotte });
+                }
+                if (fl.length > 0) {
+                    reports.push({ title: 'Kleanit South Florida', customers: fl });
+                }
+            } else {
+                reports.push({ title: currentCompany.name, customers: customers });
+            }
+
+            // Generate HTML for each report
+            let html = '';
+            reports.forEach((report, index) => {
+                const reportBuckets = categorizeBuckets(report.customers);
+                html += generateReportHTML(report.title, reportBuckets, index);
+            });
+
+            reportSection.innerHTML = html;
+            reportSection.classList.add('active');
+            reportSection.scrollIntoView({ behavior: 'smooth' });
+            // Cache this report
+            reportCache[currentCompany.id] = { html: html, data: customers };
+        }
+
+        function categorizeBuckets(customers) {
+            const buckets = {
+                oneToTwo: [],
+                threeToSix: [],
+                sixToTwelve: [],
+                overTwelve: []
+            };
+
+            customers.forEach(customer => {
+                const days = customer.daysSince;
+                if (days >= 30 && days < 60) buckets.oneToTwo.push(customer);
+                else if (days >= 60 && days < 183) buckets.threeToSix.push(customer);
+                else if (days >= 183 && days < 365) buckets.sixToTwelve.push(customer);
+                else if (days >= 365) buckets.overTwelve.push(customer);
+            });
+
+            Object.keys(buckets).forEach(key => {
+                buckets[key].sort((a, b) => b.daysSince - a.daysSince);
+            });
+
+            return buckets;
+        }
+
+        function generateReportHTML(title, buckets, index) {
+            const reportDate = new Date().toLocaleDateString();
+            const totalCustomers = Object.values(buckets).reduce((sum, arr) => sum + arr.length, 0);
+
+            let html = `
+                <div class="report-container" id="report-${index}">
+                    <div class="report-header">
+                        <h2>${title}</h2>
+                        <div class="report-meta">
+                            Generated: ${reportDate} | Total Customers: ${totalCustomers}
+                        </div>
+                    </div>
+            `;
+
+            html += generateBucketHTML('1-2 Months Since Last Service', buckets.oneToTwo, '#8B1538');
+            html += generateBucketHTML('3-6 Months Since Last Service', buckets.threeToSix, '#c41e3a');
+            html += generateBucketHTML('6-12 Months Since Last Service', buckets.sixToTwelve, '#e74c3c');
+            html += generateBucketHTML('12+ Months Since Last Service', buckets.overTwelve, '#d93838');
+
+            html += `
+                    <div class="action-buttons">
+                        <button class="pdf-btn" onclick="downloadPDF(${index})">
+                            📄 Download PDF
+                        </button>
+                        <button class="print-btn" onclick="printReport(${index})">
+                            🖨️ Print Report
+                        </button>
+                    </div>
+                </div>
+            `;
+
+            return html;
+        }
+
+        function generateBucketHTML(title, customers, color) {
+            let html = `
+                <div class="bucket">
+                    <div class="bucket-header" style="background: ${color};">
+                        <span>${title}</span>
+                        <span class="bucket-count">${customers.length} customers</span>
+                    </div>
+                    <div class="bucket-content" style="border-color: ${color};">
+            `;
+
+            if (customers.length === 0) {
+                html += '<div class="empty-bucket">No customers in this time range</div>';
+            } else {
+                customers.forEach(customer => {
+                    html += `
+                        <div class="customer-row">
+                            <div class="customer-name">${customer.name}</div>
+                            <div class="customer-days">${customer.daysSince} days ago</div>
+                        </div>
+                    `;
+                });
+            }
+
+            html += '</div></div>';
+            return html;
+        }
+
+        function printReport(index) {
+            window.print();
+        }
+
+        async function downloadPDF(index) {
+            const { jsPDF } = window.jspdf;
+            const reportElement = document.getElementById(`report-${index}`);
+            
+            if (!reportElement) {
+                alert('Report not found');
+                return;
+            }
+
+            try {
+                const canvas = await html2canvas(reportElement, {
+                    scale: 2,
+                    useCORS: true,
+                    logging: false,
+                    backgroundColor: '#ffffff'
+                });
+
+                const imgWidth = 210;
+                const imgHeight = (canvas.height * imgWidth) / canvas.width;
+                const pdf = new jsPDF('p', 'mm', 'a4');
+                const imgData = canvas.toDataURL('image/png');
+                
+                pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, imgHeight);
+                
+                const filename = `${currentCompany.name}_Recency_Report_${new Date().toISOString().split('T')[0]}.pdf`;
+                pdf.save(filename);
+                
+                alert('PDF downloaded successfully!');
+            } catch (error) {
+                console.error('Error generating PDF:', error);
+                alert('Error generating PDF: ' + error.message);
+            }
+        }
+    </script>
+</body>
+</html>

@@ -452,6 +452,9 @@
                 <a href="/upload" style="display: inline-block; padding: 12px 24px; background: var(--primary-color); color: white; text-decoration: none; border-radius: 8px; font-weight: 600;">
                     📤 Upload Invoices
                 </a>
+                <a href="/recency-report" style="display: inline-block; padding: 12px 24px; background: var(--primary-color); color: white; text-decoration: none; border-radius: 8px; font-weight: 600; margin-left: 10px;">
+                    📊 Customer Recency Report
+                </a>
             </div>
         </div>
 
@@ -536,7 +539,8 @@
         async function loadCompanies() {
             try {
                 const response = await fetch('/api/companies');
-                const companies = await response.json();
+                const data = await response.json();
+                const companies = data.companies;
 
                 const select = document.getElementById('company-select');
                 select.innerHTML = '<option value="0">Select a company to begin</option>' + companies.map(c =>

@@ -551,6 +551,10 @@
                 <h3>Total County Tax</h3>
                 <div class="value" id="county-tax">$0.00</div>
             </div>
+            <div class="summary-card" id="transit-card" style="display: none;">
+                <h3>Total Transit Tax</h3>
+                <div class="value" id="transit-tax">$0.00</div>
+            </div>
             <div class="summary-card">
                 <h3>Total Tax Collected</h3>
                 <div class="value" id="tax-collected">$0.00</div>
@@ -872,10 +876,13 @@
                             <div>
                                 <div class="county-name">${county.name} County - ${county.tax_rate}%</div>
                                 <div class="county-breakdown">
-                                    State: $${county.state_tax.toFixed(2)} | County: $${county.county_tax.toFixed(2)}
+                                    State: $${county.state_tax.toFixed(2)} | County: $${county.county_tax.toFixed(2)}${county.transit_tax > 0 ? ` | Transit: $${county.transit_tax.toFixed(2)}` : ''}
                                 </div>
                             </div>
-                            <div class="county-total">$${county.total_tax.toFixed(2)}</div>
+                            <div style="text-align: right;">
+                                <div style="font-size: 13px; opacity: 0.85; margin-bottom: 4px;">Taxable Sales: $${county.taxable_amount.toFixed(2)}</div>
+                                <div class="county-total">Tax: $${county.total_tax.toFixed(2)}</div>
+                            </div>
                         </div>
                         <table>
                             <thead>
@@ -980,6 +987,15 @@
             document.getElementById('county-tax').textContent = `$${report.totals.county_tax.toFixed(2)}`;
             document.getElementById('tax-collected').textContent = `$${report.totals.total_tax.toFixed(2)}`;
             document.getElementById('invoice-count').textContent = report.totals.invoice_count;
+
+            // Show transit card only when transit tax exists
+            const transitTax = report.totals.transit_tax || 0;
+            if (transitTax > 0) {
+                document.getElementById('transit-tax').textContent = `$${transitTax.toFixed(2)}`;
+                document.getElementById('transit-card').style.display = 'block';
+            } else {
+                document.getElementById('transit-card').style.display = 'none';
+            }
         }
 
         // Clear display

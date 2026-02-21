@@ -97,10 +97,15 @@ def generate_pdf_tax_report(report_data, company_branding, output_file):
     
     totals = report_data['totals']
     
+    transit_tax = totals.get('transit_tax', 0)
     summary_data = [
         ["Tax Component", "Amount"],
         ["State Tax (4.75%)", f"${totals['state_tax']:,.2f}"],
         ["County Tax", f"${totals['county_tax']:,.2f}"],
+    ]
+    if transit_tax > 0:
+        summary_data.append(["Transit Tax", f"${transit_tax:,.2f}"])
+    summary_data += [
         ["Total Tax Collected", f"${totals['total_tax']:,.2f}"],
         ["", ""],
         ["Paid Invoices Processed", str(totals['invoice_count'])],
@@ -147,9 +152,10 @@ def generate_pdf_tax_report(report_data, company_branding, output_file):
     
     for county in counties:
         # County header section
+        transit_line = f"  |  Transit: ${county['transit_tax']:,.2f}" if county.get('transit_tax', 0) > 0 else ""
         county_header_data = [
             [f"{county['name']} County - {county['tax_rate']}% Tax Rate"],
-            [f"State Tax: ${county['state_tax']:,.2f}  |  County Tax: ${county['county_tax']:,.2f}  |  Total: ${county['total_tax']:,.2f}"]
+            [f"State: ${county['state_tax']:,.2f}  |  County: ${county['county_tax']:,.2f}{transit_line}  |  Taxable Sales: ${county['taxable_amount']:,.2f}  |  Total Tax: ${county['total_tax']:,.2f}"]
         ]
         
         county_header_table = Table(county_header_data, colWidths=[6.5*inch])
