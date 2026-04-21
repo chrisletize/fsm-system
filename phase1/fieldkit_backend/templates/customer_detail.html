@@ -1,0 +1,381 @@
+{% extends "base.html" %}
+{% block title %}{{ customer.property_name }} — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .breadcrumb {
+        font-size: 0.9rem;
+        color: #888;
+        margin-bottom: 1.25rem;
+    }
+    .breadcrumb a {
+        color: {{ branding.color_primary }};
+        text-decoration: none;
+    }
+    .breadcrumb a:hover { text-decoration: underline; }
+    .breadcrumb span { margin: 0 0.4rem; }
+
+    .page-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 1.5rem;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+    .page-header h1 {
+        font-size: 1.75rem;
+        color: {{ branding.color_primary }};
+        line-height: 1.2;
+    }
+    .page-header .meta {
+        color: #888;
+        font-size: 0.9rem;
+        margin-top: 0.3rem;
+    }
+    .header-actions { display: flex; gap: 0.75rem; flex-shrink: 0; }
+
+    .detail-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1.25rem;
+        margin-bottom: 1.25rem;
+    }
+    @media (max-width: 700px) { .detail-grid { grid-template-columns: 1fr; } }
+
+    .section-title {
+        font-size: 0.75rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+        color: #888;
+        margin-bottom: 0.75rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px solid #eee;
+    }
+    .field-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 0.45rem 0;
+        border-bottom: 1px solid #f5f5f5;
+        font-size: 0.9rem;
+        gap: 1rem;
+    }
+    .field-row:last-child { border-bottom: none; }
+    .field-label { color: #888; flex-shrink: 0; }
+    .field-value { color: #222; text-align: right; font-weight: 500; }
+    .field-value.empty { color: #ccc; font-weight: 400; }
+
+    .badge {
+        display: inline-block;
+        padding: 0.2rem 0.65rem;
+        border-radius: 10px;
+        font-size: 0.8rem;
+        font-weight: 500;
+    }
+    .badge-active   { background: #e8f5e9; color: #2e7d32; }
+    .badge-inactive { background: #fce4ec; color: #c2185b; }
+    .badge-onhold   { background: #fff3e0; color: #e65100; }
+    .badge-lead     { background: #e3f2fd; color: #1565c0; }
+
+    /* Contacts */
+    .contact-card {
+        border: 1px solid #eee;
+        border-radius: 6px;
+        padding: 1rem;
+        margin-bottom: 0.75rem;
+        position: relative;
+    }
+    .contact-card.primary {
+        border-color: {{ branding.color_primary }}44;
+        background: {{ branding.color_primary }}08;
+    }
+    .contact-name {
+        font-weight: 600;
+        font-size: 0.95rem;
+        color: #222;
+    }
+    .contact-title {
+        font-size: 0.85rem;
+        color: #888;
+        margin-top: 0.1rem;
+    }
+    .contact-details {
+        margin-top: 0.6rem;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem 1.5rem;
+        font-size: 0.85rem;
+    }
+    .contact-details a { color: {{ branding.color_primary }}; text-decoration: none; }
+    .contact-details a:hover { text-decoration: underline; }
+    .primary-badge {
+        position: absolute;
+        top: 0.75rem;
+        right: 0.75rem;
+        font-size: 0.7rem;
+        background: {{ branding.color_primary }};
+        color: white;
+        padding: 0.15rem 0.5rem;
+        border-radius: 8px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+    }
+    .no-contacts {
+        color: #aaa;
+        font-size: 0.9rem;
+        padding: 1rem 0;
+        text-align: center;
+    }
+
+    /* Notes */
+    .note-item {
+        padding: 0.75rem 0;
+        border-bottom: 1px solid #f0f0f0;
+        font-size: 0.9rem;
+    }
+    .note-item:last-child { border-bottom: none; }
+    .note-meta {
+        font-size: 0.8rem;
+        color: #aaa;
+        margin-bottom: 0.3rem;
+        display: flex;
+        gap: 0.75rem;
+        align-items: center;
+    }
+    .note-type-badge {
+        font-size: 0.7rem;
+        background: #f0f0f0;
+        color: #666;
+        padding: 0.1rem 0.45rem;
+        border-radius: 6px;
+        font-weight: 500;
+    }
+    .note-text { color: #333; line-height: 1.5; white-space: pre-wrap; }
+    .no-notes { color: #aaa; font-size: 0.9rem; padding: 1rem 0; text-align: center; }
+
+    /* Add note form */
+    .add-note-form { margin-top: 1rem; }
+    .add-note-form textarea {
+        width: 100%;
+        padding: 0.75rem;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        font-size: 0.9rem;
+        font-family: inherit;
+        resize: vertical;
+        min-height: 80px;
+    }
+    .add-note-form textarea:focus {
+        outline: none;
+        border-color: {{ branding.color_primary }};
+        box-shadow: 0 0 0 2px {{ branding.color_primary }}22;
+    }
+    .note-form-row {
+        display: flex;
+        gap: 0.75rem;
+        align-items: center;
+        margin-top: 0.5rem;
+        flex-wrap: wrap;
+    }
+    .note-form-row select {
+        padding: 0.5rem 0.75rem;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 0.875rem;
+        background: white;
+    }
+
+    .btn { display: inline-block; padding: 0.6rem 1.25rem; border-radius: 4px;
+           text-decoration: none; font-weight: 500; cursor: pointer;
+           border: none; font-size: 0.9rem; }
+    .btn-primary { background: {{ branding.color_primary }}; color: white; }
+    .btn-primary:hover { opacity: 0.9; }
+    .btn-outline {
+        background: white; color: {{ branding.color_primary }};
+        border: 1px solid {{ branding.color_primary }};
+    }
+    .btn-outline:hover { background: {{ branding.color_primary }}11; }
+    .btn-sm { padding: 0.35rem 0.8rem; font-size: 0.82rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- Breadcrumb -->
+<div class="breadcrumb">
+    <a href="/{{ company_key }}/customers">Customers</a>
+    <span>›</span>
+    <span>{{ customer.property_name }}</span>
+</div>
+
+<!-- Page header -->
+<div class="page-header">
+    <div>
+        <h1>{{ customer.property_name }}</h1>
+        <div class="meta">
+            {{ customer.customer_type }}
+            {% if customer.city and customer.state %}
+             · {{ customer.city }}, {{ customer.state }}
+            {% endif %}
+             · Added {{ customer.created_at.strftime('%b %d, %Y') if customer.created_at else '—' }}
+        </div>
+    </div>
+    <div class="header-actions">
+        <a href="/{{ company_key }}/customers/{{ customer.id }}/edit" class="btn btn-outline">Edit</a>
+    </div>
+</div>
+
+<!-- Top row: details + address -->
+<div class="detail-grid">
+
+    <!-- Property details -->
+    <div class="card">
+        <div class="section-title">Property Details</div>
+        <div class="field-row">
+            <span class="field-label">Status</span>
+            <span class="field-value">
+                {% set s = customer.status %}
+                <span class="badge
+                    {% if s == 'Active' %}badge-active
+                    {% elif s == 'Inactive' %}badge-inactive
+                    {% elif s == 'On Hold' %}badge-onhold
+                    {% elif s == 'Lead' %}badge-lead{% endif %}">
+                    {{ s }}
+                </span>
+            </span>
+        </div>
+        <div class="field-row">
+            <span class="field-label">Type</span>
+            <span class="field-value">{{ customer.customer_type }}</span>
+        </div>
+        <div class="field-row">
+            <span class="field-label">Management Co.</span>
+            <span class="field-value {% if not customer.management_company_name %}empty{% endif %}">
+                {{ customer.management_company_name or '—' }}
+            </span>
+        </div>
+        <div class="field-row">
+            <span class="field-label">Billing Email</span>
+            <span class="field-value {% if not customer.billing_email %}empty{% endif %}">
+                {% if customer.billing_email %}
+                <a href="mailto:{{ customer.billing_email }}" style="color:{{ branding.color_primary }}">
+                    {{ customer.billing_email }}
+                </a>
+                {% else %}—{% endif %}
+            </span>
+        </div>
+        <div class="field-row">
+            <span class="field-label">Payment Terms</span>
+            <span class="field-value">{{ customer.payment_terms or '—' }}</span>
+        </div>
+    </div>
+
+    <!-- Address -->
+    <div class="card">
+        <div class="section-title">Service Address</div>
+        {% if customer.address %}
+        <div style="font-size: 0.95rem; line-height: 1.8; color: #333;">
+            {{ customer.address }}<br>
+            {% if customer.address_2 %}{{ customer.address_2 }}<br>{% endif %}
+            {% if customer.city or customer.state or customer.zip %}
+            {{ customer.city or '' }}{% if customer.city and customer.state %}, {% endif %}{{ customer.state or '' }} {{ customer.zip or '' }}
+            {% endif %}
+        </div>
+        <a href="https://maps.google.com/?q={{ customer.address }},{{ customer.city }},{{ customer.state }}"
+           target="_blank" rel="noopener"
+           style="display:inline-block; margin-top:0.75rem; font-size:0.85rem; color:{{ branding.color_primary }};">
+            View on map →
+        </a>
+        {% else %}
+        <p style="color:#ccc; font-size:0.9rem; padding-top:0.5rem;">No address on file.</p>
+        {% endif %}
+
+        {% if customer.notes %}
+        <div style="margin-top:1rem; padding-top:1rem; border-top:1px solid #f0f0f0;">
+            <div class="section-title">Property Notes</div>
+            <p style="font-size:0.9rem; color:#555; line-height:1.5; white-space:pre-wrap;">{{ customer.notes }}</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Contacts -->
+<div class="card" style="margin-bottom:1.25rem;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+        <div class="section-title" style="margin-bottom:0;">Contacts</div>
+        <a href="/{{ company_key }}/customers/{{ customer.id }}/contacts/new"
+           class="btn btn-outline btn-sm">+ Add Contact</a>
+    </div>
+
+    {% if contacts %}
+        {% for contact in contacts %}
+        <div class="contact-card {% if contact.is_primary %}primary{% endif %}">
+            {% if contact.is_primary %}
+            <span class="primary-badge">Primary</span>
+            {% endif %}
+            <div class="contact-name">{{ contact.first_name }} {{ contact.last_name }}</div>
+            {% if contact.title %}
+            <div class="contact-title">{{ contact.title }}</div>
+            {% endif %}
+            <div class="contact-details">
+                {% if contact.office_phone %}
+                <span>📞 <a href="tel:{{ contact.office_phone }}">{{ contact.office_phone }}</a></span>
+                {% endif %}
+                {% if contact.mobile_phone %}
+                <span>📱 <a href="tel:{{ contact.mobile_phone }}">{{ contact.mobile_phone }}</a></span>
+                {% endif %}
+                {% if contact.office_email %}
+                <span>✉️ <a href="mailto:{{ contact.office_email }}">{{ contact.office_email }}</a></span>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    {% else %}
+    <div class="no-contacts">No contacts on file. <a href="/{{ company_key }}/customers/{{ customer.id }}/contacts/new" style="color:{{ branding.color_primary }};">Add one →</a></div>
+    {% endif %}
+</div>
+
+<!-- Notes -->
+<div class="card">
+    <div class="section-title">Activity & Notes</div>
+
+    <!-- Add note form -->
+    <div class="add-note-form">
+        <form method="POST" action="/{{ company_key }}/customers/{{ customer.id }}/notes">
+            <textarea name="note_text" placeholder="Add a note about this customer..." rows="3"></textarea>
+            <div class="note-form-row">
+                <select name="note_type">
+                    <option value="General">General</option>
+                    <option value="Call">Call</option>
+                    <option value="Visit">Visit</option>
+                    <option value="Email">Email</option>
+                    <option value="Issue">Issue</option>
+                    <option value="Follow-up">Follow-up</option>
+                </select>
+                <button type="submit" class="btn btn-primary btn-sm">Add Note</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Notes list -->
+    <div style="margin-top:1.25rem;">
+        {% if notes %}
+            {% for note in notes %}
+            <div class="note-item">
+                <div class="note-meta">
+                    <span class="note-type-badge">{{ note.note_type }}</span>
+                    <span>{{ note.created_at.strftime('%b %d, %Y at %I:%M %p') if note.created_at else '' }}</span>
+                    {% if note.created_by %}<span>by {{ note.created_by }}</span>{% endif %}
+                </div>
+                <div class="note-text">{{ note.note_text }}</div>
+            </div>
+            {% endfor %}
+        {% else %}
+        <div class="no-notes">No notes yet.</div>
+        {% endif %}
+    </div>
+</div>
+
+{% endblock %}

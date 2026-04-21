@@ -32,8 +32,8 @@
     <div class="card">
         <h2>Quick Actions</h2>
         <div style="display: flex; gap: 1rem; margin-top: 1rem;">
-            <a href="/customers" class="btn btn-primary">View Customers</a>
-            <a href="/customers/new" class="btn btn-secondary">Add Customer</a>
+            <a href="/{{ company_key }}/customers" class="btn btn-primary">View Customers</a>
+            <a href="/{{ company_key }}/customers/new" class="btn btn-secondary">Add Customer</a>
             <button class="btn btn-secondary" disabled>Create Job (Phase 4)</button>
             <button class="btn btn-secondary" disabled>New Invoice (Phase 5)</button>
         </div>
@@ -71,7 +71,7 @@
                         </span>
                     </td>
                     <td style="padding: 0.75rem;">
-                        <a href="/customers/{{ customer.id }}" style="color: {{ branding.color_primary }}; text-decoration: none;">View →</a>
+                        <a href="/{{ company_key }}/customers/{{ customer.id }}" style="color: {{ branding.color_primary }}; text-decoration: none;">View →</a>
                     </td>
                 </tr>
                 {% endfor %}

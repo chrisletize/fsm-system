@@ -1,0 +1,309 @@
+{% extends "base.html" %}
+{% block title %}{% if customer %}Edit{% else %}Add{% endif %} Customer — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .breadcrumb { font-size:.9rem; color:#888; margin-bottom:1.25rem; }
+    .breadcrumb a { color:{{ branding.color_primary }}; text-decoration:none; }
+    .breadcrumb a:hover { text-decoration:underline; }
+    .breadcrumb span { margin:0 .4rem; }
+    .page-header { margin-bottom:1.5rem; }
+    .page-header h1 { font-size:1.75rem; color:{{ branding.color_primary }}; }
+
+    .form-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1.25rem;
+        margin-bottom: 1.25rem;
+    }
+    @media(max-width:700px){ .form-grid{ grid-template-columns:1fr; } }
+    .form-grid.full { grid-template-columns: 1fr; }
+
+    .section-title {
+        font-size:.75rem; font-weight:700; text-transform:uppercase;
+        letter-spacing:.6px; color:#888;
+        margin-bottom:.75rem; padding-bottom:.5rem;
+        border-bottom:1px solid #eee;
+    }
+    .form-group { display:flex; flex-direction:column; gap:.35rem; }
+    .form-group label {
+        font-size:.85rem; font-weight:600; color:#555;
+    }
+    .form-group input,
+    .form-group select,
+    .form-group textarea {
+        padding:.6rem .75rem;
+        border:1px solid #ddd;
+        border-radius:4px;
+        font-size:.95rem;
+        font-family:inherit;
+        background:white;
+        width:100%;
+    }
+    .form-group input:focus,
+    .form-group select:focus,
+    .form-group textarea:focus {
+        outline:none;
+        border-color:{{ branding.color_primary }};
+        box-shadow:0 0 0 2px {{ branding.color_primary }}22;
+    }
+    .form-group textarea { resize:vertical; min-height:80px; }
+    .form-group.required label::after { content:' *'; color:#c33; }
+
+    /* Tax toggle */
+    .toggle-row {
+        display:flex; align-items:center; gap:.75rem;
+        padding:.5rem 0;
+    }
+    .toggle-switch {
+        position:relative; width:44px; height:24px; flex-shrink:0;
+    }
+    .toggle-switch input { opacity:0; width:0; height:0; }
+    .toggle-slider {
+        position:absolute; inset:0;
+        background:#ccc; border-radius:24px;
+        cursor:pointer; transition:.2s;
+    }
+    .toggle-slider:before {
+        content:''; position:absolute;
+        width:18px; height:18px;
+        left:3px; top:3px;
+        background:white; border-radius:50%;
+        transition:.2s;
+    }
+    input:checked + .toggle-slider { background:{{ branding.color_primary }}; }
+    input:checked + .toggle-slider:before { transform:translateX(20px); }
+    .toggle-label { font-size:.95rem; color:#333; }
+
+    /* Tax county — hidden until taxable is on */
+    .tax-county-row { margin-top:.75rem; }
+
+    .error-banner {
+        background:#fee; border:1px solid #fcc; color:#c33;
+        padding:.75rem 1rem; border-radius:4px; margin-bottom:1.25rem;
+        font-size:.9rem;
+    }
+    .form-actions {
+        display:flex; gap:.75rem; align-items:center;
+        margin-top:1.5rem;
+    }
+    .btn { display:inline-block; padding:.65rem 1.5rem; border-radius:4px;
+           text-decoration:none; font-weight:500; cursor:pointer;
+           border:none; font-size:.95rem; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-primary:hover { opacity:.9; }
+    .btn-outline { background:white; color:{{ branding.color_primary }};
+                   border:1px solid {{ branding.color_primary }}; }
+    .btn-outline:hover { background:{{ branding.color_primary }}11; }
+
+    .custom-fields-section { margin-top:0; }
+    .field-hint { font-size:.78rem; color:#aaa; margin-top:.2rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="/{{ company_key }}/customers">Customers</a>
+    {% if customer %}
+    <span>›</span>
+    <a href="/{{ company_key }}/customers/{{ customer.id }}">{{ customer.property_name }}</a>
+    {% endif %}
+    <span>›</span>
+    <span>{% if customer %}Edit{% else %}Add Customer{% endif %}</span>
+</div>
+
+<div class="page-header">
+    <h1>{% if customer %}Edit Customer{% else %}Add New Customer{% endif %}</h1>
+</div>
+
+{% if error %}
+<div class="error-banner">⚠️ {{ error }}</div>
+{% endif %}
+
+<form method="POST">
+
+    <!-- Core info -->
+    <div class="card">
+        <div class="section-title">Property Information</div>
+        <div class="form-grid">
+            <div class="form-group required">
+                <label>Property Name</label>
+                <input type="text" name="property_name" required
+                    value="{{ customer.property_name if customer else '' }}"
+                    placeholder="e.g. Camden Westover Hills">
+            </div>
+            <div class="form-group">
+                <label>Status</label>
+                <select name="status">
+                    {% for s in ['Active','Inactive','On Hold','Lead'] %}
+                    <option value="{{ s }}"
+                        {% if (customer and customer.status == s) or (not customer and s == 'Active') %}selected{% endif %}>
+                        {{ s }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Customer Type</label>
+                <select name="customer_type">
+                    {% for t in ['Multi Family','Commercial','Residential','Contractors'] %}
+                    <option value="{{ t }}"
+                        {% if customer and customer.customer_type == t %}selected{% endif %}>
+                        {{ t }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Payment Terms</label>
+                <select name="payment_terms">
+                    {% for p in ['Net 30','Net 15','Net 45','Net 60','Due on Receipt'] %}
+                    <option value="{{ p }}"
+                        {% if (customer and customer.payment_terms == p) or (not customer and p == 'Net 30') %}selected{% endif %}>
+                        {{ p }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Billing Email</label>
+                <input type="email" name="billing_email"
+                    value="{{ customer.billing_email if customer else '' }}"
+                    placeholder="billing@property.com">
+            </div>
+        </div>
+    </div>
+
+    <!-- Address -->
+    <div class="card">
+        <div class="section-title">Service Address</div>
+        <div class="form-grid">
+            <div class="form-group">
+                <label>Address</label>
+                <input type="text" name="address"
+                    value="{{ customer.address if customer else '' }}"
+                    placeholder="123 Main St">
+            </div>
+            <div class="form-group">
+                <label>Address Line 2</label>
+                <input type="text" name="address_2"
+                    value="{{ customer.address_2 if customer else '' }}"
+                    placeholder="Suite, Unit, Building...">
+            </div>
+            <div class="form-group">
+                <label>City</label>
+                <input type="text" name="city"
+                    value="{{ customer.city if customer else '' }}">
+            </div>
+            <div class="form-group">
+                <label>State</label>
+                <input type="text" name="state" maxlength="2"
+                    value="{{ customer.state if customer else '' }}"
+                    placeholder="NC" style="text-transform:uppercase;">
+            </div>
+            <div class="form-group">
+                <label>ZIP Code</label>
+                <input type="text" name="zip" maxlength="10"
+                    value="{{ customer.zip if customer else '' }}"
+                    placeholder="28202">
+            </div>
+        </div>
+    </div>
+
+    <!-- Tax settings -->
+    <div class="card">
+        <div class="section-title">Tax Settings</div>
+        <div class="toggle-row">
+            <label class="toggle-switch">
+                <input type="checkbox" name="is_taxable" id="taxableToggle"
+                    {% if not customer or customer.is_taxable %}checked{% endif %}
+                    onchange="toggleCounty(this.checked)">
+                <span class="toggle-slider"></span>
+            </label>
+            <span class="toggle-label">Customer is taxable</span>
+        </div>
+        <div class="tax-county-row" id="countyRow"
+             style="{% if customer and not customer.is_taxable %}display:none{% endif %}">
+            <div class="form-group">
+                <label>Tax County</label>
+                <select name="tax_county">
+                    <option value="">— Select county —</option>
+                    {% for county in nc_counties %}
+                    <option value="{{ county }}"
+                        {% if customer and customer.tax_county == county %}selected{% endif %}>
+                        {{ county }}
+                    </option>
+                    {% endfor %}
+                </select>
+                <span class="field-hint">
+                    County determines the tax rate applied to invoices.
+                    Mecklenburg 7.25% · Durham/Orange 7.50% · Most others 6.75–7.00%
+                </span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Property notes -->
+    <div class="card">
+        <div class="section-title">Property Notes</div>
+        <div class="form-group">
+            <label>General Notes</label>
+            <textarea name="notes" rows="3"
+                placeholder="General notes about this property...">{{ customer.notes if customer else '' }}</textarea>
+        </div>
+    </div>
+
+    <!-- Custom fields -->
+    {% if field_defs %}
+    <div class="card custom-fields-section">
+        <div class="section-title">
+            Additional Information
+            <a href="/{{ company_key }}/settings/fields"
+               style="font-size:.75rem; font-weight:400; color:{{ branding.color_primary }};
+                      text-transform:none; letter-spacing:0; margin-left:.75rem;">
+                Manage fields →
+            </a>
+        </div>
+        <div class="form-grid">
+            {% for field in field_defs %}
+            {% if field.is_active %}
+            <div class="form-group {% if field.field_type == 'textarea' %}form-grid full{% endif %}">
+                <label>{{ field.field_name }}</label>
+                {% if field.field_type == 'textarea' %}
+                <textarea name="field_{{ field.id }}" rows="3">{{ field_values[field.id] if field_values is defined and field.id in field_values else '' }}</textarea>
+                {% elif field.field_type == 'toggle' %}
+                <div class="toggle-row" style="padding:0;">
+                    <label class="toggle-switch">
+                        <input type="checkbox" name="field_{{ field.id }}"
+                            {% if field_values is defined and field_values.get(field.id) == 'on' %}checked{% endif %}>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                {% else %}
+                <input type="text" name="field_{{ field.id }}"
+                    value="{{ field_values[field.id] if field_values is defined and field.id in field_values else '' }}"
+                    placeholder="{{ field.field_name }}...">
+                {% endif %}
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="form-actions">
+        <button type="submit" class="btn btn-primary">
+            {% if customer %}Save Changes{% else %}Create Customer{% endif %}
+        </button>
+        <a href="{% if customer %}/{{ company_key }}/customers/{{ customer.id }}
+                  {% else %}/{{ company_key }}/customers{% endif %}"
+           class="btn btn-outline">Cancel</a>
+    </div>
+</form>
+
+<script>
+function toggleCounty(checked) {
+    document.getElementById('countyRow').style.display = checked ? '' : 'none';
+}
+</script>
+{% endblock %}
