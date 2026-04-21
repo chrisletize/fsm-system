@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - {{ branding.name }}{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+    <h1 style="color: {{ branding.color_primary }}; margin-bottom: 2rem;">
+        {{ branding.name }} Dashboard
+    </h1>
+    
+    <!-- Quick Stats -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
+        <div class="card" style="background-color: {{ branding.color_primary }}; color: white;">
+            <h3 style="font-size: 2.5rem; margin-bottom: 0.5rem;">{{ active_customers }}</h3>
+            <p>Active Customers</p>
+        </div>
+        
+        <div class="card">
+            <h3 style="font-size: 2.5rem; margin-bottom: 0.5rem; color: {{ branding.color_primary }};">0</h3>
+            <p>Open Jobs</p>
+            <small style="color: #999;">(Coming in Phase 4)</small>
+        </div>
+        
+        <div class="card">
+            <h3 style="font-size: 2.5rem; margin-bottom: 0.5rem; color: {{ branding.color_primary }};">0</h3>
+            <p>Pending Invoices</p>
+            <small style="color: #999;">(Coming in Phase 5)</small>
+        </div>
+    </div>
+    
+    <!-- Quick Actions -->
+    <div class="card">
+        <h2>Quick Actions</h2>
+        <div style="display: flex; gap: 1rem; margin-top: 1rem;">
+            <a href="/customers" class="btn btn-primary">View Customers</a>
+            <a href="/customers/new" class="btn btn-secondary">Add Customer</a>
+            <button class="btn btn-secondary" disabled>Create Job (Phase 4)</button>
+            <button class="btn btn-secondary" disabled>New Invoice (Phase 5)</button>
+        </div>
+    </div>
+    
+    <!-- Recent Customers -->
+    <div class="card">
+        <h2>Recent Customers</h2>
+        {% if recent_customers %}
+        <table style="width: 100%; margin-top: 1rem; border-collapse: collapse;">
+            <thead>
+                <tr style="border-bottom: 2px solid #ddd;">
+                    <th style="text-align: left; padding: 0.75rem;">Property Name</th>
+                    <th style="text-align: left; padding: 0.75rem;">Type</th>
+                    <th style="text-align: left; padding: 0.75rem;">City</th>
+                    <th style="text-align: left; padding: 0.75rem;">Status</th>
+                    <th style="text-align: left; padding: 0.75rem;">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for customer in recent_customers %}
+                <tr style="border-bottom: 1px solid #eee;">
+                    <td style="padding: 0.75rem;">{{ customer.property_name }}</td>
+                    <td style="padding: 0.75rem;">{{ customer.customer_type }}</td>
+                    <td style="padding: 0.75rem;">{{ customer.city or 'N/A' }}</td>
+                    <td style="padding: 0.75rem;">
+                        <span style="
+                            padding: 0.25rem 0.75rem;
+                            border-radius: 12px;
+                            font-size: 0.85rem;
+                            background-color: {% if customer.status == 'Active' %}#e8f5e9{% else %}#fce4ec{% endif %};
+                            color: {% if customer.status == 'Active' %}#2e7d32{% else %}#c2185b{% endif %};
+                        ">
+                            {{ customer.status }}
+                        </span>
+                    </td>
+                    <td style="padding: 0.75rem;">
+                        <a href="/customers/{{ customer.id }}" style="color: {{ branding.color_primary }}; text-decoration: none;">View →</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="color: #999; margin-top: 1rem;">No customers yet. Add your first customer!</p>
+        {% endif %}
+    </div>
+    
+    <!-- Phase 1 Status -->
+    <div class="card" style="background-color: #e8f4f8; border-left: 4px solid {{ branding.color_primary }};">
+        <h3 style="color: {{ branding.color_primary }};">🚀 Phase 1: Core Foundation</h3>
+        <p style="margin-top: 0.5rem;">You're using FieldKit Phase 1! Core features:</p>
+        <ul style="margin: 1rem 0 1rem 2rem; line-height: 1.8;">
+            <li>✅ Multi-company authentication</li>
+            <li>✅ Company switcher with color branding</li>
+            <li>✅ Customer database ({{ active_customers }} imported)</li>
+            <li>🔄 Customer management interface (in progress)</li>
+        </ul>
+        <p style="color: #666; font-size: 0.9rem;">
+            Coming soon: Full customer CRUD, search, jobs, invoicing, mobile apps
+        </p>
+    </div>
+</div>
+
+<style>
+    table {
+        font-size: 0.95rem;
+    }
+    
+    th {
+        font-weight: 600;
+        color: #666;
+        text-transform: uppercase;
+        font-size: 0.8rem;
+        letter-spacing: 0.5px;
+    }
+    
+    tr:hover {
+        background-color: #f8f9fa;
+    }
+</style>
+{% endblock %}
