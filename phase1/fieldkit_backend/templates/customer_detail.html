@@ -3,63 +3,36 @@
 
 {% block extra_css %}
 <style>
-    .breadcrumb {
-        font-size: 0.9rem;
-        color: #888;
-        margin-bottom: 1.25rem;
-    }
-    .breadcrumb a {
-        color: {{ branding.color_primary }};
-        text-decoration: none;
-    }
+    .breadcrumb { font-size: 0.9rem; color: #888; margin-bottom: 1.25rem; }
+    .breadcrumb a { color: {{ branding.color_primary }}; text-decoration: none; }
     .breadcrumb a:hover { text-decoration: underline; }
     .breadcrumb span { margin: 0 0.4rem; }
 
     .page-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        margin-bottom: 1.5rem;
-        gap: 1rem;
-        flex-wrap: wrap;
+        display: flex; justify-content: space-between;
+        align-items: flex-start; margin-bottom: 1.5rem;
+        gap: 1rem; flex-wrap: wrap;
     }
-    .page-header h1 {
-        font-size: 1.75rem;
-        color: {{ branding.color_primary }};
-        line-height: 1.2;
-    }
-    .page-header .meta {
-        color: #888;
-        font-size: 0.9rem;
-        margin-top: 0.3rem;
-    }
+    .page-header h1 { font-size: 1.75rem; color: {{ branding.color_primary }}; line-height: 1.2; }
+    .page-header .meta { color: #888; font-size: 0.9rem; margin-top: 0.3rem; }
     .header-actions { display: flex; gap: 0.75rem; flex-shrink: 0; }
 
     .detail-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 1.25rem;
-        margin-bottom: 1.25rem;
+        display: grid; grid-template-columns: 1fr 1fr;
+        gap: 1.25rem; margin-bottom: 1.25rem;
     }
     @media (max-width: 700px) { .detail-grid { grid-template-columns: 1fr; } }
 
     .section-title {
-        font-size: 0.75rem;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.6px;
-        color: #888;
-        margin-bottom: 0.75rem;
-        padding-bottom: 0.5rem;
+        font-size: 0.75rem; font-weight: 700; text-transform: uppercase;
+        letter-spacing: 0.6px; color: #888;
+        margin-bottom: 0.75rem; padding-bottom: 0.5rem;
         border-bottom: 1px solid #eee;
     }
     .field-row {
-        display: flex;
-        justify-content: space-between;
-        padding: 0.45rem 0;
-        border-bottom: 1px solid #f5f5f5;
-        font-size: 0.9rem;
-        gap: 1rem;
+        display: flex; justify-content: space-between;
+        padding: 0.45rem 0; border-bottom: 1px solid #f5f5f5;
+        font-size: 0.9rem; gap: 1rem;
     }
     .field-row:last-child { border-bottom: none; }
     .field-label { color: #888; flex-shrink: 0; }
@@ -67,124 +40,126 @@
     .field-value.empty { color: #ccc; font-weight: 400; }
 
     .badge {
-        display: inline-block;
-        padding: 0.2rem 0.65rem;
-        border-radius: 10px;
-        font-size: 0.8rem;
-        font-weight: 500;
+        display: inline-block; padding: 0.2rem 0.65rem;
+        border-radius: 10px; font-size: 0.8rem; font-weight: 500;
     }
     .badge-active   { background: #e8f5e9; color: #2e7d32; }
     .badge-inactive { background: #fce4ec; color: #c2185b; }
     .badge-onhold   { background: #fff3e0; color: #e65100; }
     .badge-lead     { background: #e3f2fd; color: #1565c0; }
+    .badge-taxable  { background: #e8f5e9; color: #2e7d32; }
+    .badge-exempt   { background: #f5f5f5; color: #888; }
+
+    /* Service locations */
+    .location-card {
+        border: 1px solid #eee; border-radius: 6px;
+        padding: 1rem 1.25rem; margin-bottom: 0.75rem;
+    }
+    .location-card.primary-location {
+        border-color: {{ branding.color_primary }}44;
+        background: {{ branding.color_primary }}05;
+    }
+    .location-header {
+        display: flex; justify-content: space-between;
+        align-items: flex-start; gap: 1rem;
+    }
+    .location-name { font-weight: 600; font-size: 0.95rem; color: #222; }
+    .location-address { font-size: 0.88rem; color: #666; margin-top: 0.3rem; line-height: 1.5; }
+    .location-meta {
+        display: flex; gap: 0.5rem; margin-top: 0.6rem;
+        flex-wrap: wrap; align-items: center;
+    }
+    .location-actions { display: flex; gap: 0.5rem; flex-shrink: 0; }
+    .primary-badge {
+        font-size: 0.7rem; background: {{ branding.color_primary }};
+        color: white; padding: 0.15rem 0.5rem; border-radius: 8px;
+        font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px;
+        margin-right: 0.4rem;
+    }
+    .location-fields {
+        margin-top: 0.75rem; padding-top: 0.75rem;
+        border-top: 1px solid #f0f0f0;
+        display: grid; grid-template-columns: 1fr 1fr;
+        gap: 0.5rem 1.5rem; font-size: 0.85rem;
+    }
+    .location-field-item { display: flex; flex-direction: column; gap: 0.1rem; }
+    .location-field-label {
+        font-size: 0.72rem; text-transform: uppercase;
+        letter-spacing: 0.4px; color: #aaa; font-weight: 600;
+    }
+    .location-field-value { color: #333; white-space: pre-wrap; }
+    .no-locations { color: #aaa; font-size: 0.9rem; padding: 1rem 0; text-align: center; }
+
+    /* Custom fields */
+    .custom-fields-grid {
+        display: grid; grid-template-columns: 1fr 1fr;
+        gap: 0.75rem 2rem; margin-top: 0.25rem;
+    }
+    @media (max-width: 700px) { .custom-fields-grid { grid-template-columns: 1fr; } }
+    .custom-field-item { font-size: 0.9rem; }
+    .custom-field-label {
+        font-size: 0.72rem; text-transform: uppercase;
+        letter-spacing: 0.4px; color: #aaa; font-weight: 600; margin-bottom: 0.2rem;
+    }
+    .custom-field-value { color: #333; white-space: pre-wrap; line-height: 1.4; }
+    .custom-field-value.empty { color: #ccc; font-style: italic; }
 
     /* Contacts */
     .contact-card {
-        border: 1px solid #eee;
-        border-radius: 6px;
-        padding: 1rem;
-        margin-bottom: 0.75rem;
-        position: relative;
+        border: 1px solid #eee; border-radius: 6px;
+        padding: 1rem; margin-bottom: 0.75rem; position: relative;
     }
     .contact-card.primary {
         border-color: {{ branding.color_primary }}44;
         background: {{ branding.color_primary }}08;
     }
-    .contact-name {
-        font-weight: 600;
-        font-size: 0.95rem;
-        color: #222;
-    }
-    .contact-title {
-        font-size: 0.85rem;
-        color: #888;
-        margin-top: 0.1rem;
-    }
+    .contact-name { font-weight: 600; font-size: 0.95rem; color: #222; }
+    .contact-title { font-size: 0.85rem; color: #888; margin-top: 0.1rem; }
     .contact-details {
-        margin-top: 0.6rem;
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.5rem 1.5rem;
-        font-size: 0.85rem;
+        margin-top: 0.6rem; display: flex;
+        flex-wrap: wrap; gap: 0.5rem 1.5rem; font-size: 0.85rem;
     }
     .contact-details a { color: {{ branding.color_primary }}; text-decoration: none; }
     .contact-details a:hover { text-decoration: underline; }
-    .primary-badge {
-        position: absolute;
-        top: 0.75rem;
-        right: 0.75rem;
-        font-size: 0.7rem;
-        background: {{ branding.color_primary }};
-        color: white;
-        padding: 0.15rem 0.5rem;
-        border-radius: 8px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.4px;
+    .contact-primary-badge {
+        position: absolute; top: 0.75rem; right: 0.75rem;
+        font-size: 0.7rem; background: {{ branding.color_primary }};
+        color: white; padding: 0.15rem 0.5rem; border-radius: 8px;
+        font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px;
     }
-    .no-contacts {
-        color: #aaa;
-        font-size: 0.9rem;
-        padding: 1rem 0;
-        text-align: center;
-    }
+    .no-contacts { color: #aaa; font-size: 0.9rem; padding: 1rem 0; text-align: center; }
 
     /* Notes */
-    .note-item {
-        padding: 0.75rem 0;
-        border-bottom: 1px solid #f0f0f0;
-        font-size: 0.9rem;
-    }
+    .note-item { padding: 0.75rem 0; border-bottom: 1px solid #f0f0f0; font-size: 0.9rem; }
     .note-item:last-child { border-bottom: none; }
     .note-meta {
-        font-size: 0.8rem;
-        color: #aaa;
-        margin-bottom: 0.3rem;
-        display: flex;
-        gap: 0.75rem;
-        align-items: center;
+        font-size: 0.8rem; color: #aaa; margin-bottom: 0.3rem;
+        display: flex; gap: 0.75rem; align-items: center;
     }
     .note-type-badge {
-        font-size: 0.7rem;
-        background: #f0f0f0;
-        color: #666;
-        padding: 0.1rem 0.45rem;
-        border-radius: 6px;
-        font-weight: 500;
+        font-size: 0.7rem; background: #f0f0f0; color: #666;
+        padding: 0.1rem 0.45rem; border-radius: 6px; font-weight: 500;
     }
     .note-text { color: #333; line-height: 1.5; white-space: pre-wrap; }
     .no-notes { color: #aaa; font-size: 0.9rem; padding: 1rem 0; text-align: center; }
 
-    /* Add note form */
     .add-note-form { margin-top: 1rem; }
     .add-note-form textarea {
-        width: 100%;
-        padding: 0.75rem;
-        border: 1px solid #ddd;
-        border-radius: 6px;
-        font-size: 0.9rem;
-        font-family: inherit;
-        resize: vertical;
-        min-height: 80px;
+        width: 100%; padding: 0.75rem; border: 1px solid #ddd;
+        border-radius: 6px; font-size: 0.9rem; font-family: inherit;
+        resize: vertical; min-height: 80px;
     }
     .add-note-form textarea:focus {
-        outline: none;
-        border-color: {{ branding.color_primary }};
+        outline: none; border-color: {{ branding.color_primary }};
         box-shadow: 0 0 0 2px {{ branding.color_primary }}22;
     }
     .note-form-row {
-        display: flex;
-        gap: 0.75rem;
-        align-items: center;
-        margin-top: 0.5rem;
-        flex-wrap: wrap;
+        display: flex; gap: 0.75rem; align-items: center;
+        margin-top: 0.5rem; flex-wrap: wrap;
     }
     .note-form-row select {
-        padding: 0.5rem 0.75rem;
-        border: 1px solid #ddd;
-        border-radius: 4px;
-        font-size: 0.875rem;
-        background: white;
+        padding: 0.5rem 0.75rem; border: 1px solid #ddd;
+        border-radius: 4px; font-size: 0.875rem; background: white;
     }
 
     .btn { display: inline-block; padding: 0.6rem 1.25rem; border-radius: 4px;
@@ -216,9 +191,6 @@
         <h1>{{ customer.property_name }}</h1>
         <div class="meta">
             {{ customer.customer_type }}
-            {% if customer.city and customer.state %}
-             · {{ customer.city }}, {{ customer.state }}
-            {% endif %}
              · Added {{ customer.created_at.strftime('%b %d, %Y') if customer.created_at else '—' }}
         </div>
     </div>
@@ -227,7 +199,7 @@
     </div>
 </div>
 
-<!-- Top row: details + address -->
+<!-- Property details + Tax settings -->
 <div class="detail-grid">
 
     <!-- Property details -->
@@ -272,33 +244,144 @@
         </div>
     </div>
 
-    <!-- Address -->
+    <!-- Tax settings + notes -->
     <div class="card">
-        <div class="section-title">Service Address</div>
-        {% if customer.address %}
-        <div style="font-size: 0.95rem; line-height: 1.8; color: #333;">
-            {{ customer.address }}<br>
-            {% if customer.address_2 %}{{ customer.address_2 }}<br>{% endif %}
-            {% if customer.city or customer.state or customer.zip %}
-            {{ customer.city or '' }}{% if customer.city and customer.state %}, {% endif %}{{ customer.state or '' }} {{ customer.zip or '' }}
-            {% endif %}
+        <div class="section-title">Tax Settings</div>
+        <div class="field-row">
+            <span class="field-label">Tax Status</span>
+            <span class="field-value">
+                {% if customer.is_taxable %}
+                <span class="badge badge-taxable">Taxable</span>
+                {% else %}
+                <span class="badge badge-exempt">Tax Exempt</span>
+                {% endif %}
+            </span>
         </div>
-        <a href="https://maps.google.com/?q={{ customer.address }},{{ customer.city }},{{ customer.state }}"
-           target="_blank" rel="noopener"
-           style="display:inline-block; margin-top:0.75rem; font-size:0.85rem; color:{{ branding.color_primary }};">
-            View on map →
-        </a>
-        {% else %}
-        <p style="color:#ccc; font-size:0.9rem; padding-top:0.5rem;">No address on file.</p>
-        {% endif %}
+        <div class="field-row">
+            <span class="field-label">Default County</span>
+            <span class="field-value {% if not customer.tax_county %}empty{% endif %}">
+                {{ customer.tax_county or '—' }}
+            </span>
+        </div>
+        <div style="margin-top:0.6rem; font-size:0.8rem; color:#aaa;">
+            Tax rates are applied per service location county.
+        </div>
 
         {% if customer.notes %}
         <div style="margin-top:1rem; padding-top:1rem; border-top:1px solid #f0f0f0;">
-            <div class="section-title">Property Notes</div>
+            <div class="section-title">General Notes</div>
             <p style="font-size:0.9rem; color:#555; line-height:1.5; white-space:pre-wrap;">{{ customer.notes }}</p>
         </div>
         {% endif %}
     </div>
+</div>
+
+<!-- Custom fields -->
+{% if custom_fields %}
+<div class="card" style="margin-bottom:1.25rem;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+        <div class="section-title" style="margin-bottom:0;">Additional Information</div>
+        <a href="/{{ company_key }}/settings/fields"
+           style="font-size:0.78rem; color:{{ branding.color_primary }};">Manage fields →</a>
+    </div>
+    <div class="custom-fields-grid">
+        {% for field in custom_fields %}
+        <div class="custom-field-item">
+            <div class="custom-field-label">{{ field.field_name }}</div>
+            {% if field.value %}
+            <div class="custom-field-value">{{ field.value }}</div>
+            {% else %}
+            <div class="custom-field-value empty">Not set</div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Service Locations -->
+<div class="card" style="margin-bottom:1.25rem;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+        <div class="section-title" style="margin-bottom:0;">
+            Service Locations
+            {% if locations %}
+            <span style="font-weight:400; text-transform:none; letter-spacing:0; color:#aaa; margin-left:0.4rem;">
+                ({{ locations|length }})
+            </span>
+            {% endif %}
+        </div>
+        <a href="/{{ company_key }}/customers/{{ customer.id }}/locations/new"
+           class="btn btn-outline btn-sm">+ Add Location</a>
+    </div>
+
+    {% if locations %}
+        {% for loc in locations %}
+        <div class="location-card {% if loc.is_primary %}primary-location{% endif %}">
+            <div class="location-header">
+                <div>
+                    <div class="location-name">
+                        {% if loc.is_primary %}<span class="primary-badge">Primary</span>{% endif %}
+                        {{ loc.location_name or customer.property_name }}
+                    </div>
+                    {% if loc.address %}
+                    <div class="location-address">
+                        {{ loc.address }}
+                        {% if loc.address_2 %}, {{ loc.address_2 }}{% endif %}
+                        {% if loc.city or loc.state %}
+                        <br>{{ loc.city or '' }}{% if loc.city and loc.state %}, {% endif %}{{ loc.state or '' }} {{ loc.zip or '' }}
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                    <div class="location-meta">
+                        {% if loc.is_taxable %}
+                        <span class="badge badge-taxable" style="font-size:0.72rem;">Taxable</span>
+                        {% else %}
+                        <span class="badge badge-exempt" style="font-size:0.72rem;">Exempt</span>
+                        {% endif %}
+                        {% if loc.county %}
+                        <span style="font-size:0.82rem; color:#666;">{{ loc.county }} County</span>
+                        {% endif %}
+                        {% if loc.address %}
+                        <a href="https://maps.google.com/?q={{ loc.address }},{{ loc.city }},{{ loc.state }}"
+                           target="_blank" rel="noopener"
+                           style="font-size:0.82rem; color:{{ branding.color_primary }};">Map →</a>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="location-actions">
+                    <a href="/{{ company_key }}/customers/{{ customer.id }}/locations/{{ loc.id }}/edit"
+                       class="btn btn-outline btn-sm">Edit</a>
+                </div>
+            </div>
+
+            <!-- Location custom fields (only show if any have values) -->
+            {% set has_values = loc.custom_fields | selectattr('value') | list %}
+            {% if has_values %}
+            <div class="location-fields">
+                {% for lf in loc.custom_fields %}
+                {% if lf.value %}
+                <div class="location-field-item">
+                    <div class="location-field-label">{{ lf.field_name }}</div>
+                    <div class="location-field-value">{{ lf.value }}</div>
+                </div>
+                {% endif %}
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            {% if loc.notes %}
+            <div style="margin-top:0.75rem; padding-top:0.75rem; border-top:1px solid #f0f0f0;
+                        font-size:0.88rem; color:#555; white-space:pre-wrap; line-height:1.5;">{{ loc.notes }}</div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    {% else %}
+    <div class="no-locations">
+        No service locations on file.
+        <a href="/{{ company_key }}/customers/{{ customer.id }}/locations/new"
+           style="color:{{ branding.color_primary }};">Add one →</a>
+    </div>
+    {% endif %}
 </div>
 
 <!-- Contacts -->
@@ -308,17 +391,12 @@
         <a href="/{{ company_key }}/customers/{{ customer.id }}/contacts/new"
            class="btn btn-outline btn-sm">+ Add Contact</a>
     </div>
-
     {% if contacts %}
         {% for contact in contacts %}
         <div class="contact-card {% if contact.is_primary %}primary{% endif %}">
-            {% if contact.is_primary %}
-            <span class="primary-badge">Primary</span>
-            {% endif %}
+            {% if contact.is_primary %}<span class="contact-primary-badge">Primary</span>{% endif %}
             <div class="contact-name">{{ contact.first_name }} {{ contact.last_name }}</div>
-            {% if contact.title %}
-            <div class="contact-title">{{ contact.title }}</div>
-            {% endif %}
+            {% if contact.title %}<div class="contact-title">{{ contact.title }}</div>{% endif %}
             <div class="contact-details">
                 {% if contact.office_phone %}
                 <span>📞 <a href="tel:{{ contact.office_phone }}">{{ contact.office_phone }}</a></span>
@@ -333,15 +411,16 @@
         </div>
         {% endfor %}
     {% else %}
-    <div class="no-contacts">No contacts on file. <a href="/{{ company_key }}/customers/{{ customer.id }}/contacts/new" style="color:{{ branding.color_primary }};">Add one →</a></div>
+    <div class="no-contacts">No contacts on file.
+        <a href="/{{ company_key }}/customers/{{ customer.id }}/contacts/new"
+           style="color:{{ branding.color_primary }};">Add one →</a>
+    </div>
     {% endif %}
 </div>
 
 <!-- Notes -->
 <div class="card">
     <div class="section-title">Activity & Notes</div>
-
-    <!-- Add note form -->
     <div class="add-note-form">
         <form method="POST" action="/{{ company_key }}/customers/{{ customer.id }}/notes">
             <textarea name="note_text" placeholder="Add a note about this customer..." rows="3"></textarea>
@@ -358,8 +437,6 @@
             </div>
         </form>
     </div>
-
-    <!-- Notes list -->
     <div style="margin-top:1.25rem;">
         {% if notes %}
             {% for note in notes %}

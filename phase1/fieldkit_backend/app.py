@@ -110,25 +110,30 @@ def get_customer_count(company_key):
     except Exception:
         return 0
 
+def get_management_companies(conn):
+    """Get all management companies for a company database."""
+    cur = conn.cursor()
+    cur.execute("SELECT id, name FROM management_companies WHERE deleted_at IS NULL ORDER BY name ASC")
+    result = cur.fetchall()
+    cur.close()
+    return result
+
 # ============================================================================
 # Custom field helpers
 # ============================================================================
 
 def get_custom_fields(conn, customer_id):
-    """Get all active field definitions with customer's current values."""
+    """Customer-level custom fields (not location-scoped)."""
     cur = conn.cursor()
     cur.execute("""
-        SELECT
-            fd.id as definition_id,
-            fd.field_name,
-            fd.field_type,
-            fd.display_order,
-            fd.is_active,
-            COALESCE(fv.value, '') as value
+        SELECT fd.id as definition_id, fd.field_name, fd.field_type,
+               fd.display_order, fd.is_active,
+               COALESCE(fv.value, '') as value
         FROM customer_field_definitions fd
         LEFT JOIN customer_field_values fv
             ON fv.field_definition_id = fd.id
             AND fv.customer_id = %s
+            AND fv.location_id IS NULL
         WHERE fd.is_active = TRUE
         ORDER BY fd.display_order ASC
     """, (customer_id,))
@@ -136,8 +141,25 @@ def get_custom_fields(conn, customer_id):
     cur.close()
     return fields
 
+def get_location_custom_fields(conn, location_id):
+    """Location-scoped custom field values."""
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT fd.id as definition_id, fd.field_name, fd.field_type,
+               fd.display_order,
+               COALESCE(fv.value, '') as value
+        FROM customer_field_definitions fd
+        LEFT JOIN customer_field_values fv
+            ON fv.field_definition_id = fd.id
+            AND fv.location_id = %s
+        WHERE fd.is_active = TRUE
+        ORDER BY fd.display_order ASC
+    """, (location_id,))
+    fields = cur.fetchall()
+    cur.close()
+    return fields
+
 def get_field_definitions(conn):
-    """Get all field definitions for a company (active and inactive)."""
     cur = conn.cursor()
     cur.execute("""
         SELECT id, field_name, field_type, display_order, is_active
@@ -148,22 +170,34 @@ def get_field_definitions(conn):
     cur.close()
     return defs
 
-def save_custom_fields(conn, customer_id, form_data, username):
-    """Upsert custom field values from form submission."""
+def save_custom_fields(conn, customer_id, form_data, username, location_id=None):
+    """Upsert custom field values. If location_id provided, scopes to location."""
     cur = conn.cursor()
     for key, value in form_data.items():
         if key.startswith('field_'):
             try:
                 definition_id = int(key.replace('field_', ''))
-                cur.execute("""
-                    INSERT INTO customer_field_values
-                        (customer_id, field_definition_id, value, updated_by)
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (customer_id, field_definition_id)
-                    DO UPDATE SET value = EXCLUDED.value,
-                                  updated_at = CURRENT_TIMESTAMP,
-                                  updated_by = EXCLUDED.updated_by
-                """, (customer_id, definition_id, value.strip(), username))
+                if location_id:
+                    cur.execute("""
+                        INSERT INTO customer_field_values
+                            (customer_id, field_definition_id, location_id, value, updated_by)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (customer_id, field_definition_id)
+                        DO UPDATE SET value = EXCLUDED.value,
+                                      location_id = EXCLUDED.location_id,
+                                      updated_at = CURRENT_TIMESTAMP,
+                                      updated_by = EXCLUDED.updated_by
+                    """, (customer_id, definition_id, location_id, value.strip(), username))
+                else:
+                    cur.execute("""
+                        INSERT INTO customer_field_values
+                            (customer_id, field_definition_id, value, updated_by)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (customer_id, field_definition_id)
+                        DO UPDATE SET value = EXCLUDED.value,
+                                      updated_at = CURRENT_TIMESTAMP,
+                                      updated_by = EXCLUDED.updated_by
+                    """, (customer_id, definition_id, value.strip(), username))
             except (ValueError, Exception):
                 continue
     cur.close()
@@ -398,6 +432,19 @@ def customer_detail(company_key, customer_id, branding, all_companies, company_a
     """, (customer_id,))
     notes = cur.fetchall()
 
+    cur.execute("""
+        SELECT * FROM service_locations
+        WHERE customer_id = %s AND deleted_at IS NULL
+        ORDER BY is_primary DESC, location_name ASC
+    """, (customer_id,))
+    locations_raw = cur.fetchall()
+
+    locations = []
+    for loc in locations_raw:
+        loc_dict = dict(loc)
+        loc_dict['custom_fields'] = get_location_custom_fields(conn, loc['id'])
+        locations.append(loc_dict)
+
     custom_fields = get_custom_fields(conn, customer_id)
     cur.close(); conn.close()
 
@@ -405,7 +452,7 @@ def customer_detail(company_key, customer_id, branding, all_companies, company_a
         branding=branding, company_key=company_key,
         company_access=company_access, all_companies=all_companies,
         customer=customer, contacts=contacts, notes=notes,
-        custom_fields=custom_fields,
+        locations=locations, custom_fields=custom_fields,
         nc_counties=NC_COUNTIES,
     )
 
@@ -441,21 +488,25 @@ def add_note(company_key, customer_id):
 @with_branding
 def customer_new(company_key, branding, all_companies, company_access):
     conn = get_db_connection(company_key)
-    field_defs = get_field_definitions(conn)
+    field_defs          = get_field_definitions(conn)
+    management_companies = get_management_companies(conn)
 
     if request.method == 'POST':
         cur = conn.cursor()
         try:
+            mgmt_id = request.form.get('management_company_id') or None
+            if mgmt_id:
+                mgmt_id = int(mgmt_id)
+
             cur.execute("""
                 INSERT INTO customers (
                     property_name, customer_type, status,
                     address, address_2, city, state, zip,
                     billing_email, payment_terms, notes,
-                    is_taxable, tax_county,
+                    is_taxable, tax_county, management_company_id,
                     created_by, updated_by
-                ) VALUES (
-                    %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s
-                ) RETURNING id
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                RETURNING id
             """, (
                 request.form.get('property_name','').strip(),
                 request.form.get('customer_type','Multi Family'),
@@ -470,6 +521,7 @@ def customer_new(company_key, branding, all_companies, company_access):
                 request.form.get('notes','').strip(),
                 request.form.get('is_taxable') == 'on',
                 request.form.get('tax_county','').strip() or None,
+                mgmt_id,
                 session.get('username'),
                 session.get('username'),
             ))
@@ -485,6 +537,7 @@ def customer_new(company_key, branding, all_companies, company_access):
                 branding=branding, company_key=company_key,
                 company_access=company_access, all_companies=all_companies,
                 customer=None, field_defs=field_defs,
+                management_companies=management_companies,
                 field_values={}, nc_counties=NC_COUNTIES, error=str(e),
             )
 
@@ -493,6 +546,7 @@ def customer_new(company_key, branding, all_companies, company_access):
         branding=branding, company_key=company_key,
         company_access=company_access, all_companies=all_companies,
         customer=None, field_defs=field_defs,
+        management_companies=management_companies,
         field_values={}, nc_counties=NC_COUNTIES, error=None,
     )
 
@@ -513,18 +567,23 @@ def customer_edit(company_key, customer_id, branding, all_companies, company_acc
     if not customer:
         cur.close(); conn.close(); abort(404)
 
-    field_defs    = get_field_definitions(conn)
-    custom_fields = get_custom_fields(conn, customer_id)
-    field_values  = {f['definition_id']: f['value'] for f in custom_fields}
+    field_defs           = get_field_definitions(conn)
+    management_companies = get_management_companies(conn)
+    custom_fields        = get_custom_fields(conn, customer_id)
+    field_values         = {f['definition_id']: f['value'] for f in custom_fields}
 
     if request.method == 'POST':
         try:
+            mgmt_id = request.form.get('management_company_id') or None
+            if mgmt_id:
+                mgmt_id = int(mgmt_id)
+
             cur.execute("""
                 UPDATE customers SET
                     property_name = %s, customer_type = %s, status = %s,
                     address = %s, address_2 = %s, city = %s, state = %s, zip = %s,
                     billing_email = %s, payment_terms = %s, notes = %s,
-                    is_taxable = %s, tax_county = %s,
+                    is_taxable = %s, tax_county = %s, management_company_id = %s,
                     updated_by = %s, updated_at = CURRENT_TIMESTAMP
                 WHERE id = %s
             """, (
@@ -541,6 +600,7 @@ def customer_edit(company_key, customer_id, branding, all_companies, company_acc
                 request.form.get('notes','').strip(),
                 request.form.get('is_taxable') == 'on',
                 request.form.get('tax_county','').strip() or None,
+                mgmt_id,
                 session.get('username'),
                 customer_id,
             ))
@@ -555,6 +615,7 @@ def customer_edit(company_key, customer_id, branding, all_companies, company_acc
                 branding=branding, company_key=company_key,
                 company_access=company_access, all_companies=all_companies,
                 customer=customer, field_defs=field_defs,
+                management_companies=management_companies,
                 field_values=field_values, nc_counties=NC_COUNTIES, error=str(e),
             )
 
@@ -563,6 +624,146 @@ def customer_edit(company_key, customer_id, branding, all_companies, company_acc
         branding=branding, company_key=company_key,
         company_access=company_access, all_companies=all_companies,
         customer=customer, field_defs=field_defs,
+        management_companies=management_companies,
+        field_values=field_values, nc_counties=NC_COUNTIES, error=None,
+    )
+
+# ============================================================================
+# Service Locations — new
+# ============================================================================
+
+@app.route('/<company_key>/customers/<int:customer_id>/locations/new', methods=['GET', 'POST'])
+@login_required
+@company_access_required
+@with_branding
+def location_new(company_key, customer_id, branding, all_companies, company_access):
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+
+    cur.execute("SELECT id, property_name FROM customers WHERE id = %s AND deleted_at IS NULL", (customer_id,))
+    customer = cur.fetchone()
+    if not customer:
+        cur.close(); conn.close(); abort(404)
+
+    field_defs = get_field_definitions(conn)
+
+    if request.method == 'POST':
+        try:
+            cur.execute("SELECT COUNT(*) as count FROM service_locations WHERE customer_id = %s AND deleted_at IS NULL", (customer_id,))
+            is_first = cur.fetchone()['count'] == 0
+
+            cur.execute("""
+                INSERT INTO service_locations (
+                    customer_id, location_name, address, address_2,
+                    city, state, zip, county, is_taxable, is_primary,
+                    notes, created_by, updated_by
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                RETURNING id
+            """, (
+                customer_id,
+                request.form.get('location_name','').strip() or None,
+                request.form.get('address','').strip(),
+                request.form.get('address_2','').strip(),
+                request.form.get('city','').strip(),
+                request.form.get('state','').strip(),
+                request.form.get('zip','').strip(),
+                request.form.get('county','').strip() or None,
+                request.form.get('is_taxable') == 'on',
+                is_first,
+                request.form.get('notes','').strip(),
+                session.get('username'),
+                session.get('username'),
+            ))
+            location_id = cur.fetchone()['id']
+            save_custom_fields(conn, customer_id, request.form, session.get('username'), location_id=location_id)
+            conn.commit()
+            cur.close(); conn.close()
+            return redirect(f'/{company_key}/customers/{customer_id}')
+        except Exception as e:
+            conn.rollback()
+            cur.close(); conn.close()
+            return render_template('location_form.html',
+                branding=branding, company_key=company_key,
+                company_access=company_access, all_companies=all_companies,
+                customer=customer, location=None, field_defs=field_defs,
+                field_values={}, nc_counties=NC_COUNTIES, error=str(e),
+            )
+
+    cur.close(); conn.close()
+    return render_template('location_form.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        customer=customer, location=None, field_defs=field_defs,
+        field_values={}, nc_counties=NC_COUNTIES, error=None,
+    )
+
+# ============================================================================
+# Service Locations — edit
+# ============================================================================
+
+@app.route('/<company_key>/customers/<int:customer_id>/locations/<int:location_id>/edit', methods=['GET', 'POST'])
+@login_required
+@company_access_required
+@with_branding
+def location_edit(company_key, customer_id, location_id, branding, all_companies, company_access):
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+
+    cur.execute("SELECT id, property_name FROM customers WHERE id = %s AND deleted_at IS NULL", (customer_id,))
+    customer = cur.fetchone()
+    if not customer:
+        cur.close(); conn.close(); abort(404)
+
+    cur.execute("SELECT * FROM service_locations WHERE id = %s AND customer_id = %s AND deleted_at IS NULL", (location_id, customer_id))
+    location = cur.fetchone()
+    if not location:
+        cur.close(); conn.close(); abort(404)
+
+    field_defs   = get_field_definitions(conn)
+    loc_fields   = get_location_custom_fields(conn, location_id)
+    field_values = {f['definition_id']: f['value'] for f in loc_fields}
+
+    if request.method == 'POST':
+        try:
+            cur.execute("""
+                UPDATE service_locations SET
+                    location_name = %s, address = %s, address_2 = %s,
+                    city = %s, state = %s, zip = %s, county = %s,
+                    is_taxable = %s, notes = %s,
+                    updated_by = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+            """, (
+                request.form.get('location_name','').strip() or None,
+                request.form.get('address','').strip(),
+                request.form.get('address_2','').strip(),
+                request.form.get('city','').strip(),
+                request.form.get('state','').strip(),
+                request.form.get('zip','').strip(),
+                request.form.get('county','').strip() or None,
+                request.form.get('is_taxable') == 'on',
+                request.form.get('notes','').strip(),
+                session.get('username'),
+                location_id,
+            ))
+            save_custom_fields(conn, customer_id, request.form, session.get('username'), location_id=location_id)
+            conn.commit()
+            cur.close(); conn.close()
+            return redirect(f'/{company_key}/customers/{customer_id}')
+        except Exception as e:
+            conn.rollback()
+            cur.close(); conn.close()
+            return render_template('location_form.html',
+                branding=branding, company_key=company_key,
+                company_access=company_access, all_companies=all_companies,
+                customer=customer, location=location, field_defs=field_defs,
+                field_values=field_values, nc_counties=NC_COUNTIES, error=str(e),
+            )
+
+    cur.close(); conn.close()
+    return render_template('location_form.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        customer=customer, location=location, field_defs=field_defs,
         field_values=field_values, nc_counties=NC_COUNTIES, error=None,
     )
 

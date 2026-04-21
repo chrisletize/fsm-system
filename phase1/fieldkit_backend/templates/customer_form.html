@@ -171,6 +171,18 @@
                     value="{{ customer.billing_email if customer else '' }}"
                     placeholder="billing@property.com">
             </div>
+            <div class="form-group">
+                <label>Management Company</label>
+                <select name="management_company_id">
+                    <option value="">— None —</option>
+                    {% for mc in management_companies %}
+                    <option value="{{ mc.id }}"
+                        {% if customer and customer.management_company_id == mc.id %}selected{% endif %}>
+                        {{ mc.name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
         </div>
     </div>
 
