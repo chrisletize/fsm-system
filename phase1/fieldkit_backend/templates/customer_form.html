@@ -174,7 +174,7 @@
             <div class="form-group">
                 <label>Management Company</label>
                 <select name="management_company_id">
-                    <option value="">— None —</option>
+                    <option value="">-- None --</option>
                     {% for mc in management_companies %}
                     <option value="{{ mc.id }}"
                         {% if customer and customer.management_company_id == mc.id %}selected{% endif %}>
