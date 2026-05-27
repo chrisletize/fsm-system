@@ -384,19 +384,55 @@
     {% endif %}
 </div>
 
-<!-- Contacts -->
+<!-- Contacts — paste this block to replace the existing Contacts card in customer_detail.html -->
+<!-- Find: "<!-- Contacts -->" and replace the entire card div through the closing </div> -->
+
 <div class="card" style="margin-bottom:1.25rem;">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
-        <div class="section-title" style="margin-bottom:0;">Contacts</div>
+        <div class="section-title" style="margin-bottom:0;">
+            Contacts
+            {% if contacts %}
+            <span style="font-weight:400; text-transform:none; letter-spacing:0; color:#aaa; margin-left:0.4rem;">
+                ({{ contacts|length }})
+            </span>
+            {% endif %}
+        </div>
         <a href="/{{ company_key }}/customers/{{ customer.id }}/contacts/new"
            class="btn btn-outline btn-sm">+ Add Contact</a>
     </div>
+
     {% if contacts %}
         {% for contact in contacts %}
         <div class="contact-card {% if contact.is_primary %}primary{% endif %}">
-            {% if contact.is_primary %}<span class="contact-primary-badge">Primary</span>{% endif %}
-            <div class="contact-name">{{ contact.first_name }} {{ contact.last_name }}</div>
-            {% if contact.title %}<div class="contact-title">{{ contact.title }}</div>{% endif %}
+            <!-- Top row: name + actions -->
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:1rem;">
+                <div>
+                    <div class="contact-name">{{ contact.first_name }} {{ contact.last_name }}</div>
+                    {% if contact.title %}
+                    <div class="contact-title">{{ contact.title }}</div>
+                    {% endif %}
+                </div>
+                <div style="display:flex; gap:0.5rem; align-items:center; flex-shrink:0;">
+                    {% if contact.is_primary %}
+                    <span class="contact-primary-badge">Primary</span>
+                    {% endif %}
+                    <a href="/{{ company_key }}/customers/{{ customer.id }}/contacts/{{ contact.id }}/edit"
+                       class="btn btn-outline btn-sm">Edit</a>
+                    {% if contacts|length > 1 %}
+                    <form method="POST"
+                          action="/{{ company_key }}/customers/{{ customer.id }}/contacts/{{ contact.id }}/delete"
+                          style="display:inline;"
+                          onsubmit="return confirm('Remove {{ contact.first_name }} {{ contact.last_name }}?')">
+                        <button type="submit" class="btn btn-sm"
+                                style="background:#fff0f0; color:#c62828; border:1px solid #ffcdd2;">
+                            Remove
+                        </button>
+                    </form>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Contact details -->
             <div class="contact-details">
                 {% if contact.office_phone %}
                 <span>📞 <a href="tel:{{ contact.office_phone }}">{{ contact.office_phone }}</a></span>
@@ -408,8 +444,54 @@
                 <span>✉️ <a href="mailto:{{ contact.office_email }}">{{ contact.office_email }}</a></span>
                 {% endif %}
             </div>
+
+            <!-- Communication flags -->
+            <div style="display:flex; flex-wrap:wrap; gap:0.4rem; margin-top:0.6rem;">
+                {% if contact.accepts_billing %}
+                <span style="font-size:0.72rem; background:#e8f5e9; color:#2e7d32;
+                             padding:0.15rem 0.55rem; border-radius:8px; font-weight:600;">
+                    📄 Invoices & Statements
+                </span>
+                {% endif %}
+                {% if contact.accepts_general %}
+                <span style="font-size:0.72rem; background:#e3f2fd; color:#1565c0;
+                             padding:0.15rem 0.55rem; border-radius:8px; font-weight:600;">
+                    💬 General
+                </span>
+                {% endif %}
+                {% if contact.accepts_statements and not contact.accepts_billing %}
+                <span style="font-size:0.72rem; background:#f3e5f5; color:#6a1b9a;
+                             padding:0.15rem 0.55rem; border-radius:8px; font-weight:600;">
+                    📊 Statements
+                </span>
+                {% endif %}
+                {% if not contact.accepts_billing and not contact.accepts_general and not contact.accepts_statements %}
+                <span style="font-size:0.72rem; background:#f5f5f5; color:#aaa;
+                             padding:0.15rem 0.55rem; border-radius:8px;">
+                    No email flags set
+                </span>
+                {% endif %}
+            </div>
+
+            {% if contact.notes %}
+            <div style="margin-top:0.6rem; font-size:0.82rem; color:#888;
+                        font-style:italic; line-height:1.4;">{{ contact.notes }}</div>
+            {% endif %}
         </div>
         {% endfor %}
+
+        <!-- Billing coverage warning -->
+        {% set billing_contacts = contacts | selectattr('accepts_billing') | list %}
+        {% if not billing_contacts %}
+        <div style="margin-top:0.75rem; padding:0.75rem 1rem; background:#fff8e1;
+                    border:1px solid #ffe082; border-radius:4px; font-size:0.85rem; color:#f57f17;">
+            ⚠️ No contacts have "Invoices &amp; Statements" enabled.
+            This customer will be skipped in batch billing runs.
+            <a href="/{{ company_key }}/customers/{{ customer.id }}/contacts/{{ contacts[0].id }}/edit"
+               style="color:#e65100; font-weight:600;">Fix this →</a>
+        </div>
+        {% endif %}
+
     {% else %}
     <div class="no-contacts">No contacts on file.
         <a href="/{{ company_key }}/customers/{{ customer.id }}/contacts/new"

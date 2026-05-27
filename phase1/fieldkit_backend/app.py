@@ -824,6 +824,214 @@ def field_toggle(company_key, field_id):
     return redirect(f'/{company_key}/settings/fields')
 
 # ============================================================================
+# Contacts — new
+# ============================================================================
+
+@app.route('/<company_key>/customers/<int:customer_id>/contacts/new', methods=['GET', 'POST'])
+@login_required
+@company_access_required
+@with_branding
+def contact_new(company_key, customer_id, branding, all_companies, company_access):
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+
+    cur.execute("SELECT id, property_name FROM customers WHERE id = %s AND deleted_at IS NULL", (customer_id,))
+    customer = cur.fetchone()
+    if not customer:
+        cur.close(); conn.close(); abort(404)
+
+    if request.method == 'POST':
+        try:
+            # Checkbox fields: only present in form data if checked
+            is_primary       = request.form.get('is_primary')       == 'on'
+            accepts_billing  = request.form.get('accepts_billing')  == 'on'
+            accepts_statements = request.form.get('accepts_statements') == 'on'
+            accepts_general  = request.form.get('accepts_general')  == 'on'
+
+            # If setting this contact as primary, clear primary flag on all others first
+            if is_primary:
+                cur.execute("""
+                    UPDATE customer_contacts SET is_primary = FALSE
+                    WHERE customer_id = %s AND deleted_at IS NULL
+                """, (customer_id,))
+
+            # Check if this is the first contact — auto-set as billing if so
+            cur.execute("""
+                SELECT COUNT(*) as count FROM customer_contacts
+                WHERE customer_id = %s AND deleted_at IS NULL
+            """, (customer_id,))
+            is_first = cur.fetchone()['count'] == 0
+            if is_first:
+                accepts_billing = True
+                accepts_general = True
+
+            cur.execute("""
+                INSERT INTO customer_contacts (
+                    customer_id, first_name, last_name, title,
+                    office_phone, mobile_phone, office_email,
+                    is_primary, contact_type,
+                    accepts_billing, accepts_statements, accepts_general,
+                    notes, created_by, updated_by
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """, (
+                customer_id,
+                request.form.get('first_name', '').strip(),
+                request.form.get('last_name', '').strip(),
+                request.form.get('title', '').strip() or None,
+                request.form.get('office_phone', '').strip() or None,
+                request.form.get('mobile_phone', '').strip() or None,
+                request.form.get('office_email', '').strip() or None,
+                is_primary,
+                request.form.get('contact_type', 'general'),
+                accepts_billing,
+                accepts_statements,
+                accepts_general,
+                request.form.get('notes', '').strip() or None,
+                session.get('username'),
+                session.get('username'),
+            ))
+            conn.commit()
+            cur.close(); conn.close()
+            return redirect(f'/{company_key}/customers/{customer_id}')
+        except Exception as e:
+            conn.rollback()
+            cur.close(); conn.close()
+            return render_template('contact_form.html',
+                branding=branding, company_key=company_key,
+                company_access=company_access, all_companies=all_companies,
+                customer=customer, contact=None, error=str(e),
+            )
+
+    cur.close(); conn.close()
+    return render_template('contact_form.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        customer=customer, contact=None, error=None,
+    )
+
+
+# ============================================================================
+# Contacts — edit
+# ============================================================================
+
+@app.route('/<company_key>/customers/<int:customer_id>/contacts/<int:contact_id>/edit', methods=['GET', 'POST'])
+@login_required
+@company_access_required
+@with_branding
+def contact_edit(company_key, customer_id, contact_id, branding, all_companies, company_access):
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+
+    cur.execute("SELECT id, property_name FROM customers WHERE id = %s AND deleted_at IS NULL", (customer_id,))
+    customer = cur.fetchone()
+    if not customer:
+        cur.close(); conn.close(); abort(404)
+
+    cur.execute("""
+        SELECT * FROM customer_contacts
+        WHERE id = %s AND customer_id = %s AND deleted_at IS NULL
+    """, (contact_id, customer_id))
+    contact = cur.fetchone()
+    if not contact:
+        cur.close(); conn.close(); abort(404)
+
+    if request.method == 'POST':
+        try:
+            is_primary         = request.form.get('is_primary')         == 'on'
+            accepts_billing    = request.form.get('accepts_billing')    == 'on'
+            accepts_statements = request.form.get('accepts_statements') == 'on'
+            accepts_general    = request.form.get('accepts_general')    == 'on'
+
+            # If setting as primary, clear flag on all other contacts first
+            if is_primary:
+                cur.execute("""
+                    UPDATE customer_contacts SET is_primary = FALSE
+                    WHERE customer_id = %s AND id != %s AND deleted_at IS NULL
+                """, (customer_id, contact_id))
+
+            cur.execute("""
+                UPDATE customer_contacts SET
+                    first_name         = %s,
+                    last_name          = %s,
+                    title              = %s,
+                    office_phone       = %s,
+                    mobile_phone       = %s,
+                    office_email       = %s,
+                    is_primary         = %s,
+                    contact_type       = %s,
+                    accepts_billing    = %s,
+                    accepts_statements = %s,
+                    accepts_general    = %s,
+                    notes              = %s,
+                    updated_by         = %s,
+                    updated_at         = CURRENT_TIMESTAMP
+                WHERE id = %s
+            """, (
+                request.form.get('first_name', '').strip(),
+                request.form.get('last_name', '').strip(),
+                request.form.get('title', '').strip() or None,
+                request.form.get('office_phone', '').strip() or None,
+                request.form.get('mobile_phone', '').strip() or None,
+                request.form.get('office_email', '').strip() or None,
+                is_primary,
+                request.form.get('contact_type', 'general'),
+                accepts_billing,
+                accepts_statements,
+                accepts_general,
+                request.form.get('notes', '').strip() or None,
+                session.get('username'),
+                contact_id,
+            ))
+            conn.commit()
+            cur.close(); conn.close()
+            return redirect(f'/{company_key}/customers/{customer_id}')
+        except Exception as e:
+            conn.rollback()
+            cur.close(); conn.close()
+            return render_template('contact_form.html',
+                branding=branding, company_key=company_key,
+                company_access=company_access, all_companies=all_companies,
+                customer=customer, contact=contact, error=str(e),
+            )
+
+    cur.close(); conn.close()
+    return render_template('contact_form.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        customer=customer, contact=contact, error=None,
+    )
+
+
+# ============================================================================
+# Contacts — delete (soft)
+# ============================================================================
+
+@app.route('/<company_key>/customers/<int:customer_id>/contacts/<int:contact_id>/delete', methods=['POST'])
+@login_required
+@company_access_required
+def contact_delete(company_key, customer_id, contact_id):
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+
+    # Safety: don't delete the last contact
+    cur.execute("""
+        SELECT COUNT(*) as count FROM customer_contacts
+        WHERE customer_id = %s AND deleted_at IS NULL
+    """, (customer_id,))
+    count = cur.fetchone()['count']
+
+    if count > 1:
+        cur.execute("""
+            UPDATE customer_contacts
+            SET deleted_at = CURRENT_TIMESTAMP, deleted_by = %s
+            WHERE id = %s AND customer_id = %s
+        """, (session.get('username'), contact_id, customer_id))
+        conn.commit()
+
+    cur.close(); conn.close()
+    return redirect(f'/{company_key}/customers/{customer_id}')
+
+# ============================================================================
 # Run
 # ============================================================================
 
