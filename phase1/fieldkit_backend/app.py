@@ -1032,6 +1032,152 @@ def contact_delete(company_key, customer_id, contact_id):
     return redirect(f'/{company_key}/customers/{customer_id}')
 
 # ============================================================================
+# Billing — Michele's batch billing page
+# ============================================================================
+
+@app.route('/<company_key>/billing')
+@login_required
+@company_access_required
+@with_branding
+def billing(company_key, branding, all_companies, company_access):
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+
+    # Get all active customers with their billing contacts
+    cur.execute("""
+        SELECT
+            c.id,
+            c.property_name,
+            c.customer_type,
+            c.status,
+            c.payment_terms,
+            mc.name as management_company_name,
+            -- Count of billing contacts
+            COUNT(cc.id) FILTER (
+                WHERE cc.accepts_billing = TRUE AND cc.deleted_at IS NULL
+            ) as billing_contact_count,
+            -- Aggregate billing emails into a comma-separated string
+            STRING_AGG(
+                cc.office_email,
+                ', '
+                ORDER BY cc.is_primary DESC, cc.last_name ASC
+            ) FILTER (
+                WHERE cc.accepts_billing = TRUE
+                  AND cc.deleted_at IS NULL
+                  AND cc.office_email IS NOT NULL
+            ) as billing_emails,
+            -- Primary billing contact name
+            MAX(cc.first_name || ' ' || cc.last_name)
+                FILTER (WHERE cc.accepts_billing = TRUE AND cc.is_primary = TRUE AND cc.deleted_at IS NULL)
+                as primary_billing_name
+        FROM customers c
+        LEFT JOIN management_companies mc ON c.management_company_id = mc.id
+        LEFT JOIN customer_contacts cc ON cc.customer_id = c.id
+        WHERE c.deleted_at IS NULL
+          AND c.status = 'Active'
+        GROUP BY c.id, c.property_name, c.customer_type, c.status,
+                 c.payment_terms, mc.name
+        ORDER BY c.property_name ASC
+    """)
+    customers = cur.fetchall()
+    cur.close(); conn.close()
+
+    # Split into has-billing and missing-billing for the warning section
+    ready     = [c for c in customers if c['billing_contact_count'] > 0]
+    no_billing = [c for c in customers if c['billing_contact_count'] == 0]
+
+    return render_template('billing.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        ready=ready, no_billing=no_billing,
+        ready_count=len(ready), no_billing_count=len(no_billing),
+    )
+
+
+@app.route('/<company_key>/billing/export', methods=['POST'])
+@login_required
+@company_access_required
+def billing_export(company_key):
+    """Generate a CSV of selected customers for batch billing."""
+    import csv, io
+    from flask import Response
+
+    selected_ids = request.form.getlist('customer_ids')
+    if not selected_ids:
+        return redirect(f'/{company_key}/billing')
+
+    # Convert to ints safely
+    try:
+        selected_ids = [int(i) for i in selected_ids]
+    except ValueError:
+        return redirect(f'/{company_key}/billing')
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            c.id,
+            c.property_name,
+            c.customer_type,
+            c.payment_terms,
+            mc.name as management_company_name,
+            STRING_AGG(
+                cc.office_email,
+                '; '
+                ORDER BY cc.is_primary DESC, cc.last_name ASC
+            ) FILTER (
+                WHERE cc.accepts_billing = TRUE
+                  AND cc.deleted_at IS NULL
+                  AND cc.office_email IS NOT NULL
+            ) as billing_emails,
+            STRING_AGG(
+                cc.first_name || ' ' || cc.last_name,
+                '; '
+                ORDER BY cc.is_primary DESC, cc.last_name ASC
+            ) FILTER (
+                WHERE cc.accepts_billing = TRUE AND cc.deleted_at IS NULL
+            ) as billing_contacts
+        FROM customers c
+        LEFT JOIN management_companies mc ON c.management_company_id = mc.id
+        LEFT JOIN customer_contacts cc ON cc.customer_id = c.id
+        WHERE c.id = ANY(%s) AND c.deleted_at IS NULL
+        GROUP BY c.id, c.property_name, c.customer_type, c.payment_terms, mc.name
+        ORDER BY c.property_name ASC
+    """, (selected_ids,))
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+
+    # Build CSV
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        'Customer ID', 'Property Name', 'Customer Type',
+        'Management Company', 'Payment Terms',
+        'Billing Contacts', 'Billing Emails'
+    ])
+    for row in rows:
+        writer.writerow([
+            row['id'],
+            row['property_name'],
+            row['customer_type'],
+            row['management_company_name'] or '',
+            row['payment_terms'] or '',
+            row['billing_contacts'] or '',
+            row['billing_emails'] or '',
+        ])
+
+    output.seek(0)
+    from datetime import date
+    filename = f"billing_export_{company_key}_{date.today().isoformat()}.csv"
+
+    return Response(
+        output.getvalue(),
+        mimetype='text/csv',
+        headers={'Content-Disposition': f'attachment; filename={filename}'}
+    )
+
+# ============================================================================
 # Run
 # ============================================================================
 
