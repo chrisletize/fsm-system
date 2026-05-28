@@ -1,0 +1,242 @@
+{% extends "base.html" %}
+{% block title %}Users — {{ branding.short_name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.5rem;
+    }
+    .page-header h2 {
+        font-size: 1.5rem;
+        color: {{ branding.color_primary }};
+    }
+
+    .users-table {
+        width: 100%;
+        border-collapse: collapse;
+        background: white;
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .users-table th {
+        background: {{ branding.color_primary }};
+        color: white;
+        padding: 0.75rem 1rem;
+        text-align: left;
+        font-size: 0.85rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+    }
+    .users-table td {
+        padding: 0.85rem 1rem;
+        border-bottom: 1px solid #eee;
+        vertical-align: middle;
+        font-size: 0.95rem;
+    }
+    .users-table tr:last-child td { border-bottom: none; }
+    .users-table tr:hover td { background: #fafafa; }
+    .users-table tr.inactive td { opacity: 0.55; }
+
+    .badge {
+        display: inline-block;
+        padding: 0.2rem 0.55rem;
+        border-radius: 999px;
+        font-size: 0.78rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+    }
+    .badge-admin      { background: #8B1538; color: white; }
+    .badge-manager    { background: #0052CC; color: white; }
+    .badge-salesperson { background: #7c3aed; color: white; }
+    .badge-technician { background: #374151; color: white; }
+
+    .badge-active   { background: #d1fae5; color: #065f46; }
+    .badge-inactive { background: #fee2e2; color: #991b1b; }
+
+    .company-pills {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.3rem;
+    }
+    .company-pill {
+        display: inline-block;
+        padding: 0.15rem 0.5rem;
+        border-radius: 4px;
+        font-size: 0.78rem;
+        font-weight: 500;
+        color: white;
+    }
+
+    .action-links { display: flex; gap: 0.75rem; align-items: center; }
+    .action-links a {
+        color: {{ branding.color_primary }};
+        text-decoration: none;
+        font-size: 0.88rem;
+        font-weight: 500;
+    }
+    .action-links a:hover { text-decoration: underline; }
+
+    .deactivate-form { display: inline; }
+    .deactivate-btn {
+        background: none;
+        border: none;
+        cursor: pointer;
+        color: #dc2626;
+        font-size: 0.88rem;
+        font-weight: 500;
+        padding: 0;
+    }
+    .deactivate-btn:hover { text-decoration: underline; }
+    .reactivate-btn {
+        background: none;
+        border: none;
+        cursor: pointer;
+        color: #059669;
+        font-size: 0.88rem;
+        font-weight: 500;
+        padding: 0;
+    }
+    .reactivate-btn:hover { text-decoration: underline; }
+
+    .self-label {
+        font-size: 0.78rem;
+        color: #6b7280;
+        font-style: italic;
+    }
+
+    .last-login {
+        font-size: 0.85rem;
+        color: #6b7280;
+    }
+    .never-login { color: #d1d5db; font-style: italic; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>Users</h2>
+    <a href="/{{ company_key }}/settings/users/new" class="btn btn-primary">+ Add User</a>
+</div>
+
+{% if request.args.get('reset_sent') %}
+<div style="background:#d1fae5;border:1px solid #6ee7b7;color:#065f46;
+            padding:0.85rem 1rem;border-radius:6px;margin-bottom:1.25rem;font-size:0.9rem;">
+    ✓ Password reset email sent.
+</div>
+{% endif %}
+{% if request.args.get('reset_error') == 'no_email' %}
+<div style="background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;
+            padding:0.85rem 1rem;border-radius:6px;margin-bottom:1.25rem;font-size:0.9rem;">
+    ✗ That user has no email address on file — set one in Edit before sending a reset link.
+</div>
+{% elif request.args.get('reset_error') == 'send_failed' %}
+<div style="background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;
+            padding:0.85rem 1rem;border-radius:6px;margin-bottom:1.25rem;font-size:0.9rem;">
+    ✗ Email send failed — check that RESEND_API_KEY is set correctly in .env.
+</div>
+{% endif %}
+
+<p style="color:#6b7280; margin-bottom:1.5rem; font-size:0.9rem;">
+    {{ users|length }} user{{ 's' if users|length != 1 else '' }} total.
+    Changes sync to all four company databases automatically.
+</p>
+
+<table class="users-table">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Username</th>
+            <th>Role</th>
+            <th>Company Access</th>
+            <th>Status</th>
+            <th>Last Login</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for u in users %}
+        <tr class="{{ 'inactive' if not u.is_active else '' }}">
+            <td>
+                <strong>{{ u.full_name }}</strong>
+                {% if u.username == session.username %}
+                <span class="self-label">(you)</span>
+                {% endif %}
+                {% if u.email %}
+                <div style="font-size:0.82rem;color:#6b7280;margin-top:0.15rem;">{{ u.email }}</div>
+                {% endif %}
+            </td>
+            <td style="font-family:monospace;">{{ u.username }}</td>
+            <td><span class="badge badge-{{ u.role }}">{{ u.role }}</span></td>
+            <td>
+                <div class="company-pills">
+                    {% for key in u.company_access %}
+                    {% if key in company_branding %}
+                    <span class="company-pill"
+                          style="background-color:{{ company_branding[key].color_primary }};">
+                        {{ company_branding[key].short_name }}
+                    </span>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+            </td>
+            <td>
+                <span class="badge badge-{{ 'active' if u.is_active else 'inactive' }}">
+                    {{ 'Active' if u.is_active else 'Inactive' }}
+                </span>
+            </td>
+            <td class="last-login">
+                {% if u.last_login %}
+                    {{ u.last_login.strftime('%b %-d, %Y') }}
+                {% else %}
+                    <span class="never-login">Never</span>
+                {% endif %}
+            </td>
+            <td>
+                <div class="action-links">
+                    <a href="/{{ company_key }}/settings/users/{{ u.id }}/edit">Edit</a>
+
+                    {% if u.email %}
+                    <form style="display:inline"
+                          action="/{{ company_key }}/settings/users/{{ u.id }}/send-reset"
+                          method="POST"
+                          onsubmit="return confirm('Send password reset email to {{ u.email }}?')">
+                        <button type="submit"
+                                style="background:none;border:none;cursor:pointer;
+                                       color:{{ branding.color_primary }};font-size:0.88rem;
+                                       font-weight:500;padding:0;">
+                            Send Reset Email
+                        </button>
+                    </form>
+                    {% endif %}
+
+                    {% if u.username != session.username %}
+                    <form class="deactivate-form"
+                          action="/{{ company_key }}/settings/users/{{ u.id }}/toggle-active"
+                          method="POST"
+                          onsubmit="return confirm('{{ 'Deactivate' if u.is_active else 'Reactivate' }} {{ u.full_name }}?')">
+                        {% if u.is_active %}
+                        <button class="deactivate-btn" type="submit">Deactivate</button>
+                        {% else %}
+                        <button class="reactivate-btn" type="submit">Reactivate</button>
+                        {% endif %}
+                    </form>
+                    {% endif %}
+                </div>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<div style="margin-top:1.5rem;">
+    <a href="/{{ company_key }}/settings/fields" style="color:{{ branding.color_primary }}; text-decoration:none; font-size:0.9rem;">
+        ← Back to Settings
+    </a>
+</div>
+{% endblock %}

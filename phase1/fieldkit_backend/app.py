@@ -10,6 +10,7 @@ import bcrypt
 import secrets
 from datetime import datetime, timedelta
 from functools import wraps
+import json
 import os
 
 app = Flask(__name__)
@@ -1175,6 +1176,451 @@ def billing_export(company_key):
         output.getvalue(),
         mimetype='text/csv',
         headers={'Content-Disposition': f'attachment; filename={filename}'}
+    )
+
+# ============================================================================
+# User Management — admin only
+# Users are replicated across all 4 company databases.
+# getagrip is the canonical read source; all writes go to all 4 DBs.
+# ============================================================================
+
+VALID_ROLES = ['admin', 'manager', 'salesperson', 'technician']
+ALL_COMPANY_KEYS = list(DB_CONFIG.keys())  # ['getagrip', 'kleanit_charlotte', 'cts', 'kleanit_sf']
+
+
+def write_to_all_dbs(sql, params):
+    """Execute a write (INSERT/UPDATE) against all 4 company databases."""
+    errors = []
+    for key in ALL_COMPANY_KEYS:
+        try:
+            conn = get_db_connection(key)
+            cur  = conn.cursor()
+            cur.execute(sql, params)
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            errors.append(f"{key}: {e}")
+    return errors
+
+
+def get_all_users():
+    """Fetch all users from the canonical (getagrip) database."""
+    conn = get_db_connection('getagrip')
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT id, username, email, full_name, role,
+               company_access, is_active, last_login, created_at
+        FROM users
+        ORDER BY full_name ASC
+    """)
+    users = cur.fetchall()
+    cur.close()
+    conn.close()
+    return users
+
+
+def get_user_by_id(user_id):
+    """Fetch a single user by ID from the canonical database."""
+    conn = get_db_connection('getagrip')
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT id, username, email, full_name, role,
+               company_access, is_active, last_login, created_at
+        FROM users
+        WHERE id = %s
+    """, (user_id,))
+    user = cur.fetchone()
+    cur.close()
+    conn.close()
+    return user
+
+
+@app.route('/<company_key>/settings/users')
+@login_required
+@company_access_required
+@with_branding
+def user_list(company_key, branding, all_companies, company_access):
+    if session.get('user_role') != 'admin':
+        abort(403)
+
+    users = get_all_users()
+
+    return render_template('user_list.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        users=users,
+        all_company_keys=ALL_COMPANY_KEYS,
+        company_branding=COMPANY_BRANDING,
+    )
+
+
+@app.route('/<company_key>/settings/users/new', methods=['GET', 'POST'])
+@login_required
+@company_access_required
+@with_branding
+def user_new(company_key, branding, all_companies, company_access):
+    if session.get('user_role') != 'admin':
+        abort(403)
+
+    error = None
+
+    if request.method == 'POST':
+        username     = request.form.get('username', '').strip().lower()
+        full_name    = request.form.get('full_name', '').strip()
+        email        = request.form.get('email', '').strip().lower()
+        role         = request.form.get('role', 'tech')
+        password     = request.form.get('password', '')
+        confirm_pw   = request.form.get('confirm_password', '')
+        co_access    = request.form.getlist('company_access')  # multi-select checkboxes
+
+        # Validation
+        if not username or not full_name or not password or not email:
+            error = 'Username, full name, email, and password are required.'
+        elif len(username) < 3:
+            error = 'Username must be at least 3 characters.'
+        elif password != confirm_pw:
+            error = 'Passwords do not match.'
+        elif len(password) < 8:
+            error = 'Password must be at least 8 characters.'
+        elif role not in VALID_ROLES:
+            error = 'Invalid role selected.'
+        elif not co_access:
+            error = 'At least one company must be selected.'
+        else:
+            # Check username uniqueness in canonical DB
+            conn = get_db_connection('getagrip')
+            cur  = conn.cursor()
+            cur.execute("SELECT id FROM users WHERE username = %s", (username,))
+            if cur.fetchone():
+                error = f'Username "{username}" is already taken.'
+            cur.close()
+            conn.close()
+
+        if not error:
+            pw_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt(12)).decode('utf-8')
+            errs = write_to_all_dbs("""
+                INSERT INTO users (username, email, full_name, role, password_hash,
+                                   company_access, is_active, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s, TRUE, %s)
+                ON CONFLICT (username) DO NOTHING
+            """, (username, email, full_name, role, pw_hash,
+                  json.dumps(co_access), session.get('username')))
+
+            if errs:
+                error = 'User created but errors syncing to some databases: ' + '; '.join(errs)
+                # Still redirect — getagrip (canonical) succeeded
+                return redirect(f'/{company_key}/settings/users')
+            return redirect(f'/{company_key}/settings/users')
+
+    return render_template('user_form.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        user=None, error=error,
+        all_company_keys=ALL_COMPANY_KEYS,
+        company_branding=COMPANY_BRANDING,
+        valid_roles=VALID_ROLES,
+    )
+
+
+@app.route('/<company_key>/settings/users/<int:user_id>/edit', methods=['GET', 'POST'])
+@login_required
+@company_access_required
+@with_branding
+def user_edit(company_key, user_id, branding, all_companies, company_access):
+    if session.get('user_role') != 'admin':
+        abort(403)
+
+    user  = get_user_by_id(user_id)
+    if not user:
+        abort(404)
+
+    error = None
+
+    if request.method == 'POST':
+        full_name  = request.form.get('full_name', '').strip()
+        email      = request.form.get('email', '').strip().lower()
+        role       = request.form.get('role', 'tech')
+        co_access  = request.form.getlist('company_access')
+
+        if not full_name:
+            error = 'Full name is required.'
+        elif role not in VALID_ROLES:
+            error = 'Invalid role selected.'
+        elif not co_access:
+            error = 'At least one company must be selected.'
+
+        if not error:
+            errs = write_to_all_dbs("""
+                UPDATE users
+                SET full_name = %s, email = %s, role = %s,
+                    company_access = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE username = %s
+            """, (full_name, email if email else user['email'], role, json.dumps(co_access), user['username']))
+
+            if errs:
+                error = 'Saved but errors syncing: ' + '; '.join(errs)
+            else:
+                return redirect(f'/{company_key}/settings/users')
+
+    return render_template('user_form.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        user=user, error=error,
+        all_company_keys=ALL_COMPANY_KEYS,
+        company_branding=COMPANY_BRANDING,
+        valid_roles=VALID_ROLES,
+    )
+
+
+@app.route('/<company_key>/settings/users/<int:user_id>/reset-password', methods=['POST'])
+@login_required
+@company_access_required
+def user_reset_password(company_key, user_id):
+    if session.get('user_role') != 'admin':
+        abort(403)
+
+    user = get_user_by_id(user_id)
+    if not user:
+        abort(404)
+
+    password   = request.form.get('new_password', '')
+    confirm_pw = request.form.get('confirm_password', '')
+
+    if not password or password != confirm_pw or len(password) < 8:
+        # Redirect back to edit page with a query param error signal
+        return redirect(f'/{company_key}/settings/users/{user_id}/edit?pw_error=1')
+
+    pw_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt(12)).decode('utf-8')
+    write_to_all_dbs("""
+        UPDATE users SET password_hash = %s, updated_at = CURRENT_TIMESTAMP
+        WHERE username = %s
+    """, (pw_hash, user['username']))
+
+    return redirect(f'/{company_key}/settings/users')
+
+
+@app.route('/<company_key>/settings/users/<int:user_id>/toggle-active', methods=['POST'])
+@login_required
+@company_access_required
+def user_toggle_active(company_key, user_id):
+    if session.get('user_role') != 'admin':
+        abort(403)
+
+    user = get_user_by_id(user_id)
+    if not user:
+        abort(404)
+
+    # Prevent deactivating yourself
+    if user['username'] == session.get('username'):
+        return redirect(f'/{company_key}/settings/users')
+
+    write_to_all_dbs("""
+        UPDATE users SET is_active = NOT is_active, updated_at = CURRENT_TIMESTAMP
+        WHERE username = %s
+    """, (user['username'],))
+
+    return redirect(f'/{company_key}/settings/users')
+
+# ============================================================================
+# Password Reset — email-based token flow
+# ============================================================================
+
+import resend as _resend
+
+RESEND_API_KEY   = os.environ.get('RESEND_API_KEY', '')
+RESEND_FROM      = os.environ.get('RESEND_FROM_EMAIL', 'noreply@cletize.com')
+APP_BASE_URL     = os.environ.get('APP_BASE_URL', 'https://app.fieldkit.cletize.com')
+
+_resend.api_key  = RESEND_API_KEY
+
+
+def create_reset_token(user_id, admin_username, company_key):
+    """
+    Generate a secure reset token, store it in the given company DB,
+    and return the token string. Tokens expire in 24 hours.
+    Existing unused tokens for the same user are invalidated first.
+    """
+    token      = secrets.token_urlsafe(48)
+    expires_at = datetime.now() + timedelta(hours=24)
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+
+    # Invalidate any existing unused tokens for this user
+    cur.execute("""
+        UPDATE password_reset_tokens
+        SET used_at = CURRENT_TIMESTAMP
+        WHERE user_id = %s AND used_at IS NULL AND expires_at > CURRENT_TIMESTAMP
+    """, (user_id,))
+
+    cur.execute("""
+        INSERT INTO password_reset_tokens (user_id, token, expires_at, created_by)
+        VALUES (%s, %s, %s, %s)
+    """, (user_id, token, expires_at, admin_username))
+
+    conn.commit()
+    cur.close()
+    conn.close()
+    return token
+
+
+def send_reset_email(to_email, full_name, token):
+    """Send password reset email via Resend. Returns (success, error_message)."""
+    reset_url = f"{APP_BASE_URL}/reset-password/{token}"
+
+    html_body = f"""
+    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+                max-width:520px;margin:0 auto;padding:2rem;">
+        <h2 style="color:#8B1538;margin-bottom:0.5rem;">FieldKit</h2>
+        <p style="color:#6b7280;margin-top:0;margin-bottom:2rem;font-size:0.9rem;">
+            Field Service Management
+        </p>
+
+        <p>Hi {full_name},</p>
+        <p>Someone requested a password reset for your FieldKit account.
+           Click the button below to set a new password.</p>
+
+        <div style="text-align:center;margin:2rem 0;">
+            <a href="{reset_url}"
+               style="background:#8B1538;color:white;padding:0.85rem 2rem;
+                      border-radius:6px;text-decoration:none;font-weight:600;
+                      display:inline-block;">
+                Set New Password
+            </a>
+        </div>
+
+        <p style="font-size:0.85rem;color:#6b7280;">
+            This link expires in 24 hours. If you didn't request a password reset,
+            you can ignore this email — your password won't change.
+        </p>
+        <p style="font-size:0.85rem;color:#6b7280;">
+            Or copy this link into your browser:<br>
+            <span style="color:#8B1538;">{reset_url}</span>
+        </p>
+    </div>
+    """
+
+    try:
+        _resend.Emails.send({
+            "from":    RESEND_FROM,
+            "to":      [to_email],
+            "subject": "Reset your FieldKit password",
+            "html":    html_body,
+        })
+        return True, None
+    except Exception as e:
+        print(f"RESEND ERROR: {type(e).__name__}: {e}", flush=True)
+        return False, str(e)
+
+
+def get_valid_reset_token(token):
+    """
+    Look up a token across all company DBs (stored in getagrip as canonical).
+    Returns the token row + user row if valid, else (None, None).
+    Token must be unused and not expired.
+    """
+    conn = get_db_connection('getagrip')
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT t.id as token_id, t.user_id, t.token, t.expires_at,
+               u.username, u.full_name, u.email
+        FROM password_reset_tokens t
+        JOIN users u ON u.id = t.user_id
+        WHERE t.token = %s
+          AND t.used_at IS NULL
+          AND t.expires_at > CURRENT_TIMESTAMP
+    """, (token,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    return row
+
+
+@app.route('/<company_key>/settings/users/<int:user_id>/send-reset', methods=['POST'])
+@login_required
+@company_access_required
+def user_send_reset(company_key, user_id):
+    """Admin triggers a password reset email for a user."""
+    if session.get('user_role') != 'admin':
+        abort(403)
+
+    user = get_user_by_id(user_id)
+    if not user:
+        abort(404)
+
+    if not user.get('email'):
+        return redirect(f'/{company_key}/settings/users?reset_error=no_email&user={user_id}')
+
+    token = create_reset_token(user['id'], session.get('username'), 'getagrip')
+    success, err = send_reset_email(user['email'], user['full_name'], token)
+
+    if success:
+        return redirect(f'/{company_key}/settings/users?reset_sent={user_id}')
+    else:
+        return redirect(f'/{company_key}/settings/users?reset_error=send_failed&user={user_id}')
+
+
+@app.route('/reset-password/<token>', methods=['GET', 'POST'])
+def reset_password(token):
+    """
+    Public route — no login required.
+    GET:  show the set-password form (if token valid)
+    POST: validate token, set new password, mark token used
+    """
+    row = get_valid_reset_token(token)
+
+    if not row:
+        return render_template('reset_password.html',
+            token=token, state='invalid',
+            full_name=None, error=None,
+        )
+
+    if request.method == 'GET':
+        return render_template('reset_password.html',
+            token=token, state='form',
+            full_name=row['full_name'], error=None,
+        )
+
+    # POST — set the new password
+    password   = request.form.get('password', '')
+    confirm_pw = request.form.get('confirm_password', '')
+
+    if not password or len(password) < 8:
+        return render_template('reset_password.html',
+            token=token, state='form',
+            full_name=row['full_name'],
+            error='Password must be at least 8 characters.',
+        )
+    if password != confirm_pw:
+        return render_template('reset_password.html',
+            token=token, state='form',
+            full_name=row['full_name'],
+            error='Passwords do not match.',
+        )
+
+    pw_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt(12)).decode('utf-8')
+
+    # Update password in all DBs
+    write_to_all_dbs("""
+        UPDATE users SET password_hash = %s, updated_at = CURRENT_TIMESTAMP
+        WHERE username = %s
+    """, (pw_hash, row['username']))
+
+    # Mark token as used (only in getagrip / canonical DB)
+    conn = get_db_connection('getagrip')
+    cur  = conn.cursor()
+    cur.execute("""
+        UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP
+        WHERE token = %s
+    """, (token,))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return render_template('reset_password.html',
+        token=token, state='success',
+        full_name=row['full_name'], error=None,
     )
 
 # ============================================================================
