@@ -1,337 +1,437 @@
 #!/usr/bin/env python3
 """
 FieldKit: ServiceFusion Customer Import
-Created: 2026-02-10
-Purpose: Import customers from ServiceFusion Excel export to FieldKit databases
+Updated: 2026-06-09
+Purpose: Import customers from ServiceFusion Excel export to FieldKit databases.
+
+Changes from original:
+  - DB connection updated for Docker (host=db, user=fieldkit, password from env/prompt)
+  - Kleanit auto-split: when target is kleanit_charlotte, customers with *FL* in
+    their name are automatically routed to fieldkit_kleanit_sf instead.
+  - contact_type, accepts_billing, accepts_statements, accepts_general columns
+    added to customer_contacts insert (migration 003 columns).
+  - Duplicate detection: skips customers whose property_name already exists in
+    the target database (prevents double-import).
+
+Usage:
+  Run inside the app container:
+    docker exec -it fieldkit-phase1-app-1 python3 /app/phase1/fieldkit_phase1/import_sf_customers.py <excel_file> <target_database>
+
+  Target database options:
+    getagrip
+    kleanit_charlotte   (FL customers auto-routed to kleanit_sf)
+    cts
+    kleanit_sf
+
+  Example:
+    docker exec -it fieldkit-phase1-app-1 python3 /app/phase1/fieldkit_phase1/import_sf_customers.py /tmp/kleanit_customers.xlsx kleanit_charlotte
 """
 
 import sys
+import os
 import openpyxl
 import psycopg2
-from psycopg2 import sql
 from datetime import datetime
 
-# Database configuration
+# ============================================================================
+# Database configuration — Docker environment
+# ============================================================================
+
 DB_CONFIG = {
-    'getagrip': 'fieldkit_getagrip',
+    'getagrip':          'fieldkit_getagrip',
     'kleanit_charlotte': 'fieldkit_kleanit_charlotte',
-    'cts': 'fieldkit_cts',
-    'kleanit_sf': 'fieldkit_kleanit_sf'
+    'cts':               'fieldkit_cts',
+    'kleanit_sf':        'fieldkit_kleanit_sf',
 }
 
-DB_USER = 'postgres'
-DB_HOST = 'localhost'
+# Inside the Docker stack, the database container is reachable at host 'db'
+DB_HOST = 'db'
 DB_PORT = 5432
+DB_USER = 'fieldkit'
+
 
 def connect_db(db_name, password):
-    """Connect to a FieldKit database."""
+    """Connect to a FieldKit database inside the Docker stack."""
     return psycopg2.connect(
         dbname=db_name,
         user=DB_USER,
         password=password,
         host=DB_HOST,
-        port=DB_PORT
+        port=DB_PORT,
     )
+
+
+# ============================================================================
+# Excel parsing
+# ============================================================================
 
 def parse_sf_customer_list(filepath):
     """
-    Parse ServiceFusion customer list Excel file.
-    Returns list of customer dictionaries.
+    Parse a ServiceFusion Customer List Excel export.
+    Returns a list of customer dictionaries.
     """
     print(f"Reading {filepath}...")
     wb = openpyxl.load_workbook(filepath)
     sheet = wb.active
-    
-    # Find header row (contains "Customer Name")
+
+    # Find the header row (contains "Customer Name")
     header_row = None
     for row_idx in range(1, 15):
         row_values = [cell.value for cell in sheet[row_idx]]
         if any(val and 'Customer Name' in str(val) for val in row_values):
             header_row = row_idx
             break
-    
+
     if header_row is None:
-        raise ValueError("Could not find header row with 'Customer Name'")
-    
-    # Extract headers
+        raise ValueError("Could not find header row containing 'Customer Name'")
+
     headers = [cell.value for cell in sheet[header_row]]
-    print(f"Found {len(headers)} columns, starting at row {header_row}")
-    
-    # Parse data rows
+    print(f"Found {len(headers)} columns at row {header_row}")
+
     customers = []
     for row_idx in range(header_row + 1, sheet.max_row + 1):
         row_data = {}
         for col_idx, header in enumerate(headers, 1):
-            cell_value = sheet.cell(row_idx, col_idx).value
             if header:
-                row_data[header] = cell_value
-        
-        # Skip empty rows
+                row_data[header] = sheet.cell(row_idx, col_idx).value
         if row_data.get('Customer Name'):
             customers.append(row_data)
-    
-    print(f"Parsed {len(customers)} customers")
+
+    print(f"Parsed {len(customers)} customers from file")
     return customers
 
+
+# ============================================================================
+# FL split logic
+# ============================================================================
+
+def is_florida_customer(customer_name):
+    """
+    Returns True if this customer belongs to Kleanit South Florida.
+    SF convention: Florida customers have *FL* anywhere in their name.
+    """
+    if not customer_name:
+        return False
+    return '*fl*' in customer_name.lower() or '*FL*' in customer_name
+
+
+# ============================================================================
+# Field helpers
+# ============================================================================
+
 def determine_customer_type(customer_name, parent_account):
-    """
-    Determine customer type based on name and parent account.
-    """
     name_lower = customer_name.lower() if customer_name else ''
-    
-    # Residential patterns
-    if any(word in name_lower for word in ['residential', 'homeowner', 'personal']):
+
+    if any(w in name_lower for w in ['residential', 'homeowner', 'personal']):
         return 'Residential'
-    
-    # Contractor patterns
-    if any(word in name_lower for word in ['contractor', 'construction', 'builder']):
+
+    if any(w in name_lower for w in ['contractor', 'construction', 'builder']):
         return 'Contractors'
-    
-    # Multi-family patterns (most common for Get a Grip)
-    if any(word in name_lower for word in ['apartment', 'complex', 'village', 'commons', 
-                                             'place', 'pointe', 'landing', 'park', 'manor',
-                                             'towers', 'ridge', 'crest', 'hills', 'estates']):
+
+    if any(w in name_lower for w in [
+        'apartment', 'complex', 'village', 'commons', 'place', 'pointe',
+        'landing', 'park', 'manor', 'towers', 'ridge', 'crest', 'hills',
+        'estates', 'flats', 'lofts', 'residences', 'crossing', 'creek',
+        'grove', 'pines', 'oaks', 'lakes', 'court', 'gardens',
+    ]):
         return 'Multi Family'
-    
-    # Default to Commercial if has parent account, otherwise Multi Family
+
     if parent_account and parent_account.strip():
         return 'Commercial'
-    
-    return 'Multi Family'  # Default for Get a Grip
+
+    return 'Multi Family'  # Default for Get a Grip / Kleanit
+
+
+def normalize_state(state_raw):
+    if not state_raw:
+        return None
+    state_map = {
+        'North Carolina': 'NC', 'South Carolina': 'SC', 'Georgia': 'GA',
+        'Virginia': 'VA', 'Tennessee': 'TN', 'Florida': 'FL',
+        'Texas': 'TX', 'New York': 'NY', 'California': 'CA',
+    }
+    return state_map.get(state_raw, state_raw[:2] if state_raw else None)
+
+
+def normalize_zip(zip_raw):
+    if not zip_raw:
+        return None
+    return str(zip_raw)[:10]
+
+
+# ============================================================================
+# Management company
+# ============================================================================
 
 def find_or_create_management_company(cursor, parent_account, created_by='sf_import'):
-    """
-    Find existing management company or create new one.
-    Returns management_company_id or None.
-    """
     if not parent_account or not parent_account.strip():
         return None
-    
-    # Check if exists
+
     cursor.execute("""
-        SELECT id FROM management_companies 
+        SELECT id FROM management_companies
         WHERE name = %s AND deleted_at IS NULL
     """, (parent_account.strip(),))
-    
     result = cursor.fetchone()
     if result:
         return result[0]
-    
-    # Create new management company
+
     cursor.execute("""
         INSERT INTO management_companies (name, created_by)
         VALUES (%s, %s)
         RETURNING id
     """, (parent_account.strip(), created_by))
-    
     return cursor.fetchone()[0]
+
+
+# ============================================================================
+# Duplicate detection
+# ============================================================================
+
+def get_existing_names(cursor):
+    """Return a set of all active property_names already in the database."""
+    cursor.execute("""
+        SELECT property_name FROM customers WHERE deleted_at IS NULL
+    """)
+    return {row[0] for row in cursor.fetchall()}
+
+
+# ============================================================================
+# Core import
+# ============================================================================
 
 def import_customer(cursor, customer_data, created_by='sf_import'):
     """
-    Import a single customer with contacts into database.
+    Insert a single customer and their contacts.
     Returns (customer_id, contacts_created_count).
     """
-    # Extract customer data
-    customer_name = customer_data.get('Customer Name', '').strip()
+    customer_name = (customer_data.get('Customer Name') or '').strip()
     if not customer_name:
         return None, 0
-    
+
     parent_account = customer_data.get('Parent Account Name')
     account_number = customer_data.get('Account Number')
-    is_active = customer_data.get('Is Active', 'Yes') == 'Yes'
-    
-    # Determine customer type
-    customer_type = determine_customer_type(customer_name, parent_account)
-    
-    # Find or create management company
+    is_active      = customer_data.get('Is Active', 'Yes') == 'Yes'
+    is_taxable     = customer_data.get('Is Taxable', 'Yes') == 'Yes'
+    tax_item       = customer_data.get('Tax Item Name')
+
+    customer_type        = determine_customer_type(customer_name, parent_account)
     management_company_id = find_or_create_management_company(cursor, parent_account, created_by)
-    
-    # Service location address
-    address_1 = customer_data.get('Primary Service Location Address 1')
-    address_2 = customer_data.get('Primary Service Location Address 2')
-    city = customer_data.get('Primary Service Location City')
-    
-    # Fix state - convert full names to abbreviations and limit to 2 chars
-    state_raw = customer_data.get('Primary Service Location State/Province', '')
-    if state_raw:
-        state_map = {
-            'North Carolina': 'NC', 'South Carolina': 'SC', 'Georgia': 'GA',
-            'Virginia': 'VA', 'Tennessee': 'TN', 'Florida': 'FL'
-        }
-        state = state_map.get(state_raw, state_raw[:2] if state_raw else None)
-    else:
-        state = None
-    
-    # Fix zip - limit to 10 characters (truncate extended zip+4)
-    zip_raw = customer_data.get('Primary Service Location Zip/Postal Code', '')
-    zip_code = str(zip_raw)[:10] if zip_raw else None
-    
-    # Tax settings
-    is_taxable = customer_data.get('Is Taxable', 'Yes') == 'Yes'
-    tax_item = customer_data.get('Tax Item Name')
-    
-    # Customer status
-    status = 'Active' if is_active else 'Inactive'
-    
-    # Insert customer
+
+    address  = customer_data.get('Primary Service Location Address 1')
+    address2 = customer_data.get('Primary Service Location Address 2')
+    city     = customer_data.get('Primary Service Location City')
+    state    = normalize_state(customer_data.get('Primary Service Location State/Province', ''))
+    zip_code = normalize_zip(customer_data.get('Primary Service Location Zip/Postal Code', ''))
+    status   = 'Active' if is_active else 'Inactive'
+
+    notes = f"SF Account: {account_number}, Tax: {tax_item if is_taxable else 'Non-taxable'}"
+
     cursor.execute("""
         INSERT INTO customers (
-            property_name, customer_type, address, address_2, city, state, zip,
+            property_name, customer_type,
+            address, address_2, city, state, zip,
             management_company_id, status, notes, created_by
         )
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
     """, (
-        customer_name, customer_type, address_1, address_2, city, state, zip_code,
-        management_company_id, status,
-        f"SF Account: {account_number}, Tax: {tax_item if is_taxable else 'Non-taxable'}",
-        created_by
+        customer_name, customer_type,
+        address, address2, city, state, zip_code,
+        management_company_id, status, notes, created_by,
     ))
-    
     customer_id = cursor.fetchone()[0]
-    
-    # Insert primary contact
+
     contacts_created = 0
-    primary_first = customer_data.get('Primary Contact First Name')
-    primary_last = customer_data.get('Primary Contact Last Name')
-    
-    if primary_first or primary_last:
+
+    # Primary contact
+    p_first = customer_data.get('Primary Contact First Name')
+    p_last  = customer_data.get('Primary Contact Last Name')
+    if p_first or p_last:
         cursor.execute("""
             INSERT INTO customer_contacts (
                 customer_id, first_name, last_name, title,
-                office_phone, office_email, is_primary, created_by
+                office_phone, office_email,
+                is_primary, contact_type,
+                accepts_billing, accepts_statements, accepts_general,
+                created_by
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             customer_id,
-            primary_first or '',
-            primary_last or customer_name,  # Use customer name if no last name
+            p_first or '',
+            p_last  or customer_name,
             customer_data.get('Primary Contact Job Title'),
             customer_data.get('Primary Contact Phone 1'),
             customer_data.get('Primary Contact Email 1'),
-            True,
-            created_by
+            True,           # is_primary
+            'general',      # contact_type
+            True,           # accepts_billing  — first contact gets billing by default
+            True,           # accepts_statements
+            True,           # accepts_general
+            created_by,
         ))
         contacts_created += 1
-    
-    # Insert secondary contact if exists
-    secondary_first = customer_data.get('Secondary Contact First Name')
-    secondary_last = customer_data.get('Secondary Contact Last Name')
-    
-    if secondary_first or secondary_last:
+
+    # Secondary contact
+    s_first = customer_data.get('Secondary Contact First Name')
+    s_last  = customer_data.get('Secondary Contact Last Name')
+    if s_first or s_last:
         cursor.execute("""
             INSERT INTO customer_contacts (
                 customer_id, first_name, last_name, title,
-                office_phone, office_email, is_primary, created_by
+                office_phone, office_email,
+                is_primary, contact_type,
+                accepts_billing, accepts_statements, accepts_general,
+                created_by
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             customer_id,
-            secondary_first or '',
-            secondary_last or '',
+            s_first or '',
+            s_last  or '',
             customer_data.get('Secondary Contact Job Title'),
             customer_data.get('Secondary Contact Phone 1'),
             customer_data.get('Secondary Contact Email 1'),
-            False,
-            created_by
+            False,          # is_primary
+            'general',      # contact_type
+            False,          # accepts_billing  — secondary defaults off; Michele can enable
+            False,          # accepts_statements
+            True,           # accepts_general
+            created_by,
         ))
         contacts_created += 1
-    
+
     return customer_id, contacts_created
 
+
+# ============================================================================
+# Per-database import runner
+# ============================================================================
+
+def run_import(customers, db_name, password, label):
+    """Import a list of customers into a single database. Returns (imported, skipped, contacts)."""
+    print(f"\nConnecting to {db_name}...")
+    conn = connect_db(db_name, password)
+    cursor = conn.cursor()
+
+    existing_names = get_existing_names(cursor)
+    print(f"  {len(existing_names)} customers already in database — duplicates will be skipped")
+
+    imported = 0
+    skipped_dup = 0
+    skipped_err = 0
+    total_contacts = 0
+
+    for idx, customer_data in enumerate(customers, 1):
+        customer_name = (customer_data.get('Customer Name') or '').strip()
+
+        # Skip duplicates
+        if customer_name in existing_names:
+            skipped_dup += 1
+            continue
+
+        try:
+            customer_id, contacts = import_customer(cursor, customer_data)
+            if customer_id:
+                conn.commit()
+                imported += 1
+                total_contacts += contacts
+                existing_names.add(customer_name)  # prevent intra-batch dupes
+                if imported % 100 == 0:
+                    print(f"  {imported} imported so far...")
+            else:
+                skipped_err += 1
+        except Exception as e:
+            conn.rollback()
+            print(f"  Warning: failed to import '{customer_name}': {e}")
+            skipped_err += 1
+
+    cursor.close()
+    conn.close()
+
+    print(f"\n{'=' * 60}")
+    print(f"  {label}")
+    print(f"{'=' * 60}")
+    print(f"  Imported:          {imported}")
+    print(f"  Contacts created:  {total_contacts}")
+    print(f"  Skipped (dupes):   {skipped_dup}")
+    print(f"  Skipped (errors):  {skipped_err}")
+
+    return imported, skipped_dup + skipped_err, total_contacts
+
+
+# ============================================================================
+# Main
+# ============================================================================
+
 def main():
-    """Main import process."""
-    print("=" * 70)
+    print("=" * 60)
     print("FieldKit: ServiceFusion Customer Import")
-    print("=" * 70)
-    print()
-    
-    # Get arguments
+    print("=" * 60)
+
     if len(sys.argv) < 3:
-        print("Usage: ./import_sf_customers.py <excel_file> <target_database>")
-        print()
-        print("Target database options:")
-        print("  - getagrip")
-        print("  - kleanit_charlotte")
-        print("  - cts")
-        print("  - kleanit_sf")
-        print()
-        print("Example:")
-        print("  ./import_sf_customers.py Report_CustomerList.xlsx getagrip")
+        print("\nUsage: python3 import_sf_customers.py <excel_file> <target_database>")
+        print("\nTarget database options:")
+        print("  getagrip          — Get a Grip Charlotte")
+        print("  kleanit_charlotte — Kleanit Charlotte (FL customers auto-split to kleanit_sf)")
+        print("  cts               — CTS of Raleigh")
+        print("  kleanit_sf        — Kleanit South Florida (direct, no split)")
+        print("\nExample:")
+        print("  python3 import_sf_customers.py /tmp/kleanit.xlsx kleanit_charlotte")
         return 1
-    
-    excel_file = sys.argv[1]
+
+    excel_file    = sys.argv[1]
     target_db_key = sys.argv[2]
-    
+
     if target_db_key not in DB_CONFIG:
-        print(f"Error: Invalid database '{target_db_key}'")
+        print(f"\nError: '{target_db_key}' is not a valid target.")
         print(f"Valid options: {', '.join(DB_CONFIG.keys())}")
         return 1
-    
-    target_db = DB_CONFIG[target_db_key]
-    
-    # Get password
+
+    if not os.path.exists(excel_file):
+        print(f"\nError: File not found: {excel_file}")
+        return 1
+
     import getpass
-    db_password = getpass.getpass(f"PostgreSQL password for {DB_USER}: ")
-    
+    password = getpass.getpass(f"\nPostgreSQL password for user '{DB_USER}': ")
+
     try:
-        # Parse Excel file
         customers = parse_sf_customer_list(excel_file)
-        
-        # Connect to database
-        print(f"\nConnecting to {target_db}...")
-        conn = connect_db(target_db, db_password)
-        cursor = conn.cursor()
-        
-        # Import customers
-        print(f"\nImporting {len(customers)} customers...")
-        imported = 0
-        total_contacts = 0
-        skipped = 0
-        
-        for idx, customer_data in enumerate(customers, 1):
-            try:
-                customer_id, contacts_count = import_customer(cursor, customer_data)
-                if customer_id:
-                    conn.commit()
-                    imported += 1
-                    total_contacts += contacts_count
-                    if idx % 100 == 0:
-                        print(f"  Processed {idx}/{len(customers)} customers...")
-                else:
-                    skipped += 1
-            except Exception as e:
-                conn.rollback()
-                print(f"  Warning: Failed to import customer {idx}")
-                print(f"    Error: {e}")
-                print(f"    Customer: {customer_data.get('Customer Name', 'N/A')}")
-                skipped += 1
-                continue
-        
-        # Commit transaction
-        conn.commit()
-        cursor.close()
-        conn.close()
-        
-        # Summary
-        print()
-        print("=" * 70)
-        print("Import Summary")
-        print("=" * 70)
-        print(f"Total customers processed: {len(customers)}")
-        print(f"Successfully imported:     {imported}")
-        print(f"Contacts created:          {total_contacts}")
-        print(f"Skipped:                   {skipped}")
-        print()
-        print(f"✓ Import to {target_db} complete!")
-        
-        return 0
-        
     except Exception as e:
-        print(f"\n✗ Error: {e}")
+        print(f"\nError reading Excel file: {e}")
         import traceback
         traceback.print_exc()
         return 1
+
+    # ----------------------------------------------------------------
+    # Kleanit auto-split
+    # ----------------------------------------------------------------
+    if target_db_key == 'kleanit_charlotte':
+        charlotte_customers = [c for c in customers if not is_florida_customer(c.get('Customer Name', ''))]
+        florida_customers   = [c for c in customers if     is_florida_customer(c.get('Customer Name', ''))]
+
+        print(f"\nKleanit auto-split:")
+        print(f"  {len(charlotte_customers)} → fieldkit_kleanit_charlotte")
+        print(f"  {len(florida_customers)}   → fieldkit_kleanit_sf (*FL* customers)")
+
+        run_import(charlotte_customers, DB_CONFIG['kleanit_charlotte'], password,
+                   "Kleanit Charlotte — Import Summary")
+        if florida_customers:
+            run_import(florida_customers, DB_CONFIG['kleanit_sf'], password,
+                       "Kleanit South Florida — Import Summary")
+        else:
+            print("\nNo *FL* customers found — skipping kleanit_sf import.")
+
+    # ----------------------------------------------------------------
+    # All other targets — single database
+    # ----------------------------------------------------------------
+    else:
+        run_import(customers, DB_CONFIG[target_db_key], password,
+                   f"{target_db_key} — Import Summary")
+
+    print("\n✓ Import complete.")
+    return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())
