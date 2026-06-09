@@ -177,11 +177,12 @@
                 <option value="Residential"   {% if type_filter == 'Residential'   %}selected{% endif %}>Residential</option>
                 <option value="Contractors"   {% if type_filter == 'Contractors'   %}selected{% endif %}>Contractors</option>
             </select>
-            <span class="result-count">{{ total }} customer{{ 's' if total != 1 }}</span>
+            <span class="result-count" id="resultCount">{{ total }} customer{{ 's' if total != 1 }}</span>
         </div>
     </form>
 
     <!-- Table -->
+    <div id="resultsArea">
     {% if customers %}
     <table class="customer-table">
         <thead>
@@ -266,15 +267,76 @@
         {% endif %}
     </div>
     {% endif %}
+    </div><!-- end resultsArea -->
 </div>
 
 <script>
-    // Submit search on Enter key only — no auto-submit on pause
+    const companyKey = "{{ company_key }}";
+    const colorPrimary = "{{ branding.color_primary }}";
+    let searchTimer;
+
+    function buildRow(c) {
+        const statusClass = {
+            'Active': 'badge-active', 'Inactive': 'badge-inactive',
+            'On Hold': 'badge-onhold', 'Lead': 'badge-lead'
+        }[c.status] || '';
+        const location = c.city && c.state ? `${c.city}, ${c.state}` :
+                         c.city ? c.city : '<span style="color:#ccc">—</span>';
+        return `<tr>
+            <td class="customer-name"><a href="/${companyKey}/customers/${c.id}" style="color:${colorPrimary};text-decoration:none;font-weight:500;">${c.property_name}</a></td>
+            <td><span class="badge badge-type">${c.customer_type}</span></td>
+            <td>${location}</td>
+            <td><span class="badge ${statusClass}">${c.status}</span></td>
+            <td style="color:#666;font-size:0.9rem;">—</td>
+            <td><a href="/${companyKey}/customers/${c.id}" style="color:${colorPrimary};text-decoration:none;font-size:0.9rem;">View →</a></td>
+        </tr>`;
+    }
+
+    function liveSearch() {
+        const search = document.getElementById('searchInput').value;
+        const status = document.querySelector('select[name="status"]').value;
+        const type   = document.querySelector('select[name="type"]').value;
+
+        const params = new URLSearchParams({ search, status, type });
+        fetch(`/${companyKey}/customers/search?${params}`)
+            .then(r => r.json())
+            .then(data => {
+                const area = document.getElementById('resultsArea');
+                const count = document.getElementById('resultCount');
+                count.textContent = `${data.total} customer${data.total !== 1 ? 's' : ''}`;
+
+                if (data.customers.length === 0) {
+                    area.innerHTML = `<div class="empty-state"><div class="icon">🏢</div><p>No customers found${search ? ` for "${search}"` : ''}.</p></div>`;
+                    return;
+                }
+
+                const rows = data.customers.map(buildRow).join('');
+                area.innerHTML = `<table class="customer-table">
+                    <thead><tr>
+                        <th>Property Name</th><th>Type</th><th>Location</th>
+                        <th>Status</th><th>Email</th><th></th>
+                    </tr></thead>
+                    <tbody>${rows}</tbody>
+                </table>`;
+            })
+            .catch(() => {});
+    }
+
+    // Live search as user types (debounced 300ms)
+    document.getElementById('searchInput').addEventListener('input', function() {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(liveSearch, 300);
+    });
+
+    // Filter dropdowns trigger live search immediately
+    document.querySelectorAll('.filter-select').forEach(sel => {
+        sel.removeAttribute('onchange');
+        sel.addEventListener('change', liveSearch);
+    });
+
+    // Enter key still works as fallback
     document.getElementById('searchInput').addEventListener('keydown', function(e) {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            document.getElementById('filterForm').submit();
-        }
+        if (e.key === 'Enter') { e.preventDefault(); liveSearch(); }
     });
 </script>
 {% endblock %}

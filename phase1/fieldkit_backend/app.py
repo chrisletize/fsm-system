@@ -360,8 +360,8 @@ def customers(company_key, branding, all_companies, company_access):
     params     = []
 
     if search:
-        conditions.append("property_name ILIKE %s")
-        params.append(f'%{search}%')
+        conditions.append("to_tsvector('english', property_name) @@ plainto_tsquery('english', %s)")
+        params.append(search)
     if status_filter:
         conditions.append("status = %s")
         params.append(status_filter)
@@ -396,6 +396,51 @@ def customers(company_key, branding, all_companies, company_access):
         search=search, status_filter=status_filter, type_filter=type_filter,
         page=page, total_pages=total_pages, total=total,
     )
+
+
+@app.route('/<company_key>/customers/search')
+@login_required
+@company_access_required
+def customers_search(company_key):
+    """JSON endpoint for live customer search — returns matching rows."""
+    search        = request.args.get('search', '').strip()
+    status_filter = request.args.get('status', 'Active')
+    type_filter   = request.args.get('type', '')
+
+    conditions = ["deleted_at IS NULL"]
+    params     = []
+
+    if search:
+        conditions.append("property_name ILIKE %s")
+        params.append(f'%{search}%')
+    if status_filter:
+        conditions.append("status = %s")
+        params.append(status_filter)
+    if type_filter:
+        conditions.append("customer_type = %s")
+        params.append(type_filter)
+
+    where = " AND ".join(conditions)
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute(f"""
+        SELECT id, property_name, customer_type, city, state, status
+        FROM customers WHERE {where}
+        ORDER BY property_name ASC
+        LIMIT 100
+    """, params)
+    rows = cur.fetchall()
+
+    cur.execute(f"SELECT COUNT(*) as count FROM customers WHERE {where}", params)
+    total = cur.fetchone()['count']
+    cur.close(); conn.close()
+
+    return jsonify({
+        'total': total,
+        'customers': [dict(r) for r in rows],
+    })
+
 
 # ============================================================================
 # Customers — detail
