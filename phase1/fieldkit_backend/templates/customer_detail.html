@@ -228,13 +228,21 @@
             </span>
         </div>
         <div class="field-row">
-            <span class="field-label">Billing Email</span>
-            <span class="field-value {% if not customer.billing_email %}empty{% endif %}">
-                {% if customer.billing_email %}
-                <a href="mailto:{{ customer.billing_email }}" style="color:{{ branding.color_primary }}">
-                    {{ customer.billing_email }}
-                </a>
-                {% else %}—{% endif %}
+            <span class="field-label">Billing Contacts</span>
+            <span class="field-value">
+                {% set billing = contacts | selectattr('accepts_billing') | list %}
+                {% if billing %}
+                {% for bc in billing %}
+                <span style="display:block; line-height:1.6;">
+                    <strong style="font-weight:500;">{{ bc.first_name }} {{ bc.last_name }}</strong>
+                    {% if bc.office_email %}
+                    — <a href="mailto:{{ bc.office_email }}" style="color:{{ branding.color_primary }}; font-weight:400;">{{ bc.office_email }}</a>
+                    {% endif %}
+                </span>
+                {% endfor %}
+                {% else %}
+                <span style="color:#e65100; font-size:0.85rem; font-weight:500;">⚠ None set</span>
+                {% endif %}
             </span>
         </div>
         <div class="field-row">
