@@ -777,7 +777,7 @@ def location_edit(company_key, customer_id, location_id, branding, all_companies
 @company_access_required
 @with_branding
 def field_settings(company_key, branding, all_companies, company_access):
-    if session.get('user_role') not in ('admin', 'manager'):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
         abort(403)
     conn = get_db_connection(company_key)
     field_defs = get_field_definitions(conn)
@@ -792,7 +792,7 @@ def field_settings(company_key, branding, all_companies, company_access):
 @login_required
 @company_access_required
 def field_add(company_key):
-    if session.get('user_role') not in ('admin', 'manager'):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
         abort(403)
     field_name = request.form.get('field_name','').strip()
     field_type = request.form.get('field_type','text')
@@ -813,7 +813,7 @@ def field_add(company_key):
 @login_required
 @company_access_required
 def field_toggle(company_key, field_id):
-    if session.get('user_role') not in ('admin', 'manager'):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
         abort(403)
     conn = get_db_connection(company_key)
     cur  = conn.cursor()
@@ -1184,7 +1184,7 @@ def billing_export(company_key):
 # getagrip is the canonical read source; all writes go to all 4 DBs.
 # ============================================================================
 
-VALID_ROLES = ['admin', 'manager', 'salesperson', 'technician']
+VALID_ROLES = ['admin', 'manager', 'office', 'salesperson', 'technician']
 ALL_COMPANY_KEYS = list(DB_CONFIG.keys())  # ['getagrip', 'kleanit_charlotte', 'cts', 'kleanit_sf']
 
 
