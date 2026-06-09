@@ -17,11 +17,13 @@
             color: #333;
         }
         
-        /* Top Navigation */
+        /* ================================================================
+           Top Navigation Bar (branding + company switcher + user menu)
+        ================================================================ */
         .topnav {
             background-color: {{ branding.color_primary if branding else '#2C2C2C' }};
             color: white;
-            padding: 1rem 2rem;
+            padding: 0.75rem 2rem;
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -31,18 +33,27 @@
         .topnav-left {
             display: flex;
             align-items: center;
-            gap: 2rem;
+            gap: 1.5rem;
         }
         
-        .topnav h1 {
-            font-size: 1.5rem;
-            font-weight: 600;
+        .topnav-brand {
+            font-size: 1.25rem;
+            font-weight: 700;
+            letter-spacing: -0.3px;
+            text-decoration: none;
+            color: white;
+        }
+
+        .topnav-company {
+            font-size: 0.9rem;
+            opacity: 0.75;
+            font-weight: 400;
         }
         
         .topnav-right {
             display: flex;
             align-items: center;
-            gap: 1.5rem;
+            gap: 1.25rem;
         }
         
         /* Company Switcher Dropdown */
@@ -54,13 +65,13 @@
             background-color: rgba(255, 255, 255, 0.2);
             color: white;
             border: 1px solid rgba(255, 255, 255, 0.3);
-            padding: 0.5rem 1rem;
+            padding: 0.4rem 0.9rem;
             border-radius: 4px;
             cursor: pointer;
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             display: flex;
             align-items: center;
-            gap: 0.5rem;
+            gap: 0.4rem;
         }
         
         .company-switcher-btn:hover {
@@ -72,7 +83,7 @@
             position: absolute;
             top: 100%;
             right: 0;
-            margin-top: 0.5rem;
+            margin-top: 0.4rem;
             background-color: white;
             border: 1px solid #ddd;
             border-radius: 4px;
@@ -87,10 +98,11 @@
         
         .company-switcher-dropdown a {
             display: block;
-            padding: 0.75rem 1rem;
+            padding: 0.7rem 1rem;
             color: #333;
             text-decoration: none;
             border-bottom: 1px solid #eee;
+            font-size: 0.9rem;
         }
         
         .company-switcher-dropdown a:last-child {
@@ -109,21 +121,160 @@
         /* User Menu */
         .user-menu {
             color: white;
-            font-size: 0.9rem;
+            font-size: 0.85rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .user-menu .user-name {
+            opacity: 0.85;
         }
         
         .user-menu a {
             color: white;
             text-decoration: none;
-            padding: 0.5rem 1rem;
+            padding: 0.4rem 0.85rem;
             border-radius: 4px;
+            border: 1px solid rgba(255,255,255,0.3);
+            font-size: 0.82rem;
         }
         
         .user-menu a:hover {
             background-color: rgba(255, 255, 255, 0.2);
         }
-        
-        /* Main Content */
+
+        /* ================================================================
+           Secondary Nav Bar (page navigation links)
+        ================================================================ */
+        .subnav {
+            background-color: white;
+            border-bottom: 1px solid #e5e7eb;
+            padding: 0 2rem;
+            display: flex;
+            align-items: stretch;
+            justify-content: space-between;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+
+        .subnav-links {
+            display: flex;
+            align-items: stretch;
+            gap: 0;
+        }
+
+        .subnav-link {
+            display: flex;
+            align-items: center;
+            padding: 0 1.1rem;
+            height: 44px;
+            text-decoration: none;
+            color: #555;
+            font-size: 0.9rem;
+            font-weight: 500;
+            border-bottom: 2px solid transparent;
+            transition: color 0.15s, border-color 0.15s;
+            white-space: nowrap;
+        }
+
+        .subnav-link:hover {
+            color: {{ branding.color_primary if branding else '#2C2C2C' }};
+            border-bottom-color: {{ branding.color_primary if branding else '#2C2C2C' }}44;
+        }
+
+        .subnav-link.active {
+            color: {{ branding.color_primary if branding else '#2C2C2C' }};
+            border-bottom-color: {{ branding.color_primary if branding else '#2C2C2C' }};
+            font-weight: 600;
+        }
+
+        /* Settings dropdown in subnav */
+        .subnav-dropdown {
+            position: relative;
+            display: flex;
+            align-items: stretch;
+        }
+
+        .subnav-dropdown-btn {
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+            padding: 0 1.1rem;
+            height: 44px;
+            background: none;
+            border: none;
+            border-bottom: 2px solid transparent;
+            color: #555;
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            white-space: nowrap;
+            font-family: inherit;
+            transition: color 0.15s, border-color 0.15s;
+        }
+
+        .subnav-dropdown-btn:hover,
+        .subnav-dropdown.open .subnav-dropdown-btn {
+            color: {{ branding.color_primary if branding else '#2C2C2C' }};
+            border-bottom-color: {{ branding.color_primary if branding else '#2C2C2C' }}44;
+        }
+
+        .subnav-dropdown-btn.active {
+            color: {{ branding.color_primary if branding else '#2C2C2C' }};
+            border-bottom-color: {{ branding.color_primary if branding else '#2C2C2C' }};
+            font-weight: 600;
+        }
+
+        .subnav-dropdown-menu {
+            display: none;
+            position: absolute;
+            top: 100%;
+            right: 0;
+            margin-top: 0;
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 0 0 6px 6px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            min-width: 180px;
+            z-index: 999;
+        }
+
+        .subnav-dropdown.open .subnav-dropdown-menu {
+            display: block;
+        }
+
+        .subnav-dropdown-menu a {
+            display: block;
+            padding: 0.65rem 1rem;
+            color: #444;
+            text-decoration: none;
+            font-size: 0.88rem;
+            border-bottom: 1px solid #f3f4f6;
+        }
+
+        .subnav-dropdown-menu a:last-child {
+            border-bottom: none;
+        }
+
+        .subnav-dropdown-menu a:hover {
+            background-color: #f9fafb;
+            color: {{ branding.color_primary if branding else '#2C2C2C' }};
+        }
+
+        .subnav-dropdown-menu a.active {
+            background-color: {{ branding.color_primary if branding else '#2C2C2C' }}0f;
+            color: {{ branding.color_primary if branding else '#2C2C2C' }};
+            font-weight: 500;
+        }
+
+        .subnav-divider {
+            border-top: 1px solid #e5e7eb;
+            margin: 0.25rem 0;
+        }
+
+        /* ================================================================
+           Main Content
+        ================================================================ */
         .container {
             max-width: 1200px;
             margin: 2rem auto;
@@ -206,27 +357,35 @@
 </head>
 <body>
     {% if session.user_id %}
+
+    <!-- ============================================================
+         Top bar: logo, company name, company switcher, user menu
+    ============================================================ -->
     <nav class="topnav">
         <div class="topnav-left">
-            <h1>FieldKit</h1>
+            {% if company_key is defined %}
+            <a href="/{{ company_key }}/dashboard" class="topnav-brand">FieldKit</a>
+            {% else %}
+            <a href="/home" class="topnav-brand">FieldKit</a>
+            {% endif %}
             {% if branding %}
-            <span style="opacity: 0.8;">{{ branding.short_name }}</span>
+            <span class="topnav-company">{{ branding.short_name }}</span>
             {% endif %}
         </div>
         <div class="topnav-right">
             {% if company_access and company_access|length > 1 %}
             <div class="company-switcher" id="companySwitcher">
                 <button class="company-switcher-btn" onclick="toggleCompanySwitcher()">
-                    <span>{{ branding.short_name if branding else 'Select Company' }}</span>
+                    <span>Switch Company</span>
                     <span>▾</span>
                 </button>
                 <div class="company-switcher-dropdown">
-                    {% for company_key in company_access %}
-                    {% set company = all_companies.get(company_key) %}
-                    {% if company %}
-                    <a href="/switch/{{ company_key }}" 
-                       class="{% if company_key == session.current_company %}current{% endif %}">
-                        {{ company.name }}
+                    {% for ck in company_access %}
+                    {% set co = all_companies.get(ck) %}
+                    {% if co %}
+                    <a href="/{{ ck }}/dashboard"
+                       class="{% if ck == company_key %}current{% endif %}">
+                        {{ co.name }}
                     </a>
                     {% endif %}
                     {% endfor %}
@@ -235,11 +394,66 @@
             {% endif %}
             
             <div class="user-menu">
-                <span>{{ session.full_name }}</span>
-                <a href="/logout">Logout</a>
+                <span class="user-name">{{ session.full_name }}</span>
+                <a href="/logout">Log out</a>
             </div>
         </div>
     </nav>
+
+    <!-- ============================================================
+         Secondary nav: page links (only shown inside a company context)
+    ============================================================ -->
+    {% if company_key is defined and branding %}
+    {% set current_path = request.path %}
+    <nav class="subnav">
+        <div class="subnav-links">
+            <a href="/{{ company_key }}/dashboard"
+               class="subnav-link {% if current_path == '/' + company_key + '/dashboard' or current_path == '/' + company_key + '/' %}active{% endif %}">
+                Dashboard
+            </a>
+
+            <a href="/{{ company_key }}/customers"
+               class="subnav-link {% if '/customers' in current_path and '/settings' not in current_path %}active{% endif %}">
+                Customers
+            </a>
+
+            {% if session.user_role in ('admin', 'manager', 'office') %}
+            <a href="/{{ company_key }}/billing"
+               class="subnav-link {% if '/billing' in current_path %}active{% endif %}">
+                Billing
+            </a>
+            {% endif %}
+        </div>
+
+        <!-- Settings dropdown (right side) -->
+        <div class="subnav-links">
+            {% if session.user_role in ('admin', 'manager', 'office') %}
+            <div class="subnav-dropdown" id="settingsDropdown">
+                <button class="subnav-dropdown-btn {% if '/settings' in current_path %}active{% endif %}"
+                        onclick="toggleSettingsDropdown()">
+                    Settings ▾
+                </button>
+                <div class="subnav-dropdown-menu">
+                    {% if session.user_role in ('admin', 'manager', 'office') %}
+                    <a href="/{{ company_key }}/settings/fields"
+                       class="{% if '/settings/fields' in current_path %}active{% endif %}">
+                        Custom Fields
+                    </a>
+                    {% endif %}
+                    {% if session.user_role == 'admin' %}
+                    <div class="subnav-divider"></div>
+                    <a href="/{{ company_key }}/settings/users"
+                       class="{% if '/settings/users' in current_path %}active{% endif %}">
+                        User Management
+                    </a>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </nav>
+    {% endif %}
+
     {% endif %}
     
     <div class="container">
@@ -251,11 +465,19 @@
             document.getElementById('companySwitcher').classList.toggle('open');
         }
         
-        // Close dropdown when clicking outside
+        function toggleSettingsDropdown() {
+            document.getElementById('settingsDropdown').classList.toggle('open');
+        }
+
+        // Close all dropdowns when clicking outside
         document.addEventListener('click', function(event) {
-            const switcher = document.getElementById('companySwitcher');
-            if (switcher && !switcher.contains(event.target)) {
-                switcher.classList.remove('open');
+            const companySwitcher = document.getElementById('companySwitcher');
+            if (companySwitcher && !companySwitcher.contains(event.target)) {
+                companySwitcher.classList.remove('open');
+            }
+            const settingsDropdown = document.getElementById('settingsDropdown');
+            if (settingsDropdown && !settingsDropdown.contains(event.target)) {
+                settingsDropdown.classList.remove('open');
             }
         });
     </script>
