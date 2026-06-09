@@ -228,23 +228,13 @@
             </span>
         </div>
         <div class="field-row">
-            <span class="field-label">Billing Contacts</span>
-            <span class="field-value">
-                {% set billing = contacts | selectattr('accepts_billing') | list %}
-                {% if billing %}
-                <span style="text-align:right;">
-                {% for bc in billing %}
-                <span style="display:block; line-height:1.6;">
-                    <strong style="font-weight:500;">{{ bc.first_name }} {{ bc.last_name }}</strong>
-                    {% if bc.office_email %}
-                    — <a href="mailto:{{ bc.office_email }}" style="color:{{ branding.color_primary }}; font-weight:400;">{{ bc.office_email }}</a>
-                    {% endif %}
-                </span>
-                {% endfor %}
-                </span>
-                {% else %}
-                <span style="color:#e65100; font-size:0.85rem; font-weight:500;">⚠ None set</span>
-                {% endif %}
+            <span class="field-label">Billing Email</span>
+            <span class="field-value {% if not customer.billing_email %}empty{% endif %}">
+                {% if customer.billing_email %}
+                <a href="mailto:{{ customer.billing_email }}" style="color:{{ branding.color_primary }}">
+                    {{ customer.billing_email }}
+                </a>
+                {% else %}—{% endif %}
             </span>
         </div>
         <div class="field-row">
@@ -393,9 +383,7 @@
     {% endif %}
 </div>
 
-<!-- Contacts — paste this block to replace the existing Contacts card in customer_detail.html -->
-<!-- Find: "<!-- Contacts -->" and replace the entire card div through the closing </div> -->
-
+<!-- Contacts -->
 <div class="card" style="margin-bottom:1.25rem;">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
         <div class="section-title" style="margin-bottom:0;">
