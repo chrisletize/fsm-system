@@ -360,8 +360,8 @@ def customers(company_key, branding, all_companies, company_access):
     params     = []
 
     if search:
-        conditions.append("to_tsvector('english', property_name) @@ plainto_tsquery('english', %s)")
-        params.append(search)
+        conditions.append("property_name ILIKE %s")
+        params.append(f'%{search}%')
     if status_filter:
         conditions.append("status = %s")
         params.append(status_filter)

@@ -269,13 +269,12 @@
 </div>
 
 <script>
-    // Submit search on Enter, debounced as user types
-    let searchTimer;
-    document.getElementById('searchInput').addEventListener('input', function() {
-        clearTimeout(searchTimer);
-        searchTimer = setTimeout(() => {
+    // Submit search on Enter key only — no auto-submit on pause
+    document.getElementById('searchInput').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
             document.getElementById('filterForm').submit();
-        }, 400);
+        }
     });
 </script>
 {% endblock %}
