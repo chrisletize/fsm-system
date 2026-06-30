@@ -1,0 +1,16 @@
+{# Reusable Jinja macros for FieldKit #}
+
+{% macro autocomplete_field(name, value='', suggestions=[], placeholder='', required=False, input_id='') -%}
+<div class="ac-wrap">
+    <input type="text"
+           name="{{ name }}"
+           {% if input_id %}id="{{ input_id }}"{% endif %}
+           class="js-autocomplete"
+           value="{{ value or '' }}"
+           placeholder="{{ placeholder }}"
+           autocomplete="off"
+           data-suggestions='{{ suggestions|tojson }}'
+           {% if required %}required{% endif %}>
+    <div class="ac-panel" role="listbox"></div>
+</div>
+{%- endmacro %}

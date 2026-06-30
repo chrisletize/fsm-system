@@ -870,6 +870,180 @@ def field_toggle(company_key, field_id):
     return redirect(f'/{company_key}/settings/fields')
 
 # ============================================================================
+# Service catalog settings  (admin + manager)
+# ============================================================================
+
+VALID_BILLING_BEHAVIORS = ('standard', 'per_day_equipment')
+VALID_UNITS = ('each', 'sq ft', 'hour', 'flat rate', 'day')
+
+def _opt_num(value):
+    """Empty string -> None; otherwise the stripped string (psycopg2 casts NUMERIC/INT)."""
+    value = (value or '').strip()
+    return value if value != '' else None
+
+def _save_catalog_item(company_key, item_id):
+    """Insert (item_id is None) or update a catalog item from request.form.
+    Returns an error string, or None on success."""
+    name              = request.form.get('name', '').strip()
+    billing_behavior  = request.form.get('billing_behavior', 'standard')
+    category          = request.form.get('category', '').strip() or None
+    unit_of_measure   = request.form.get('unit_of_measure', 'each')
+    unit_price        = _opt_num(request.form.get('unit_price')) or '0'
+    cost              = _opt_num(request.form.get('cost'))
+    estimated_minutes = _opt_num(request.form.get('estimated_minutes'))
+    minimum_quantity  = _opt_num(request.form.get('minimum_quantity'))
+    billing_increment = _opt_num(request.form.get('billing_increment'))
+    default_desc      = request.form.get('default_description', '').strip() or None
+    is_taxable        = request.form.get('is_taxable') == 'on'
+    is_catch_all      = request.form.get('is_catch_all') == 'on'
+    is_active         = request.form.get('is_active') == 'on'
+
+    if not name:
+        return 'Item name is required.'
+    if billing_behavior not in VALID_BILLING_BEHAVIORS:
+        return 'Invalid billing behavior.'
+    if unit_of_measure not in VALID_UNITS:
+        return 'Invalid unit of measure.'
+
+    # Per-day equipment never carries a labor-time estimate.
+    if billing_behavior == 'per_day_equipment':
+        estimated_minutes = None
+
+    username = session.get('username')
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    if item_id is None:
+        cur.execute("""
+            INSERT INTO catalog_items
+                (billing_behavior, name, default_description, category,
+                 unit_price, unit_of_measure, estimated_minutes,
+                 minimum_quantity, billing_increment, is_taxable, cost,
+                 is_catch_all, sort_order, is_active, created_by, updated_by)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                    (SELECT COALESCE(MAX(sort_order),0)+1 FROM catalog_items WHERE deleted_at IS NULL),
+                    %s,%s,%s)
+        """, (billing_behavior, name, default_desc, category,
+              unit_price, unit_of_measure, estimated_minutes,
+              minimum_quantity, billing_increment, is_taxable, cost,
+              is_catch_all, is_active, username, username))
+    else:
+        cur.execute("""
+            UPDATE catalog_items
+            SET billing_behavior=%s, name=%s, default_description=%s, category=%s,
+                unit_price=%s, unit_of_measure=%s, estimated_minutes=%s,
+                minimum_quantity=%s, billing_increment=%s, is_taxable=%s, cost=%s,
+                is_catch_all=%s, is_active=%s,
+                updated_at=CURRENT_TIMESTAMP, updated_by=%s
+            WHERE id=%s AND deleted_at IS NULL
+        """, (billing_behavior, name, default_desc, category,
+              unit_price, unit_of_measure, estimated_minutes,
+              minimum_quantity, billing_increment, is_taxable, cost,
+              is_catch_all, is_active, username, item_id))
+    conn.commit(); cur.close(); conn.close()
+    return None
+
+def _catalog_categories(company_key):
+    """Distinct, non-empty catalog categories for autocomplete suggestions."""
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT DISTINCT category FROM catalog_items
+        WHERE deleted_at IS NULL AND category IS NOT NULL AND category <> ''
+        ORDER BY category
+    """)
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    return [r['category'] for r in rows]
+
+@app.route('/<company_key>/settings/catalog')
+@login_required
+@company_access_required
+@with_branding
+def catalog_list(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT id, name, category, billing_behavior, unit_of_measure,
+               unit_price, estimated_minutes, is_taxable, is_active, sort_order
+        FROM catalog_items
+        WHERE deleted_at IS NULL
+        ORDER BY is_active DESC, sort_order, name
+    """)
+    items = cur.fetchall()
+    cur.close(); conn.close()
+    return render_template('catalog_list.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        items=items,
+    )
+
+@app.route('/<company_key>/settings/catalog/new', methods=['GET', 'POST'])
+@login_required
+@company_access_required
+@with_branding
+def catalog_new(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager'):
+        abort(403)
+    error = None
+    if request.method == 'POST':
+        error = _save_catalog_item(company_key, item_id=None)
+        if not error:
+            return redirect(f'/{company_key}/settings/catalog')
+    categories = _catalog_categories(company_key)
+    return render_template('catalog_form.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        item=None, error=error, categories=categories,
+        valid_units=VALID_UNITS, valid_behaviors=VALID_BILLING_BEHAVIORS,
+    )
+
+@app.route('/<company_key>/settings/catalog/<int:item_id>/edit', methods=['GET', 'POST'])
+@login_required
+@company_access_required
+@with_branding
+def catalog_edit(company_key, item_id, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager'):
+        abort(403)
+    if request.method == 'POST':
+        error = _save_catalog_item(company_key, item_id=item_id)
+        if not error:
+            return redirect(f'/{company_key}/settings/catalog')
+    else:
+        error = None
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("SELECT * FROM catalog_items WHERE id = %s AND deleted_at IS NULL", (item_id,))
+    item = cur.fetchone()
+    cur.close(); conn.close()
+    if not item:
+        abort(404)
+    categories = _catalog_categories(company_key)
+    return render_template('catalog_form.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        item=item, error=error, categories=categories,
+        valid_units=VALID_UNITS, valid_behaviors=VALID_BILLING_BEHAVIORS,
+    )
+
+@app.route('/<company_key>/settings/catalog/<int:item_id>/delete', methods=['POST'])
+@login_required
+@company_access_required
+def catalog_delete(company_key, item_id):
+    if session.get('user_role') not in ('admin', 'manager'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        UPDATE catalog_items
+        SET deleted_at = CURRENT_TIMESTAMP, deleted_by = %s
+        WHERE id = %s AND deleted_at IS NULL
+    """, (session.get('username'), item_id))
+    conn.commit(); cur.close(); conn.close()
+    return redirect(f'/{company_key}/settings/catalog')
+
+# ============================================================================
 # Contacts — new
 # ============================================================================
 

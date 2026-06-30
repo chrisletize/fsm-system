@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ 'Edit User' if user else 'Add User' }} — {{ branding.short_name }}{% endblock %}
+{% block title %}{{ 'Edit User' if user else 'Add New User' }} - {{ branding.name }}{% endblock %}
 
 {% block extra_css %}
 <style>
@@ -9,244 +9,293 @@
         align-items: center;
         margin-bottom: 1.5rem;
     }
-    .page-header h2 {
-        font-size: 1.5rem;
+    .page-header h1 {
+        font-size: 1.75rem;
         color: {{ branding.color_primary }};
     }
-
-    .form-card {
-        background: white;
-        border-radius: 8px;
-        padding: 2rem;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        margin-bottom: 1.5rem;
-        max-width: 680px;
-    }
-    .form-card h3 {
-        font-size: 1.1rem;
-        color: {{ branding.color_primary }};
-        margin-bottom: 1.25rem;
-        padding-bottom: 0.5rem;
-        border-bottom: 2px solid {{ branding.color_primary }};
-    }
-
-    .form-row {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 1rem;
+    .breadcrumb {
+        font-size: 0.9rem;
+        color: #888;
         margin-bottom: 1rem;
     }
-    .form-row.single { grid-template-columns: 1fr; }
-
+    .breadcrumb a {
+        color: {{ branding.color_primary }};
+        text-decoration: none;
+    }
+    .breadcrumb a:hover { text-decoration: underline; }
+    .form-section {
+        margin-bottom: 2rem;
+    }
+    .form-section h3 {
+        font-size: 1rem;
+        font-weight: 600;
+        color: #444;
+        margin-bottom: 1rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px solid #eee;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+        font-size: 0.85rem;
+    }
+    .form-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1.25rem;
+    }
     .form-group {
         display: flex;
         flex-direction: column;
-        gap: 0.3rem;
+        gap: 0.4rem;
     }
-    .form-group label {
-        font-size: 0.85rem;
-        font-weight: 600;
-        color: #374151;
-        text-transform: uppercase;
-        letter-spacing: 0.03em;
+    .form-group.full-width {
+        grid-column: 1 / -1;
     }
-    .form-group label .required { color: #dc2626; }
-
-    .form-group input[type="text"],
-    .form-group input[type="email"],
-    .form-group input[type="password"],
-    .form-group select {
-        padding: 0.6rem 0.75rem;
-        border: 1px solid #d1d5db;
-        border-radius: 4px;
-        font-size: 0.95rem;
-        color: #111827;
-        background: white;
-    }
-    .form-group input:focus,
-    .form-group select:focus {
-        outline: none;
-        border-color: {{ branding.color_primary }};
-        box-shadow: 0 0 0 3px {{ branding.color_primary }}22;
-    }
-    .form-group .help-text {
-        font-size: 0.8rem;
-        color: #6b7280;
-    }
-
-    /* Company access checkboxes */
-    .company-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 0.6rem;
-        margin-top: 0.25rem;
-    }
-    .company-checkbox-label {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        padding: 0.6rem 0.75rem;
-        border: 1px solid #d1d5db;
-        border-radius: 6px;
-        cursor: pointer;
+    label {
         font-size: 0.9rem;
         font-weight: 500;
-        transition: background 0.1s;
+        color: #555;
     }
-    .company-checkbox-label:hover { background: #f9fafb; }
-    .company-checkbox-label input[type="checkbox"] {
+    label .required {
+        color: #e53935;
+        margin-left: 2px;
+    }
+    input[type="text"],
+    input[type="email"],
+    input[type="password"],
+    select {
+        padding: 0.65rem 0.9rem;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 0.95rem;
+        width: 100%;
+        background: white;
+    }
+    input:focus, select:focus {
+        outline: none;
+        border-color: {{ branding.color_primary }};
+        box-shadow: 0 0 0 2px {{ branding.color_primary }}22;
+    }
+    input:disabled {
+        background: #f5f5f5;
+        color: #888;
+        cursor: not-allowed;
+    }
+    .field-hint {
+        font-size: 0.82rem;
+        color: #888;
+        margin-top: 0.1rem;
+    }
+    /* Company access checkboxes */
+    .company-checkboxes {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    .company-checkbox-item {
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+        padding: 0.75rem 1rem;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: border-color 0.15s, background 0.15s;
+    }
+    .company-checkbox-item:hover {
+        border-color: {{ branding.color_primary }};
+        background: {{ branding.color_primary }}08;
+    }
+    .company-checkbox-item input[type="checkbox"] {
         width: 16px;
         height: 16px;
-        accent-color: {{ branding.color_primary }};
         cursor: pointer;
-    }
-    .company-checkbox-label.checked {
-        background: {{ branding.color_primary }}0f;
-        border-color: {{ branding.color_primary }};
-    }
-    .company-dot {
-        display: inline-block;
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
+        accent-color: {{ branding.color_primary }};
         flex-shrink: 0;
     }
-
-    .error-box {
-        background: #fee2e2;
-        border: 1px solid #fca5a5;
-        color: #991b1b;
-        padding: 0.85rem 1rem;
-        border-radius: 6px;
-        margin-bottom: 1.25rem;
-        font-size: 0.9rem;
+    .company-checkbox-item label {
+        cursor: pointer;
+        margin: 0;
+        font-weight: 500;
     }
-
+    .company-checkbox-item .co-short {
+        font-size: 0.82rem;
+        color: #888;
+        font-weight: 400;
+    }
+    /* Password reset section */
+    .reset-section {
+        background: #fff8e1;
+        border: 1px solid #ffe082;
+        border-radius: 6px;
+        padding: 1.25rem;
+        margin-top: 0.5rem;
+    }
+    .reset-section h3 {
+        color: #e65100;
+        border-bottom-color: #ffe082;
+    }
+    .reset-section p {
+        font-size: 0.9rem;
+        color: #666;
+        margin-bottom: 1rem;
+    }
+    /* Error / flash */
+    .alert {
+        padding: 1rem 1.25rem;
+        border-radius: 4px;
+        margin-bottom: 1.25rem;
+        font-size: 0.95rem;
+    }
+    .alert-error   { background: #fce4ec; color: #c62828; border: 1px solid #ffcdd2; }
+    .alert-success { background: #e8f5e9; color: #2e7d32; border: 1px solid #c8e6c9; }
+    /* Form actions */
     .form-actions {
         display: flex;
-        gap: 0.75rem;
-        margin-top: 1.5rem;
+        gap: 1rem;
+        align-items: center;
+        padding-top: 1rem;
+        border-top: 1px solid #eee;
+        margin-top: 1rem;
     }
-
-    /* Password reset section (edit mode only) */
-    .pw-reset-card {
-        background: #f9fafb;
-        border: 1px solid #e5e7eb;
-        border-radius: 8px;
-        padding: 1.5rem 2rem;
-        max-width: 680px;
-        margin-bottom: 1.5rem;
+    .btn-danger {
+        background: #fce4ec;
+        color: #c62828;
+        border: none;
+        padding: 0.75rem 1.5rem;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.95rem;
+        font-weight: 500;
+        margin-left: auto;
     }
-    .pw-reset-card h3 {
-        font-size: 1.05rem;
-        color: #374151;
-        margin-bottom: 1rem;
-    }
-    .pw-error-box {
-        background: #fee2e2;
-        border: 1px solid #fca5a5;
-        color: #991b1b;
-        padding: 0.75rem 1rem;
-        border-radius: 6px;
-        margin-bottom: 1rem;
-        font-size: 0.88rem;
+    .btn-danger:hover { background: #ffcdd2; }
+    .role-descriptions {
+        font-size: 0.82rem;
+        color: #888;
+        margin-top: 0.4rem;
+        line-height: 1.5;
     }
 </style>
 {% endblock %}
 
 {% block content %}
+
+<div class="breadcrumb">
+    <a href="/{{ company_key }}/settings/users">User Management</a>
+    &rsaquo; {{ 'Edit: ' + user.full_name if user else 'Add New User' }}
+</div>
+
 <div class="page-header">
-    <h2>{{ 'Edit User: ' + user.full_name if user else 'Add New User' }}</h2>
+    <h1>{{ 'Edit User' if user else 'Add New User' }}</h1>
 </div>
 
 {% if error %}
-<div class="error-box">{{ error }}</div>
+<div class="alert alert-error">{{ error }}</div>
 {% endif %}
 
-<div class="form-card">
-    <h3>{{ 'User Details' }}</h3>
+{% if request.args.get('pw_error') %}
+<div class="alert alert-error">Password reset failed — passwords must match and be at least 8 characters.</div>
+{% endif %}
 
-    <form method="POST">
-        <!-- Full Name + Username -->
-        <div class="form-row">
-            <div class="form-group">
-                <label>Full Name <span class="required">*</span></label>
-                <input type="text" name="full_name"
-                       value="{{ user.full_name if user else '' }}"
-                       required autocomplete="off">
-            </div>
-            <div class="form-group">
-                <label>Username <span class="required">*</span></label>
-                <input type="text" name="username"
-                       value="{{ user.username if user else '' }}"
-                       {% if user %}readonly style="background:#f3f4f6;color:#6b7280;"{% endif %}
-                       required autocomplete="off"
-                       placeholder="lowercase, no spaces">
-                {% if user %}
-                <span class="help-text">Username cannot be changed.</span>
-                {% endif %}
+{% if request.args.get('reset_sent') %}
+<div class="alert alert-success">Password reset email sent successfully.</div>
+{% endif %}
+
+<!-- ================================================================
+     Main user form (create / edit core fields)
+================================================================ -->
+<form method="POST" action="">
+    <div class="card">
+        <div class="form-section">
+            <h3>Account Information</h3>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label for="full_name">Full Name <span class="required">*</span></label>
+                    <input type="text" id="full_name" name="full_name"
+                           value="{{ user.full_name if user else '' }}"
+                           placeholder="e.g. Michele Ashe" required>
+                </div>
+                <div class="form-group">
+                    <label for="email">Email Address <span class="required">*</span></label>
+                    <input type="email" id="email" name="email"
+                           value="{{ user.email if user else '' }}"
+                           placeholder="e.g. michele@example.com" required>
+                </div>
+                <div class="form-group">
+                    <label for="username">Username <span class="required">*</span></label>
+                    <input type="text" id="username" name="username"
+                           value="{{ user.username if user else '' }}"
+                           placeholder="e.g. michele"
+                           {% if user %}disabled{% endif %}
+                           {% if not user %}required{% endif %}>
+                    {% if user %}
+                    <span class="field-hint">Username cannot be changed after creation.</span>
+                    {% else %}
+                    <span class="field-hint">Lowercase letters and numbers only. Cannot be changed later.</span>
+                    {% endif %}
+                </div>
+                <div class="form-group">
+                    <label for="role">Role <span class="required">*</span></label>
+                    <select id="role" name="role" required>
+                        {% for r in valid_roles %}
+                        <option value="{{ r }}" {% if (user and user.role == r) or (not user and r == 'technician') %}selected{% endif %}>
+                            {{ r | capitalize }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                    <div class="role-descriptions">
+                        Admin: full access including user management &nbsp;|&nbsp;
+                        Manager: operational access, no user management &nbsp;|&nbsp;
+                        Salesperson: customers + estimates &nbsp;|&nbsp;
+                        Technician: mobile job access only
+                    </div>
+                </div>
             </div>
         </div>
 
-        <!-- Email + Role -->
-        <div class="form-row">
-            <div class="form-group">
-                <label>Email</label>
-                <input type="email" name="email"
-                       value="{{ user.email if user and user.email else '' }}"
-                       autocomplete="off" placeholder="optional">
+        <div class="form-section">
+            <h3>Company Access</h3>
+            <div class="company-checkboxes">
+                {% for co_key in all_company_keys %}
+                {% set co = company_branding.get(co_key) %}
+                {% set has_access = (user and co_key in user.company_access) or (not user) %}
+                <label class="company-checkbox-item">
+                    <input type="checkbox" name="company_access" value="{{ co_key }}"
+                           {% if has_access %}checked{% endif %}>
+                    <div>
+                        <div>{{ co.name if co else co_key }}</div>
+                        <div class="co-short">{{ co.short_name if co else co_key }}</div>
+                    </div>
+                </label>
+                {% endfor %}
             </div>
-            <div class="form-group">
-                <label>Role <span class="required">*</span></label>
-                <select name="role" required>
-                    {% for r in valid_roles %}
-                    <option value="{{ r }}"
-                        {{ 'selected' if (user and user.role == r) or (not user and r == 'tech') else '' }}>
-                        {{ r|capitalize }}
-                    </option>
-                    {% endfor %}
-                </select>
-            </div>
+            <span class="field-hint" style="margin-top:0.5rem;display:block;">
+                Select all companies this user should be able to access.
+            </span>
         </div>
 
         {% if not user %}
-        <!-- Password (new users only — existing users use the reset section below) -->
-        <div class="form-row">
-            <div class="form-group">
-                <label>Password <span class="required">*</span></label>
-                <input type="password" name="password" required
-                       autocomplete="new-password" placeholder="min 8 characters">
+        <div class="form-section">
+            <h3>Initial Password</h3>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label for="password">Password <span class="required">*</span></label>
+                    <input type="password" id="password" name="password"
+                           placeholder="Minimum 8 characters" required>
+                </div>
+                <div class="form-group">
+                    <label for="confirm_password">Confirm Password <span class="required">*</span></label>
+                    <input type="password" id="confirm_password" name="confirm_password"
+                           placeholder="Re-enter password" required>
+                </div>
             </div>
-            <div class="form-group">
-                <label>Confirm Password <span class="required">*</span></label>
-                <input type="password" name="confirm_password" required
-                       autocomplete="new-password">
-            </div>
+            <span class="field-hint">
+                You can also send a password reset email after creating the account
+                so the user sets their own password.
+            </span>
         </div>
         {% endif %}
-
-        <!-- Company Access -->
-        <div class="form-group" style="margin-bottom:1.25rem;">
-            <label>Company Access <span class="required">*</span></label>
-            <div class="company-grid">
-                {% for key in all_company_keys %}
-                {% if key in company_branding %}
-                {% set co = company_branding[key] %}
-                {% set is_checked = (user and key in user.company_access) or (not user) %}
-                <label class="company-checkbox-label {{ 'checked' if is_checked else '' }}"
-                       id="label-{{ key }}"
-                       onclick="toggleLabel('label-{{ key }}')">
-                    <input type="checkbox" name="company_access" value="{{ key }}"
-                           {{ 'checked' if is_checked else '' }}
-                           onchange="toggleLabel('label-{{ key }}')">
-                    <span class="company-dot" style="background:{{ co.color_primary }};"></span>
-                    {{ co.name }}
-                </label>
-                {% endif %}
-                {% endfor %}
-            </div>
-            <span class="help-text">Select all companies this user can access.</span>
-        </div>
 
         <div class="form-actions">
             <button type="submit" class="btn btn-primary">
@@ -254,67 +303,61 @@
             </button>
             <a href="/{{ company_key }}/settings/users" class="btn btn-secondary">Cancel</a>
         </div>
-    </form>
-</div>
-
-{% if user %}
-<!-- Password Reset (edit mode only) -->
-<div class="pw-reset-card">
-    <h3>Reset Password</h3>
-
-    {% if request.args.get('pw_error') %}
-    <div class="pw-error-box">
-        Password reset failed — passwords must match and be at least 8 characters.
     </div>
-    {% endif %}
+</form>
 
-    <form method="POST"
-          action="/{{ company_key }}/settings/users/{{ user.id }}/reset-password">
-        <div class="form-row">
-            <div class="form-group">
-                <label>New Password</label>
-                <input type="password" name="new_password"
-                       required autocomplete="new-password"
-                       placeholder="min 8 characters">
-            </div>
-            <div class="form-group">
-                <label>Confirm New Password</label>
-                <input type="password" name="confirm_password"
-                       required autocomplete="new-password">
+<!-- ================================================================
+     Admin password reset (only shown when editing an existing user)
+================================================================ -->
+{% if user %}
+<div class="card">
+    <div class="reset-section">
+        <h3>Reset Password</h3>
+        <p>
+            Set a new password directly, or send a reset email so
+            <strong>{{ user.full_name }}</strong> can choose their own.
+        </p>
+
+        <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:flex-start;">
+
+            <!-- Direct password set -->
+            <form method="POST"
+                  action="/{{ company_key }}/settings/users/{{ user.id }}/reset-password"
+                  style="flex:1;min-width:280px;">
+                <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:1rem;">
+                    <div class="form-group">
+                        <label for="new_password">New Password</label>
+                        <input type="password" id="new_password" name="new_password"
+                               placeholder="Minimum 8 characters">
+                    </div>
+                    <div class="form-group">
+                        <label for="confirm_password">Confirm Password</label>
+                        <input type="password" id="confirm_password" name="confirm_password"
+                               placeholder="Re-enter password">
+                    </div>
+                </div>
+                <div style="margin-top:0.75rem;">
+                    <button type="submit" class="btn btn-secondary"
+                            onclick="return confirm('Set a new password for {{ user.full_name }}?')">
+                        Set Password
+                    </button>
+                </div>
+            </form>
+
+            <!-- Send reset email -->
+            <div style="flex-shrink:0;padding-top:1.5rem;">
+                <form method="POST"
+                      action="/{{ company_key }}/settings/users/{{ user.id }}/send-reset"
+                      onsubmit="return confirm('Send a password reset email to {{ user.email }}?')">
+                    <button type="submit" class="btn btn-secondary">
+                        📧 Send Reset Email
+                    </button>
+                </form>
+                <div class="field-hint" style="margin-top:0.4rem;">Sends to: {{ user.email }}</div>
             </div>
         </div>
-        <button type="submit" class="btn btn-secondary"
-                onclick="return confirm('Reset password for {{ user.full_name }}?')">
-            Set New Password
-        </button>
-    </form>
+    </div>
 </div>
 {% endif %}
 
-<div>
-    <a href="/{{ company_key }}/settings/users"
-       style="color:{{ branding.color_primary }}; text-decoration:none; font-size:0.9rem;">
-        ← Back to Users
-    </a>
-</div>
-{% endblock %}
-
-{% block extra_js %}
-<script>
-function toggleLabel(labelId) {
-    const label = document.getElementById(labelId);
-    const cb = label.querySelector('input[type="checkbox"]');
-    if (cb.checked) {
-        label.classList.add('checked');
-    } else {
-        label.classList.remove('checked');
-    }
-}
-// Initialize on load in case browser restores checked state
-document.querySelectorAll('.company-checkbox-label').forEach(label => {
-    const cb = label.querySelector('input[type="checkbox"]');
-    if (cb && cb.checked) label.classList.add('checked');
-    else label.classList.remove('checked');
-});
-</script>
 {% endblock %}

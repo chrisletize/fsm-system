@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Users — {{ branding.short_name }}{% endblock %}
+{% block title %}User Management - {{ branding.name }}{% endblock %}
 
 {% block extra_css %}
 <style>
@@ -9,56 +9,91 @@
         align-items: center;
         margin-bottom: 1.5rem;
     }
-    .page-header h2 {
-        font-size: 1.5rem;
+    .page-header h1 {
+        font-size: 1.75rem;
         color: {{ branding.color_primary }};
     }
-
-    .users-table {
-        width: 100%;
-        border-collapse: collapse;
-        background: white;
-        border-radius: 8px;
-        overflow: hidden;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-    }
-    .users-table th {
-        background: {{ branding.color_primary }};
-        color: white;
-        padding: 0.75rem 1rem;
-        text-align: left;
-        font-size: 0.85rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.03em;
-    }
-    .users-table td {
-        padding: 0.85rem 1rem;
-        border-bottom: 1px solid #eee;
-        vertical-align: middle;
+    .page-header p {
+        color: #666;
+        margin-top: 0.25rem;
         font-size: 0.95rem;
     }
-    .users-table tr:last-child td { border-bottom: none; }
-    .users-table tr:hover td { background: #fafafa; }
-    .users-table tr.inactive td { opacity: 0.55; }
-
+    .toolbar {
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+        margin-bottom: 1.25rem;
+    }
+    .filter-select {
+        padding: 0.6rem 1rem;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 0.95rem;
+        background: white;
+        cursor: pointer;
+    }
+    .filter-select:focus {
+        outline: none;
+        border-color: {{ branding.color_primary }};
+    }
+    .result-count {
+        color: #666;
+        font-size: 0.9rem;
+        margin-left: auto;
+    }
+    .user-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.95rem;
+    }
+    .user-table th {
+        text-align: left;
+        padding: 0.75rem 1rem;
+        border-bottom: 2px solid #eee;
+        font-weight: 600;
+        color: #555;
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+        white-space: nowrap;
+    }
+    .user-table td {
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid #f0f0f0;
+        vertical-align: middle;
+    }
+    .user-table tr:hover td {
+        background-color: #fafafa;
+    }
+    .user-table tr.inactive-row td {
+        opacity: 0.55;
+    }
+    .user-table tr:last-child td {
+        border-bottom: none;
+    }
+    .user-name {
+        font-weight: 500;
+        color: #333;
+    }
+    .user-username {
+        font-size: 0.85rem;
+        color: #888;
+        margin-top: 0.1rem;
+    }
     .badge {
         display: inline-block;
-        padding: 0.2rem 0.55rem;
-        border-radius: 999px;
-        font-size: 0.78rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.03em;
+        padding: 0.2rem 0.65rem;
+        border-radius: 10px;
+        font-size: 0.8rem;
+        font-weight: 500;
+        white-space: nowrap;
     }
-    .badge-admin      { background: #8B1538; color: white; }
-    .badge-manager    { background: #0052CC; color: white; }
-    .badge-salesperson { background: #7c3aed; color: white; }
-    .badge-technician { background: #374151; color: white; }
-
-    .badge-active   { background: #d1fae5; color: #065f46; }
-    .badge-inactive { background: #fee2e2; color: #991b1b; }
-
+    .badge-active    { background: #e8f5e9; color: #2e7d32; }
+    .badge-inactive  { background: #fce4ec; color: #c2185b; }
+    .badge-admin        { background: #ede7f6; color: #4527a0; }
+    .badge-manager      { background: #e3f2fd; color: #1565c0; }
+    .badge-salesperson  { background: #fff8e1; color: #f57f17; }
+    .badge-technician   { background: #f3f4f6; color: #444; }
     .company-pills {
         display: flex;
         flex-wrap: wrap;
@@ -66,177 +101,237 @@
     }
     .company-pill {
         display: inline-block;
-        padding: 0.15rem 0.5rem;
+        padding: 0.15rem 0.55rem;
+        border-radius: 8px;
+        font-size: 0.78rem;
+        font-weight: 500;
+        white-space: nowrap;
+    }
+    .pill-getagrip         { background: #fce4ec; color: #880e4f; }
+    .pill-kleanit_charlotte { background: #e3f2fd; color: #1565c0; }
+    .pill-cts              { background: #f3f4f6; color: #444; }
+    .pill-kleanit_sf       { background: #e8f5e9; color: #2e7d32; }
+    .actions {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        align-items: center;
+    }
+    .btn-sm {
+        padding: 0.35rem 0.85rem;
+        font-size: 0.85rem;
         border-radius: 4px;
-        font-size: 0.78rem;
-        font-weight: 500;
-        color: white;
-    }
-
-    .action-links { display: flex; gap: 0.75rem; align-items: center; }
-    .action-links a {
-        color: {{ branding.color_primary }};
+        border: none;
+        cursor: pointer;
         text-decoration: none;
-        font-size: 0.88rem;
+        display: inline-block;
         font-weight: 500;
     }
-    .action-links a:hover { text-decoration: underline; }
-
-    .deactivate-form { display: inline; }
-    .deactivate-btn {
-        background: none;
-        border: none;
-        cursor: pointer;
-        color: #dc2626;
-        font-size: 0.88rem;
-        font-weight: 500;
-        padding: 0;
+    .btn-edit {
+        background: #e3f2fd;
+        color: #1565c0;
     }
-    .deactivate-btn:hover { text-decoration: underline; }
-    .reactivate-btn {
-        background: none;
-        border: none;
-        cursor: pointer;
-        color: #059669;
-        font-size: 0.88rem;
-        font-weight: 500;
-        padding: 0;
+    .btn-edit:hover { background: #bbdefb; }
+    .btn-reset {
+        background: #fff3e0;
+        color: #e65100;
     }
-    .reactivate-btn:hover { text-decoration: underline; }
-
-    .self-label {
-        font-size: 0.78rem;
-        color: #6b7280;
+    .btn-reset:hover { background: #ffe0b2; }
+    .btn-deactivate {
+        background: #fce4ec;
+        color: #c62828;
+    }
+    .btn-deactivate:hover { background: #ffcdd2; }
+    .btn-activate {
+        background: #e8f5e9;
+        color: #2e7d32;
+    }
+    .btn-activate:hover { background: #c8e6c9; }
+    .you-badge {
+        font-size: 0.75rem;
+        color: #888;
         font-style: italic;
     }
-
     .last-login {
         font-size: 0.85rem;
-        color: #6b7280;
+        color: #666;
     }
-    .never-login { color: #d1d5db; font-style: italic; }
+    .never-logged {
+        font-size: 0.85rem;
+        color: #bbb;
+        font-style: italic;
+    }
+    .empty-state {
+        text-align: center;
+        padding: 4rem 2rem;
+        color: #999;
+    }
+    .flash {
+        padding: 1rem 1.25rem;
+        border-radius: 4px;
+        margin-bottom: 1.25rem;
+        font-size: 0.95rem;
+    }
+    .flash-success { background: #e8f5e9; color: #2e7d32; border: 1px solid #c8e6c9; }
+    .flash-error   { background: #fce4ec; color: #c62828; border: 1px solid #ffcdd2; }
 </style>
 {% endblock %}
 
 {% block content %}
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="flash flash-{{ category }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
 <div class="page-header">
-    <h2>Users</h2>
-    <a href="/{{ company_key }}/settings/users/new" class="btn btn-primary">+ Add User</a>
+    <div>
+        <h1>User Management</h1>
+        <p>Manage staff accounts, roles, and company access across all companies.</p>
+    </div>
+    <a href="/{{ company_key }}/settings/users/new" class="btn btn-primary">+ Add New User</a>
 </div>
 
-{% if request.args.get('reset_sent') %}
-<div style="background:#d1fae5;border:1px solid #6ee7b7;color:#065f46;
-            padding:0.85rem 1rem;border-radius:6px;margin-bottom:1.25rem;font-size:0.9rem;">
-    ✓ Password reset email sent.
-</div>
-{% endif %}
-{% if request.args.get('reset_error') == 'no_email' %}
-<div style="background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;
-            padding:0.85rem 1rem;border-radius:6px;margin-bottom:1.25rem;font-size:0.9rem;">
-    ✗ That user has no email address on file — set one in Edit before sending a reset link.
-</div>
-{% elif request.args.get('reset_error') == 'send_failed' %}
-<div style="background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;
-            padding:0.85rem 1rem;border-radius:6px;margin-bottom:1.25rem;font-size:0.9rem;">
-    ✗ Email send failed — check that RESEND_API_KEY is set correctly in .env.
-</div>
-{% endif %}
+<div class="card">
+    <div class="toolbar">
+        <select class="filter-select" id="statusFilter" onchange="filterUsers()">
+            <option value="all">All Users</option>
+            <option value="active">Active Only</option>
+            <option value="inactive">Inactive Only</option>
+        </select>
+        <select class="filter-select" id="roleFilter" onchange="filterUsers()">
+            <option value="all">All Roles</option>
+            <option value="admin">Admin</option>
+            <option value="manager">Manager</option>
+            <option value="salesperson">Salesperson</option>
+            <option value="technician">Technician</option>
+        </select>
+        <span class="result-count" id="resultCount">{{ users|length }} users</span>
+    </div>
 
-<p style="color:#6b7280; margin-bottom:1.5rem; font-size:0.9rem;">
-    {{ users|length }} user{{ 's' if users|length != 1 else '' }} total.
-    Changes sync to all four company databases automatically.
-</p>
-
-<table class="users-table">
-    <thead>
-        <tr>
-            <th>Name</th>
-            <th>Username</th>
-            <th>Role</th>
-            <th>Company Access</th>
-            <th>Status</th>
-            <th>Last Login</th>
-            <th>Actions</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for u in users %}
-        <tr class="{{ 'inactive' if not u.is_active else '' }}">
+    {% if users %}
+    <table class="user-table" id="userTable">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Role</th>
+                <th>Company Access</th>
+                <th>Status</th>
+                <th>Last Login</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for user in users %}
+        <tr class="user-row {% if not user.is_active %}inactive-row{% endif %}"
+            data-status="{{ 'active' if user.is_active else 'inactive' }}"
+            data-role="{{ user.role }}">
             <td>
-                <strong>{{ u.full_name }}</strong>
-                {% if u.username == session.username %}
-                <span class="self-label">(you)</span>
-                {% endif %}
-                {% if u.email %}
-                <div style="font-size:0.82rem;color:#6b7280;margin-top:0.15rem;">{{ u.email }}</div>
+                <div class="user-name">
+                    {{ user.full_name }}
+                    {% if user.username == session.username %}
+                    <span class="you-badge">(you)</span>
+                    {% endif %}
+                </div>
+                <div class="user-username">@{{ user.username }}</div>
+                {% if user.email %}
+                <div class="user-username">{{ user.email }}</div>
                 {% endif %}
             </td>
-            <td style="font-family:monospace;">{{ u.username }}</td>
-            <td><span class="badge badge-{{ u.role }}">{{ u.role }}</span></td>
+            <td>
+                <span class="badge badge-{{ user.role }}">
+                    {{ user.role | capitalize }}
+                </span>
+            </td>
             <td>
                 <div class="company-pills">
-                    {% for key in u.company_access %}
-                    {% if key in company_branding %}
-                    <span class="company-pill"
-                          style="background-color:{{ company_branding[key].color_primary }};">
-                        {{ company_branding[key].short_name }}
+                {% set access = user.company_access %}
+                {% if access is string %}
+                    {% set access = access | tojson | fromjson %}
+                {% endif %}
+                {% for co_key in access %}
+                    {% set co = company_branding.get(co_key) %}
+                    <span class="company-pill pill-{{ co_key }}">
+                        {{ co.short_name if co else co_key }}
                     </span>
-                    {% endif %}
-                    {% endfor %}
+                {% endfor %}
+                {% if not access %}
+                    <span style="color:#bbb;font-size:0.85rem;">None</span>
+                {% endif %}
                 </div>
             </td>
             <td>
-                <span class="badge badge-{{ 'active' if u.is_active else 'inactive' }}">
-                    {{ 'Active' if u.is_active else 'Inactive' }}
+                <span class="badge {{ 'badge-active' if user.is_active else 'badge-inactive' }}">
+                    {{ 'Active' if user.is_active else 'Inactive' }}
                 </span>
             </td>
-            <td class="last-login">
-                {% if u.last_login %}
-                    {{ u.last_login.strftime('%b %-d, %Y') }}
+            <td>
+                {% if user.last_login %}
+                <span class="last-login">{{ user.last_login.strftime('%m/%d/%Y') }}</span>
                 {% else %}
-                    <span class="never-login">Never</span>
+                <span class="never-logged">Never</span>
                 {% endif %}
             </td>
             <td>
-                <div class="action-links">
-                    <a href="/{{ company_key }}/settings/users/{{ u.id }}/edit">Edit</a>
+                <div class="actions">
+                    <a href="/{{ company_key }}/settings/users/{{ user.id }}/edit"
+                       class="btn-sm btn-edit">Edit</a>
 
-                    {% if u.email %}
-                    <form style="display:inline"
-                          action="/{{ company_key }}/settings/users/{{ u.id }}/send-reset"
-                          method="POST"
-                          onsubmit="return confirm('Send password reset email to {{ u.email }}?')">
-                        <button type="submit"
-                                style="background:none;border:none;cursor:pointer;
-                                       color:{{ branding.color_primary }};font-size:0.88rem;
-                                       font-weight:500;padding:0;">
-                            Send Reset Email
-                        </button>
+                    <form method="POST"
+                          action="/{{ company_key }}/settings/users/{{ user.id }}/send-reset"
+                          style="display:inline;"
+                          onsubmit="return confirm('Send password reset email to {{ user.full_name }}?')">
+                        <button type="submit" class="btn-sm btn-reset">Send Reset Email</button>
                     </form>
-                    {% endif %}
 
-                    {% if u.username != session.username %}
-                    <form class="deactivate-form"
-                          action="/{{ company_key }}/settings/users/{{ u.id }}/toggle-active"
-                          method="POST"
-                          onsubmit="return confirm('{{ 'Deactivate' if u.is_active else 'Reactivate' }} {{ u.full_name }}?')">
-                        {% if u.is_active %}
-                        <button class="deactivate-btn" type="submit">Deactivate</button>
-                        {% else %}
-                        <button class="reactivate-btn" type="submit">Reactivate</button>
-                        {% endif %}
+                    {% if user.username != session.username %}
+                    <form method="POST"
+                          action="/{{ company_key }}/settings/users/{{ user.id }}/toggle-active"
+                          style="display:inline;"
+                          onsubmit="return confirm('{{ 'Deactivate' if user.is_active else 'Reactivate' }} {{ user.full_name }}?')">
+                        <button type="submit"
+                                class="btn-sm {{ 'btn-deactivate' if user.is_active else 'btn-activate' }}">
+                            {{ 'Deactivate' if user.is_active else 'Activate' }}
+                        </button>
                     </form>
                     {% endif %}
                 </div>
             </td>
         </tr>
         {% endfor %}
-    </tbody>
-</table>
-
-<div style="margin-top:1.5rem;">
-    <a href="/{{ company_key }}/settings/fields" style="color:{{ branding.color_primary }}; text-decoration:none; font-size:0.9rem;">
-        ← Back to Settings
-    </a>
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+        <div style="font-size:2.5rem;margin-bottom:1rem;">👥</div>
+        <p>No users found.</p>
+    </div>
+    {% endif %}
 </div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function filterUsers() {
+    const statusVal = document.getElementById('statusFilter').value;
+    const roleVal   = document.getElementById('roleFilter').value;
+    const rows      = document.querySelectorAll('.user-row');
+    let visible = 0;
+
+    rows.forEach(row => {
+        const statusMatch = statusVal === 'all' || row.dataset.status === statusVal;
+        const roleMatch   = roleVal   === 'all' || row.dataset.role   === roleVal;
+        if (statusMatch && roleMatch) {
+            row.style.display = '';
+            visible++;
+        } else {
+            row.style.display = 'none';
+        }
+    });
+
+    document.getElementById('resultCount').textContent = visible + ' user' + (visible !== 1 ? 's' : '');
+}
+</script>
 {% endblock %}

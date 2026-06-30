@@ -352,6 +352,38 @@
             margin-bottom: 1rem;
             color: {{ branding.color_primary if branding else '#2C2C2C' }};
         }
+
+        /* ================================================================
+           Autocomplete (reusable: "suggest, don't restrict" field)
+           Styled here once so a future redesign restyles every instance.
+        ================================================================ */
+        .ac-wrap { position: relative; width: 100%; }
+        .ac-wrap > input { width: 100%; }
+        .ac-panel {
+            display: none;
+            position: absolute;
+            top: calc(100% + 2px);
+            left: 0; right: 0;
+            background: #fff;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            max-height: 220px;
+            overflow-y: auto;
+            z-index: 1000;
+        }
+        .ac-panel.open { display: block; }
+        .ac-item {
+            padding: 0.55rem 0.8rem;
+            font-size: 0.9rem;
+            color: #333;
+            cursor: pointer;
+        }
+        .ac-item:hover,
+        .ac-item.active {
+            background: {{ branding.color_primary if branding else '#2C2C2C' }}0f;
+            color: {{ branding.color_primary if branding else '#2C2C2C' }};
+        }
     </style>
     {% block extra_css %}{% endblock %}
 </head>
@@ -440,6 +472,12 @@
                         Custom Fields
                     </a>
                     {% endif %}
+                    {% if session.user_role in ('admin', 'manager') %}
+                    <a href="/{{ company_key }}/settings/catalog"
+                       class="{% if '/settings/catalog' in current_path %}active{% endif %}">
+                        Service Catalog
+                    </a>
+                    {% endif %}
                     {% if session.user_role == 'admin' %}
                     <div class="subnav-divider"></div>
                     <a href="/{{ company_key }}/settings/users"
@@ -480,6 +518,93 @@
                 settingsDropdown.classList.remove('open');
             }
         });
+
+        // ============================================================
+        // Reusable autocomplete: any <input class="js-autocomplete">
+        // with a data-suggestions JSON array. Suggest, don't restrict —
+        // free typing is always allowed; the panel only proposes.
+        // ============================================================
+        function initAutocompleteFields() {
+            document.querySelectorAll('input.js-autocomplete').forEach(function(input) {
+                if (input.dataset.acInit) return;
+                input.dataset.acInit = '1';
+
+                var wrap  = input.closest('.ac-wrap');
+                if (!wrap) return;
+                var panel = wrap.querySelector('.ac-panel');
+                var suggestions = [];
+                try { suggestions = JSON.parse(input.dataset.suggestions || '[]'); }
+                catch (e) { suggestions = []; }
+
+                var current = [];
+                var activeIndex = -1;
+
+                function esc(s) {
+                    return String(s).replace(/[&<>"']/g, function(c){
+                        return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+                    });
+                }
+                function close() { panel.classList.remove('open'); activeIndex = -1; }
+                function render() {
+                    var q = input.value.trim().toLowerCase();
+                    current = suggestions.filter(function(s){
+                        var sl = String(s).toLowerCase();
+                        return (q === '' || sl.indexOf(q) !== -1) && sl !== q;
+                    });
+                    if (current.length === 0) { close(); return; }
+                    panel.innerHTML = current.map(function(s, i){
+                        return '<div class="ac-item" data-i="'+i+'">'+esc(s)+'</div>';
+                    }).join('');
+                    activeIndex = -1;
+                    panel.classList.add('open');
+                }
+                function setActive(i) {
+                    var items = panel.querySelectorAll('.ac-item');
+                    items.forEach(function(el){ el.classList.remove('active'); });
+                    if (i >= 0 && i < items.length) {
+                        items[i].classList.add('active');
+                        activeIndex = i;
+                        items[i].scrollIntoView({ block: 'nearest' });
+                    }
+                }
+                function choose(i) {
+                    if (i >= 0 && i < current.length) { input.value = current[i]; }
+                    close();
+                }
+
+                input.addEventListener('input', render);
+                input.addEventListener('focus', render);
+                input.addEventListener('keydown', function(e){
+                    if (!panel.classList.contains('open')) {
+                        if (e.key === 'ArrowDown') { render(); }
+                        return;
+                    }
+                    if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        setActive(Math.min(activeIndex + 1, current.length - 1));
+                    } else if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        setActive(Math.max(activeIndex - 1, 0));
+                    } else if (e.key === 'Enter') {
+                        if (activeIndex >= 0) { e.preventDefault(); choose(activeIndex); }
+                        else { close(); }   // free text: let the form submit normally
+                    } else if (e.key === 'Escape') {
+                        close();
+                    }
+                });
+                // mousedown (not click) so it fires before the input blur closes the panel
+                panel.addEventListener('mousedown', function(e){
+                    var item = e.target.closest('.ac-item');
+                    if (item) { e.preventDefault(); choose(parseInt(item.dataset.i, 10)); }
+                });
+                panel.addEventListener('mousemove', function(e){
+                    var item = e.target.closest('.ac-item');
+                    if (item) { setActive(parseInt(item.dataset.i, 10)); }
+                });
+                input.addEventListener('blur', function(){ setTimeout(close, 120); });
+            });
+        }
+        document.addEventListener('DOMContentLoaded', initAutocompleteFields);
     </script>
     {% block extra_js %}{% endblock %}
 </body>
