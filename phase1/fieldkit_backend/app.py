@@ -1044,6 +1044,160 @@ def catalog_delete(company_key, item_id):
     return redirect(f'/{company_key}/settings/catalog')
 
 # ============================================================================
+# Equipment registry  (admin + manager)
+#   Physical units ("Ozone #2", "Medusa #1") that each bill as a
+#   per_day_equipment catalog item. Mirrors the catalog CRUD above.
+# ============================================================================
+
+def _billing_type_options(company_key):
+    """per_day_equipment catalog items, for the restricted billing-type combo."""
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT id, name, category FROM catalog_items
+        WHERE billing_behavior = 'per_day_equipment' AND deleted_at IS NULL
+        ORDER BY name
+    """)
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    return [{'id': r['id'], 'name': r['name'], 'category': r['category']} for r in rows]
+
+def _save_equipment_unit(company_key, unit_id):
+    """Insert (unit_id is None) or update an equipment unit from request.form.
+    Returns an error string, or None on success."""
+    name            = request.form.get('name', '').strip()
+    catalog_item_id = _opt_num(request.form.get('catalog_item_id'))
+    notes           = request.form.get('notes', '').strip() or None
+    is_active       = request.form.get('is_active') == 'on'
+
+    if not name:
+        return 'Equipment name is required.'
+    if not catalog_item_id:
+        return 'Choose a billing type from the list.'
+
+    # Re-validate server-side: the id must still be a live per_day_equipment
+    # catalog item. The combo restricts this client-side, but the client is
+    # never trusted for the actual guarantee.
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT id FROM catalog_items
+        WHERE id = %s AND billing_behavior = 'per_day_equipment' AND deleted_at IS NULL
+    """, (catalog_item_id,))
+    if not cur.fetchone():
+        cur.close(); conn.close()
+        return 'Selected billing type is not a valid per-day equipment item.'
+
+    username = session.get('username')
+    if unit_id is None:
+        cur.execute("""
+            INSERT INTO equipment_units
+                (name, catalog_item_id, notes, is_active, created_by, updated_by)
+            VALUES (%s,%s,%s,%s,%s,%s)
+        """, (name, catalog_item_id, notes, is_active, username, username))
+    else:
+        cur.execute("""
+            UPDATE equipment_units
+            SET name=%s, catalog_item_id=%s, notes=%s, is_active=%s,
+                updated_at=CURRENT_TIMESTAMP, updated_by=%s
+            WHERE id=%s AND deleted_at IS NULL
+        """, (name, catalog_item_id, notes, is_active, username, unit_id))
+    conn.commit(); cur.close(); conn.close()
+    return None
+
+@app.route('/<company_key>/settings/equipment')
+@login_required
+@company_access_required
+@with_branding
+def equipment_list(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT eu.id, eu.name, eu.is_active, eu.notes,
+               ci.name AS billing_type_name, ci.category AS billing_type_category
+        FROM equipment_units eu
+        JOIN catalog_items ci ON ci.id = eu.catalog_item_id
+        WHERE eu.deleted_at IS NULL
+        ORDER BY eu.is_active DESC, eu.name
+    """)
+    units = cur.fetchall()
+    cur.close(); conn.close()
+    return render_template('equipment_list.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        units=units,
+    )
+
+@app.route('/<company_key>/settings/equipment/new', methods=['GET', 'POST'])
+@login_required
+@company_access_required
+@with_branding
+def equipment_new(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager'):
+        abort(403)
+    error = None
+    if request.method == 'POST':
+        error = _save_equipment_unit(company_key, unit_id=None)
+        if not error:
+            return redirect(f'/{company_key}/settings/equipment')
+    billing_types = _billing_type_options(company_key)
+    return render_template('equipment_form.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        unit=None, error=error, billing_types=billing_types,
+    )
+
+@app.route('/<company_key>/settings/equipment/<int:unit_id>/edit', methods=['GET', 'POST'])
+@login_required
+@company_access_required
+@with_branding
+def equipment_edit(company_key, unit_id, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager'):
+        abort(403)
+    if request.method == 'POST':
+        error = _save_equipment_unit(company_key, unit_id=unit_id)
+        if not error:
+            return redirect(f'/{company_key}/settings/equipment')
+    else:
+        error = None
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT eu.*, ci.name AS billing_type_name, ci.category AS billing_type_category
+        FROM equipment_units eu
+        JOIN catalog_items ci ON ci.id = eu.catalog_item_id
+        WHERE eu.id = %s AND eu.deleted_at IS NULL
+    """, (unit_id,))
+    unit = cur.fetchone()
+    cur.close(); conn.close()
+    if not unit:
+        abort(404)
+    billing_types = _billing_type_options(company_key)
+    return render_template('equipment_form.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        unit=unit, error=error, billing_types=billing_types,
+    )
+
+@app.route('/<company_key>/settings/equipment/<int:unit_id>/delete', methods=['POST'])
+@login_required
+@company_access_required
+def equipment_delete(company_key, unit_id):
+    if session.get('user_role') not in ('admin', 'manager'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        UPDATE equipment_units
+        SET deleted_at = CURRENT_TIMESTAMP, deleted_by = %s
+        WHERE id = %s AND deleted_at IS NULL
+    """, (session.get('username'), unit_id))
+    conn.commit(); cur.close(); conn.close()
+    return redirect(f'/{company_key}/settings/equipment')
+
+# ============================================================================
 # Contacts — new
 # ============================================================================
 

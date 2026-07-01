@@ -174,6 +174,14 @@ see all contacts and billing flags, and manage users without CLI access.
 - [ ] Invoice PDF generation — branded ReportLab (same approach as Phase 0)
 - [ ] Send invoice — email to all accepts_billing contacts, stay on invoice after sending
 - [ ] Void invoice with confirmation
+- [ ] **Idea (July 1 session):** water extraction invoices should include a brief
+      standard explanation of the drying/monitoring process — this is what the old
+      "w/monitor" suffix on every equipment catalog item was trying to communicate
+      (that the per-day equipment charge includes moisture-level monitoring), and
+      dropping "monitor" from equipment names during the registry import removes
+      that signal from the invoice line item. A short fixed blurb on water-extraction
+      invoices (not per-line-item) is probably the right replacement — not designed
+      yet, just don't lose the thread.
 - [ ] **Schema note:** payment → payment_invoice_applications junction table needed
       (one payment can cover multiple invoices — confirmed from SF screenshot)
 - [ ] Job deposits table (prepayments tied to job, not invoice)
@@ -267,7 +275,37 @@ These are all the **[CONFIGURABLE LATER]** items consolidated:
 
 ---
 
-## 🔵 Data Quality & Remediation
+## 🔵 In-App Help System (Deferred — Build Once Core Modules Are Practically Complete)
+*Decided July 1, 2026 session. Needs the full picture of how pieces fit together
+before it's worth writing — right tool, wrong time until then.*
+
+Two designs discussed, kept intentionally separate rather than merged:
+
+- **Static help panel + inline dependency markers** (this is the one to build):
+  a "?" button on every page opens a slide-out panel with plain, versioned prose
+  explaining the page and how it connects to data entered elsewhere (e.g. why the
+  equipment registry's Billing Type list is empty until a per_day_equipment catalog
+  item exists). Small `(i)` markers sit on specific fields with hidden cross-page
+  dependencies — billing contact routing, management companies, multiple service
+  locations — and jump straight to that field's paragraph in the panel. No live
+  data injection, no per-page state machine; content is the same every time, so
+  it's cheap to write and cheap to keep current.
+  - **Pilot page:** Customer Fields — most interdependencies of any page so far
+    (billing contact, management company, multiple service locations).
+  - **Candidate reusable brick** for the bricks catalog once built — likely useful
+    for onboarding non-technical office staff on future LKit clients, maybe more
+    so than internally.
+- **Data-aware / state-machine help** (`docs/PROJECT-KNOWLEDGE/HELP-SYSTEM.md`,
+  Jan 2026 vision — stays parked): help content that explains a page using the
+  *actual numbers currently on screen* (e.g. "Your December report matched 51 of
+  95 invoices..."), with a distinct state per page (empty / partial / complete).
+  Solves a different problem — interpreting results, not explaining structural
+  wiring — and costs much more per page (state machine + copy per state). Tax
+  Report is still its best-fit candidate, if ever revisited.
+
+---
+
+
 *Build before full staff onboarding.*
 
 - [ ] Customer merge — HIGH PRIORITY. Side-by-side preview, soft-delete source,

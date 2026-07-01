@@ -14,3 +14,21 @@
     <div class="ac-panel" role="listbox"></div>
 </div>
 {%- endmacro %}
+
+{# Restricted combobox: type to filter a bounded list, but the field can only
+   submit an id that matches a real option — free text never carries through.
+   options: list of {id, name, category} dicts. Filters against name OR category. #}
+{% macro restricted_combo_field(name, options=[], value_id=none, value_label='', placeholder='', required=False, input_id='') -%}
+<div class="ac-wrap">
+    <input type="text"
+           {% if input_id %}id="{{ input_id }}"{% endif %}
+           class="js-combo-restricted"
+           value="{{ value_label or '' }}"
+           placeholder="{{ placeholder }}"
+           autocomplete="off"
+           data-options='{{ options|tojson }}'
+           data-required="{{ 'true' if required else 'false' }}">
+    <input type="hidden" name="{{ name }}" value="{{ value_id if value_id is not none else '' }}">
+    <div class="ac-panel" role="listbox"></div>
+</div>
+{%- endmacro %}

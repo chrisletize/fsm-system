@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% from "_macros.html" import restricted_combo_field %}
+{% block title %}{% if unit %}Edit{% else %}New{% endif %} Equipment — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { margin-bottom:1.5rem; }
+    .page-header h1 { font-size:1.6rem; color:{{ branding.color_primary }}; }
+    .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:1.1rem 1.5rem; }
+    .form-group { display:flex; flex-direction:column; gap:.35rem; }
+    .form-group.full { grid-column:1 / -1; }
+    .form-group label { font-size:.85rem; font-weight:600; color:#555; }
+    .form-group .hint { font-size:.78rem; color:#aaa; font-weight:400; }
+    .form-group input[type=text],
+    .form-group textarea {
+        padding:.6rem .75rem; border:1px solid #ddd; border-radius:4px;
+        font-size:.92rem; background:white; font-family:inherit;
+    }
+    .form-group textarea { resize:vertical; min-height:70px; }
+    .form-group input:focus, .form-group textarea:focus {
+        outline:none; border-color:{{ branding.color_primary }};
+    }
+    .check-row { display:flex; align-items:center; gap:.5rem; }
+    .check-row input { width:16px; height:16px; }
+    .check-row label { font-weight:500; font-size:.9rem; color:#444; }
+    .form-actions { margin-top:1.75rem; display:flex; gap:.75rem; align-items:center; }
+    .btn { display:inline-block; padding:.7rem 1.4rem; border-radius:4px; text-decoration:none;
+           font-weight:500; cursor:pointer; border:none; font-size:.95rem; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-primary:hover { opacity:.9; }
+    .btn-secondary { background:#6c757d; color:white; }
+    .btn-secondary:hover { background:#5a6268; }
+    .flash.error { background:#fee; color:#c33; border:1px solid #fcc; padding:.8rem 1rem;
+                   border-radius:4px; margin-bottom:1.25rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>{% if unit %}Edit Equipment{% else %}New Equipment{% endif %}</h1>
+</div>
+
+{% if error %}
+<div class="flash error">{{ error }}</div>
+{% endif %}
+
+<div class="card">
+<form method="POST"
+      action="/{{ company_key }}/settings/equipment{% if unit %}/{{ unit.id }}/edit{% else %}/new{% endif %}">
+    <div class="form-grid">
+
+        <div class="form-group">
+            <label>Name <span class="hint">(required)</span></label>
+            <input type="text" name="name" value="{{ unit.name if unit else '' }}"
+                   placeholder="e.g. Medusa #1" required>
+        </div>
+
+        <div class="form-group">
+            <label>Billing Type <span class="hint">(required — from the catalog)</span></label>
+{{ restricted_combo_field('catalog_item_id',
+                   billing_types,
+                   unit.catalog_item_id if unit else none,
+                   (unit.billing_type_name + ' (' + unit.billing_type_category + ')') if unit and unit.billing_type_category else (unit.billing_type_name if unit else ''),
+                   'Type to search by name or category…',
+                   True) }}
+        </div>
+
+        <div class="form-group full">
+            <label>Notes <span class="hint">(optional — serial #, purchase date, condition)</span></label>
+            <textarea name="notes"
+                      placeholder="Optional notes...">{{ unit.notes if unit and unit.notes else '' }}</textarea>
+        </div>
+
+        <div class="form-group">
+            <div class="check-row">
+                <input type="checkbox" name="is_active" id="is_active"
+                       {% if not unit or unit.is_active %}checked{% endif %}>
+                <label for="is_active">Active (in service)</label>
+            </div>
+        </div>
+
+    </div>
+
+    <div class="form-actions">
+        <button type="submit" class="btn btn-primary">
+            {% if unit %}Save Changes{% else %}Add Equipment{% endif %}
+        </button>
+        <a href="/{{ company_key }}/settings/equipment" class="btn btn-secondary">Cancel</a>
+    </div>
+</form>
+</div>
+{% endblock %}

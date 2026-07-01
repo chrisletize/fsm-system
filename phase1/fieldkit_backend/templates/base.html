@@ -477,6 +477,10 @@
                        class="{% if '/settings/catalog' in current_path %}active{% endif %}">
                         Service Catalog
                     </a>
+                    <a href="/{{ company_key }}/settings/equipment"
+                       class="{% if '/settings/equipment' in current_path %}active{% endif %}">
+                        Equipment Registry
+                    </a>
                     {% endif %}
                     {% if session.user_role == 'admin' %}
                     <div class="subnav-divider"></div>
@@ -605,6 +609,140 @@
             });
         }
         document.addEventListener('DOMContentLoaded', initAutocompleteFields);
+
+        // ============================================================
+        // Restricted combobox: any <input class="js-combo-restricted">
+        // paired with a sibling hidden <input> in the same .ac-wrap.
+        // Type to filter (matches name OR category from data-options),
+        // but the hidden field only ever holds an id from that list —
+        // edited or unmatched text clears it, so free text can't submit.
+        // ============================================================
+        function initRestrictedComboFields() {
+            document.querySelectorAll('input.js-combo-restricted').forEach(function(input) {
+                if (input.dataset.comboInit) return;
+                input.dataset.comboInit = '1';
+
+                var wrap   = input.closest('.ac-wrap');
+                if (!wrap) return;
+                var panel  = wrap.querySelector('.ac-panel');
+                var hidden = wrap.querySelector('input[type=hidden]');
+                var options = [];
+                try { options = JSON.parse(input.dataset.options || '[]'); }
+                catch (e) { options = []; }
+
+                var current = [];
+                var activeIndex = -1;
+
+                function esc(s) {
+                    return String(s).replace(/[&<>"']/g, function(c){
+                        return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+                    });
+                }
+                function labelFor(opt) {
+                    return opt.category ? opt.name + ' (' + opt.category + ')' : opt.name;
+                }
+                function findById(id) {
+                    return options.find(function(o){ return String(o.id) === String(id); });
+                }
+                function close() { panel.classList.remove('open'); activeIndex = -1; }
+                function render() {
+                    var q = input.value.trim().toLowerCase();
+                    current = options.filter(function(o){
+                        var hay = (o.name + ' ' + (o.category || '')).toLowerCase();
+                        return q === '' || hay.indexOf(q) !== -1;
+                    });
+                    if (current.length === 0) { close(); return; }
+                    panel.innerHTML = current.map(function(o, i){
+                        return '<div class="ac-item" data-i="'+i+'">'+esc(labelFor(o))+'</div>';
+                    }).join('');
+                    activeIndex = -1;
+                    panel.classList.add('open');
+                }
+                function setActive(i) {
+                    var items = panel.querySelectorAll('.ac-item');
+                    items.forEach(function(el){ el.classList.remove('active'); });
+                    if (i >= 0 && i < items.length) {
+                        items[i].classList.add('active');
+                        activeIndex = i;
+                        items[i].scrollIntoView({ block: 'nearest' });
+                    }
+                }
+                function choose(i) {
+                    if (i >= 0 && i < current.length) {
+                        input.value = labelFor(current[i]);
+                        hidden.value = current[i].id;
+                        input.setCustomValidity('');
+                    }
+                    close();
+                }
+
+                input.addEventListener('input', function(){
+                    // Editing away from a chosen label invalidates the selection —
+                    // this is what keeps the field restricted, not just suggestive.
+                    if (hidden.value) {
+                        var opt = findById(hidden.value);
+                        if (!opt || labelFor(opt) !== input.value) { hidden.value = ''; }
+                    }
+                    input.setCustomValidity('');
+                    render();
+                });
+                input.addEventListener('focus', render);
+                input.addEventListener('keydown', function(e){
+                    if (!panel.classList.contains('open')) {
+                        if (e.key === 'ArrowDown') { render(); }
+                        return;
+                    }
+                    if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        setActive(Math.min(activeIndex + 1, current.length - 1));
+                    } else if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        setActive(Math.max(activeIndex - 1, 0));
+                    } else if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (activeIndex >= 0) { choose(activeIndex); }
+                        else if (current.length === 1) { choose(0); }
+                    } else if (e.key === 'Escape') {
+                        close();
+                    }
+                });
+                // mousedown (not click) so it fires before the input blur closes the panel
+                panel.addEventListener('mousedown', function(e){
+                    var item = e.target.closest('.ac-item');
+                    if (item) { e.preventDefault(); choose(parseInt(item.dataset.i, 10)); }
+                });
+                panel.addEventListener('mousemove', function(e){
+                    var item = e.target.closest('.ac-item');
+                    if (item) { setActive(parseInt(item.dataset.i, 10)); }
+                });
+                input.addEventListener('blur', function(){
+                    setTimeout(function(){
+                        close();
+                        // Snap the visible text back to whatever is (or isn't) actually
+                        // selected, so stray unmatched text never lingers in the box.
+                        var opt = hidden.value ? findById(hidden.value) : null;
+                        input.value = opt ? labelFor(opt) : '';
+                    }, 120);
+                });
+
+                // Hidden inputs are excluded from native HTML5 constraint validation,
+                // so a required combo validates on submit instead.
+                if (input.dataset.required === 'true') {
+                    var form = input.closest('form');
+                    if (form) {
+                        form.addEventListener('submit', function(e){
+                            if (!hidden.value) {
+                                e.preventDefault();
+                                input.setCustomValidity('Choose an item from the list.');
+                                input.reportValidity();
+                                input.focus();
+                            }
+                        });
+                    }
+                }
+            });
+        }
+        document.addEventListener('DOMContentLoaded', initRestrictedComboFields);
     </script>
     {% block extra_js %}{% endblock %}
 </body>
