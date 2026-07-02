@@ -450,6 +450,13 @@
             </a>
 
             {% if session.user_role in ('admin', 'manager', 'office') %}
+            <a href="/{{ company_key }}/workorders"
+               class="subnav-link {% if '/workorders' in current_path %}active{% endif %}">
+                Work Orders
+            </a>
+            {% endif %}
+
+            {% if session.user_role in ('admin', 'manager', 'office') %}
             <a href="/{{ company_key }}/billing"
                class="subnav-link {% if '/billing' in current_path %}active{% endif %}">
                 Billing
@@ -555,6 +562,10 @@
                         var sl = String(s).toLowerCase();
                         return (q === '' || sl.indexOf(q) !== -1) && sl !== q;
                     });
+                    // Brick upgrade: never strand the user — if the typed
+                    // text matches nothing, offer the full list instead of
+                    // closing the panel. Custom text stays perfectly valid.
+                    if (current.length === 0) { current = suggestions.slice(); }
                     if (current.length === 0) { close(); return; }
                     panel.innerHTML = current.map(function(s, i){
                         return '<div class="ac-item" data-i="'+i+'">'+esc(s)+'</div>';
@@ -591,7 +602,7 @@
                         setActive(Math.max(activeIndex - 1, 0));
                     } else if (e.key === 'Enter') {
                         if (activeIndex >= 0) { e.preventDefault(); choose(activeIndex); }
-                        else { close(); }   // free text: let the form submit normally
+                        else { close(); }   // free text stays; site-wide Enter policy blurs the field
                     } else if (e.key === 'Escape') {
                         close();
                     }
@@ -672,6 +683,8 @@
                         input.value = labelFor(current[i]);
                         hidden.value = current[i].id;
                         input.setCustomValidity('');
+                        // Brick upgrade: notify listeners a real selection was made.
+                        hidden.dispatchEvent(new Event('change', { bubbles: true }));
                     }
                     close();
                 }
@@ -681,7 +694,11 @@
                     // this is what keeps the field restricted, not just suggestive.
                     if (hidden.value) {
                         var opt = findById(hidden.value);
-                        if (!opt || labelFor(opt) !== input.value) { hidden.value = ''; }
+                        if (!opt || labelFor(opt) !== input.value) {
+                            hidden.value = '';
+                            // Brick upgrade: selection invalidated is also a change.
+                            hidden.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
                     }
                     input.setCustomValidity('');
                     render();
@@ -743,6 +760,32 @@
             });
         }
         document.addEventListener('DOMContentLoaded', initRestrictedComboFields);
+
+        // ============================================================
+        // Site-wide Enter policy: pressing Enter in a field exits the
+        // field (blur) instead of implicitly submitting the form. Only
+        // an explicit button press submits. Exceptions: textareas keep
+        // Enter for newlines, buttons still activate, and password
+        // fields keep Enter-to-log-in.
+        // ============================================================
+        document.addEventListener('keydown', function(e) {
+            if (e.key !== 'Enter') return;
+            var el = e.target;
+            if (!el || !el.tagName) return;
+            var tag = el.tagName;
+            if (tag === 'TEXTAREA' || tag === 'BUTTON') return;
+            if (tag === 'INPUT') {
+                var t = (el.type || 'text').toLowerCase();
+                if (t === 'submit' || t === 'button' || t === 'reset' ||
+                    t === 'checkbox' || t === 'radio' || t === 'file' ||
+                    t === 'password') return;
+                e.preventDefault();
+                el.blur();
+            } else if (tag === 'SELECT') {
+                e.preventDefault();
+                el.blur();
+            }
+        });
     </script>
     {% block extra_js %}{% endblock %}
 </body>

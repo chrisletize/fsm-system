@@ -11,6 +11,7 @@ import secrets
 from datetime import datetime, timedelta
 from functools import wraps
 import json
+import math
 import os
 
 app = Flask(__name__)
@@ -1196,6 +1197,841 @@ def equipment_delete(company_key, unit_id):
     """, (session.get('username'), unit_id))
     conn.commit(); cur.close(); conn.close()
     return redirect(f'/{company_key}/settings/equipment')
+
+# ============================================================================
+# Work orders  (admin + manager + office)
+#   Core create/edit/list. Dispatch board, extraction queue, and reports are
+#   Phase 4 items built on top of this later.
+# ============================================================================
+
+# Hardcoded per-company prefixes (configurable-later principle).
+WO_NUMBER_PREFIXES = {
+    'getagrip':          'GAG',
+    'kleanit_charlotte': 'KC',
+    'cts':               'CTS',
+    'kleanit_sf':        'KSF',
+}
+
+# Office-settable statuses. On The Way / In Progress arrive with the mobile
+# app; Invoiced with Phase 5; Extraction Active with the extraction queue.
+WO_OFFICE_STATUSES = ('Scheduled', 'Completed', 'No Charge', 'Cancelled')
+
+WO_JOB_SOURCES = ('Phone', 'Email', 'Website', 'Referral', 'Salesperson')
+WO_PRIORITIES  = ('Normal', 'High', 'Urgent')
+
+# Arrival time suggestions for the Brick #1 autocomplete (free text allowed;
+# anything typed is parsed by _parse_arrival_time before it reaches the DB).
+WO_ARRIVAL_SUGGESTIONS = [
+    f'{(h - 1) % 12 + 1}:{m:02d} {"AM" if h < 12 else "PM"}'
+    for h in range(6, 19) for m in (0, 30)
+][:-1]  # 6:00 AM .. 6:00 PM, half-hour steps
+
+# customer_type -> (work-site field label, prefill from service location?)
+# Commercial and Contractors are interchangeable for this operation -> "Job Site".
+WORK_SITE_LABELS = {
+    'Multi Family': ('Unit Number', False),
+    'Residential':  ('Job Address', True),
+    'Commercial':   ('Job Site',    False),
+    'Contractors':  ('Job Site',    False),
+}
+
+def _next_wo_number(cur, company_key):
+    """Next per-company work order number, e.g. GAG-2026-0007.
+    Sequence resets each year; the UNIQUE constraint is the real guarantee."""
+    prefix = WO_NUMBER_PREFIXES.get(company_key, company_key.upper()[:3])
+    year   = datetime.now().year
+    like   = f'{prefix}-{year}-%'
+    cur.execute("""
+        SELECT work_order_number FROM work_orders
+        WHERE work_order_number LIKE %s
+        ORDER BY id DESC LIMIT 1
+    """, (like,))
+    row = cur.fetchone()
+    seq = 1
+    if row:
+        try:
+            seq = int(row['work_order_number'].rsplit('-', 1)[1]) + 1
+        except (ValueError, IndexError):
+            seq = 1
+    return f'{prefix}-{year}-{seq:04d}'
+
+def _parse_arrival_time(raw):
+    """Normalize a typed arrival time ('8:15 am', '815', '8', '14:30') to
+    'HH:MM' 24-hour for the TIME column. Returns (value, error)."""
+    s = raw.strip().upper().replace('.', '')
+    if not s:
+        return None, None
+    # '815' / '0815' -> '8:15'
+    if s.isdigit() and len(s) in (3, 4):
+        s = s[:-2] + ':' + s[-2:]
+    for fmt in ('%I:%M %p', '%I:%M%p', '%I %p', '%I%p', '%H:%M', '%H'):
+        try:
+            return datetime.strptime(s, fmt).strftime('%H:%M'), None
+        except ValueError:
+            continue
+    return None, f'Arrival time "{raw}" could not be read — try a format like 8:30 AM.'
+
+def _wo_form_data(company_key):
+    """Everything the work order form needs embedded: standard catalog items,
+    equipment units (joined to their billing type/rate), and technicians."""
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT id, name, category, unit_price, unit_of_measure,
+               default_description, estimated_minutes, is_taxable, is_catch_all,
+               minimum_quantity, billing_increment
+        FROM catalog_items
+        WHERE billing_behavior = 'standard' AND is_active = TRUE AND deleted_at IS NULL
+        ORDER BY sort_order, name
+    """)
+    catalog_std = [dict(r) for r in cur.fetchall()]
+    cur.execute("""
+        SELECT eu.id, eu.name, ci.id AS catalog_item_id, ci.name AS billing_type_name,
+               ci.category, ci.unit_price AS daily_rate, ci.is_taxable
+        FROM equipment_units eu
+        JOIN catalog_items ci ON ci.id = eu.catalog_item_id
+        WHERE eu.is_active = TRUE AND eu.deleted_at IS NULL
+          AND ci.deleted_at IS NULL
+        ORDER BY eu.name
+    """)
+    equipment = [dict(r) for r in cur.fetchall()]
+    cur.execute("""
+        SELECT username, full_name FROM users
+        WHERE role = 'technician' AND is_active = TRUE
+        ORDER BY full_name
+    """)
+    techs = [dict(r) for r in cur.fetchall()]
+    cur.close(); conn.close()
+    # NUMERIC comes back as Decimal — make everything JSON-safe for tojson.
+    for c in catalog_std:
+        for k in ('unit_price', 'minimum_quantity', 'billing_increment'):
+            if c.get(k) is not None:
+                c[k] = float(c[k])
+    for e in equipment:
+        if e.get('daily_rate') is not None:
+            e['daily_rate'] = float(e['daily_rate'])
+    return catalog_std, equipment, techs
+
+def _load_wo_customers(company_key):
+    """Active customers for the customer combobox (id, name, type)."""
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT id, property_name AS name, customer_type AS category
+        FROM customers
+        WHERE deleted_at IS NULL AND status = 'Active'
+        ORDER BY property_name
+    """)
+    rows = [dict(r) for r in cur.fetchall()]
+    cur.close(); conn.close()
+    return rows
+
+def _parse_wo_line_items(company_key, raw_json):
+    """Parse and validate the line_items_json blob from the form.
+    Returns (lines, error). Totals/quantities are always computed server-side.
+    Line dict shapes:
+      standard:  {id?, kind:'std', catalog_item_id, description, quantity, unit_price}
+      equipment: {id?, kind:'eq',  equipment_unit_id, description, deployed_at, retrieved_at}
+    """
+    try:
+        submitted = json.loads(raw_json or '[]')
+    except (ValueError, TypeError):
+        return None, 'Line items could not be read. Refresh and try again.'
+    if not isinstance(submitted, list):
+        return None, 'Line items could not be read. Refresh and try again.'
+    if len(submitted) == 0:
+        return None, 'A work order needs at least one line item.'
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    lines = []
+    try:
+        for idx, item in enumerate(submitted, start=1):
+            kind = item.get('kind')
+            line_id = item.get('id') or None
+
+            if kind == 'std':
+                catalog_item_id = item.get('catalog_item_id')
+                cur.execute("""
+                    SELECT id, name, unit_price, cost, is_taxable, is_catch_all,
+                           minimum_quantity, billing_increment
+                    FROM catalog_items
+                    WHERE id = %s AND billing_behavior = 'standard' AND deleted_at IS NULL
+                """, (catalog_item_id,))
+                cat = cur.fetchone()
+                if not cat:
+                    return None, f'Line {idx}: pick a service from the catalog.'
+                description = (item.get('description') or '').strip()
+                if cat['is_catch_all'] and not description:
+                    return None, f'Line {idx}: Custom Service requires a description.'
+                try:
+                    quantity   = float(item.get('quantity'))
+                    unit_price = float(item.get('unit_price'))
+                except (TypeError, ValueError):
+                    return None, f'Line {idx}: quantity and price must be numbers.'
+                if quantity <= 0:
+                    return None, f'Line {idx}: quantity must be greater than zero.'
+                if unit_price < 0:
+                    return None, f'Line {idx}: price cannot be negative.'
+                # Catalog minimum + rounding increment (water extraction service).
+                if cat['minimum_quantity'] is not None:
+                    quantity = max(quantity, float(cat['minimum_quantity']))
+                if cat['billing_increment'] is not None:
+                    inc = float(cat['billing_increment'])
+                    if inc > 0:
+                        quantity = math.ceil(round(quantity / inc, 6)) * inc
+                total = round(quantity * unit_price, 2)
+                lines.append({
+                    'id': line_id, 'catalog_item_id': cat['id'],
+                    'equipment_unit_id': None, 'description': description or None,
+                    'quantity': quantity, 'unit_price': unit_price, 'total': total,
+                    'cost': cat['cost'], 'is_taxable': cat['is_taxable'],
+                    'deployed_at': None, 'retrieved_at': None,
+                })
+
+            elif kind == 'eq':
+                equipment_unit_id = item.get('equipment_unit_id')
+                cur.execute("""
+                    SELECT eu.id, eu.name, ci.id AS catalog_item_id,
+                           ci.unit_price AS daily_rate, ci.cost, ci.is_taxable
+                    FROM equipment_units eu
+                    JOIN catalog_items ci ON ci.id = eu.catalog_item_id
+                    WHERE eu.id = %s AND eu.deleted_at IS NULL
+                      AND ci.billing_behavior = 'per_day_equipment' AND ci.deleted_at IS NULL
+                """, (equipment_unit_id,))
+                eq = cur.fetchone()
+                if not eq:
+                    return None, f'Line {idx}: pick a unit from the equipment registry.'
+                deployed_at  = (item.get('deployed_at') or '').strip() or None
+                retrieved_at = (item.get('retrieved_at') or '').strip() or None
+                if not deployed_at:
+                    return None, f'Line {idx}: equipment needs a deployed date.'
+                quantity = None
+                total    = None
+                if retrieved_at:
+                    try:
+                        d0 = datetime.strptime(deployed_at, '%Y-%m-%d').date()
+                        d1 = datetime.strptime(retrieved_at, '%Y-%m-%d').date()
+                    except ValueError:
+                        return None, f'Line {idx}: dates could not be read.'
+                    if d1 < d0:
+                        return None, f'Line {idx}: retrieved date is before deployed date.'
+                    quantity = max((d1 - d0).days, 1)   # same-day set-and-pull bills 1 day
+                    total    = round(quantity * float(eq['daily_rate']), 2)
+                description = (item.get('description') or '').strip() or eq['name']
+                lines.append({
+                    'id': line_id, 'catalog_item_id': eq['catalog_item_id'],
+                    'equipment_unit_id': eq['id'], 'description': description,
+                    'quantity': quantity, 'unit_price': float(eq['daily_rate']),
+                    'total': total, 'cost': eq['cost'], 'is_taxable': eq['is_taxable'],
+                    'deployed_at': deployed_at, 'retrieved_at': retrieved_at,
+                })
+            else:
+                return None, f'Line {idx}: unknown line type.'
+    finally:
+        cur.close(); conn.close()
+    return lines, None
+
+def _save_work_order(company_key, wo_id):
+    """Insert (wo_id is None) or update a work order + line items + techs +
+    status history from request.form. Returns (wo_id, error)."""
+    customer_id         = _opt_num(request.form.get('customer_id'))
+    service_location_id = _opt_num(request.form.get('service_location_id'))
+    primary_contact_id  = _opt_num(request.form.get('primary_contact_id'))
+    status              = request.form.get('status', 'Scheduled')
+    work_site_label     = request.form.get('work_site_label', '').strip() or None
+    auto_description    = request.form.get('auto_description', '').strip() or None
+    occ_vac             = request.form.get('description_occ_vac') or None
+    am_pm               = request.form.get('description_am_pm') or None
+    gated               = request.form.get('description_gated') == 'on'
+    followup            = request.form.get('description_followup') == 'on'
+    special_notes       = request.form.get('description_special_notes', '').strip() or None
+    internal_notes      = request.form.get('internal_notes', '').strip() or None
+    notes_for_techs     = request.form.get('notes_for_techs', '').strip() or None
+    po_number           = request.form.get('po_number', '').strip() or None
+    job_source          = request.form.get('job_source') or None
+    priority            = request.form.get('priority', 'Normal')
+    start_date          = request.form.get('start_date', '').strip() or None
+    end_date            = request.form.get('end_date', '').strip() or None
+    arrival_start       = request.form.get('arrival_window_start', '').strip() or None
+    arrival_end         = request.form.get('arrival_window_end', '').strip() or None
+    est_duration        = _opt_num(request.form.get('estimated_duration_hours'))
+    assigned_techs      = request.form.getlist('assigned_techs')
+
+    if not customer_id:
+        return None, 'Pick a customer from the list.'
+    if status not in WO_OFFICE_STATUSES:
+        return None, 'Invalid status.'
+    if priority not in WO_PRIORITIES:
+        return None, 'Invalid priority.'
+    if job_source and job_source not in WO_JOB_SOURCES:
+        return None, 'Invalid job source.'
+    if occ_vac and occ_vac not in ('OCC', 'VAC'):
+        return None, 'Invalid occupancy value.'
+    if am_pm and am_pm not in ('AM', 'PM'):
+        return None, 'Invalid AM/PM value.'
+    if not start_date:
+        return None, 'A start date is required.'
+    arrival_start, time_err = _parse_arrival_time(arrival_start or '')
+    if time_err:
+        return None, time_err
+
+    lines, line_error = _parse_wo_line_items(company_key, request.form.get('line_items_json'))
+    if line_error:
+        return None, line_error
+
+    username = session.get('username')
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    try:
+        # Validate customer + location + contact belong together.
+        cur.execute("SELECT id, customer_type FROM customers WHERE id = %s AND deleted_at IS NULL",
+                    (customer_id,))
+        cust = cur.fetchone()
+        if not cust:
+            return None, 'Pick a customer from the list.'
+        tax_county = None
+        if service_location_id:
+            cur.execute("""
+                SELECT id, county FROM service_locations
+                WHERE id = %s AND customer_id = %s AND deleted_at IS NULL
+            """, (service_location_id, customer_id))
+            loc = cur.fetchone()
+            if not loc:
+                return None, 'Service location does not belong to that customer.'
+            tax_county = loc['county']
+        if primary_contact_id:
+            cur.execute("""
+                SELECT id FROM customer_contacts
+                WHERE id = %s AND customer_id = %s
+            """, (primary_contact_id, customer_id))
+            if not cur.fetchone():
+                return None, 'Contact does not belong to that customer.'
+
+        prev_status = None
+        if wo_id is None:
+            wo_number = _next_wo_number(cur, company_key)
+            cur.execute("""
+                INSERT INTO work_orders
+                    (work_order_number, customer_id, service_location_id, primary_contact_id,
+                     status, work_site_label, auto_description,
+                     description_occ_vac, description_am_pm, description_gated,
+                     description_followup, description_special_notes,
+                     internal_notes, notes_for_techs, po_number, job_source, priority,
+                     start_date, end_date, arrival_window_start, arrival_window_end,
+                     estimated_duration_hours, created_by, updated_by)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                RETURNING id
+            """, (wo_number, customer_id, service_location_id, primary_contact_id,
+                  status, work_site_label, auto_description,
+                  occ_vac, am_pm, gated, followup, special_notes,
+                  internal_notes, notes_for_techs, po_number, job_source, priority,
+                  start_date, end_date, arrival_start, arrival_end,
+                  est_duration, username, username))
+            wo_id = cur.fetchone()['id']
+        else:
+            cur.execute("""
+                SELECT status FROM work_orders WHERE id = %s AND deleted_at IS NULL
+            """, (wo_id,))
+            existing = cur.fetchone()
+            if not existing:
+                return None, 'Work order not found.'
+            prev_status = existing['status']
+            cur.execute("""
+                UPDATE work_orders
+                SET customer_id=%s, service_location_id=%s, primary_contact_id=%s,
+                    status=%s, work_site_label=%s, auto_description=%s,
+                    description_occ_vac=%s, description_am_pm=%s, description_gated=%s,
+                    description_followup=%s, description_special_notes=%s,
+                    internal_notes=%s, notes_for_techs=%s, po_number=%s,
+                    job_source=%s, priority=%s,
+                    start_date=%s, end_date=%s,
+                    arrival_window_start=%s, arrival_window_end=%s,
+                    estimated_duration_hours=%s,
+                    updated_at=CURRENT_TIMESTAMP, updated_by=%s
+                WHERE id=%s AND deleted_at IS NULL
+            """, (customer_id, service_location_id, primary_contact_id,
+                  status, work_site_label, auto_description,
+                  occ_vac, am_pm, gated, followup, special_notes,
+                  internal_notes, notes_for_techs, po_number, job_source, priority,
+                  start_date, end_date, arrival_start, arrival_end,
+                  est_duration, username, wo_id))
+
+        # ---- Line items: update by id, insert new, soft-delete missing. ----
+        cur.execute("""
+            SELECT id FROM work_order_line_items
+            WHERE work_order_id = %s AND deleted_at IS NULL
+        """, (wo_id,))
+        existing_ids  = {r['id'] for r in cur.fetchall()}
+        submitted_ids = set()
+        for sort_order, ln in enumerate(lines):
+            if ln['id'] and int(ln['id']) in existing_ids:
+                lid = int(ln['id'])
+                submitted_ids.add(lid)
+                cur.execute("""
+                    UPDATE work_order_line_items
+                    SET catalog_item_id=%s, equipment_unit_id=%s, description=%s,
+                        quantity=%s, unit_price=%s, total=%s, cost=%s, is_taxable=%s,
+                        tax_county=%s, deployed_at=%s, retrieved_at=%s, sort_order=%s,
+                        updated_at=CURRENT_TIMESTAMP, updated_by=%s
+                    WHERE id=%s AND work_order_id=%s AND deleted_at IS NULL
+                """, (ln['catalog_item_id'], ln['equipment_unit_id'], ln['description'],
+                      ln['quantity'], ln['unit_price'], ln['total'], ln['cost'],
+                      ln['is_taxable'], tax_county, ln['deployed_at'], ln['retrieved_at'],
+                      sort_order, username, lid, wo_id))
+            else:
+                cur.execute("""
+                    INSERT INTO work_order_line_items
+                        (work_order_id, catalog_item_id, equipment_unit_id, description,
+                         quantity, unit_price, total, cost, is_taxable, tax_county,
+                         deployed_at, retrieved_at, sort_order, created_by, updated_by)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                """, (wo_id, ln['catalog_item_id'], ln['equipment_unit_id'], ln['description'],
+                      ln['quantity'], ln['unit_price'], ln['total'], ln['cost'],
+                      ln['is_taxable'], tax_county, ln['deployed_at'], ln['retrieved_at'],
+                      sort_order, username, username))
+        removed = existing_ids - submitted_ids
+        if removed:
+            cur.execute("""
+                UPDATE work_order_line_items
+                SET deleted_at = CURRENT_TIMESTAMP, deleted_by = %s
+                WHERE id = ANY(%s) AND work_order_id = %s
+            """, (username, list(removed), wo_id))
+
+        # ---- Techs: replace assignments (join table, hard replace). ----
+        cur.execute("DELETE FROM work_order_techs WHERE work_order_id = %s", (wo_id,))
+        for tech in assigned_techs:
+            tech = tech.strip()
+            if tech:
+                cur.execute("""
+                    INSERT INTO work_order_techs (work_order_id, username)
+                    VALUES (%s, %s)
+                    ON CONFLICT (work_order_id, username) DO NOTHING
+                """, (wo_id, tech))
+
+        # ---- Status history: on create, or on status change. ----
+        if prev_status is None or prev_status != status:
+            cur.execute("""
+                INSERT INTO work_order_status_history
+                    (work_order_id, status, changed_by, notes)
+                VALUES (%s, %s, %s, %s)
+            """, (wo_id, status,  username,
+                  'Created' if prev_status is None else f'Changed from {prev_status}'))
+
+        conn.commit()
+        return wo_id, None
+    finally:
+        cur.close(); conn.close()
+
+@app.route('/<company_key>/workorders')
+@login_required
+@company_access_required
+@with_branding
+def workorder_list(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    search        = request.args.get('search', '').strip()
+    status_filter = request.args.get('status', '').strip()
+
+    conditions = ["wo.deleted_at IS NULL"]
+    params     = []
+    if search:
+        conditions.append("""(wo.work_order_number ILIKE %s
+                              OR c.property_name ILIKE %s
+                              OR wo.work_site_label ILIKE %s)""")
+        params.extend([f'%{search}%'] * 3)
+    if status_filter:
+        conditions.append("wo.status = %s")
+        params.append(status_filter)
+    where = " AND ".join(conditions)
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute(f"""
+        SELECT wo.id, wo.work_order_number, wo.status, wo.priority,
+               wo.work_site_label, wo.start_date,
+               c.property_name AS customer_name,
+               (SELECT COALESCE(SUM(li.total), 0)
+                FROM work_order_line_items li
+                WHERE li.work_order_id = wo.id AND li.deleted_at IS NULL) AS order_total,
+               (SELECT COUNT(*)
+                FROM work_order_line_items li
+                WHERE li.work_order_id = wo.id AND li.deleted_at IS NULL
+                  AND li.equipment_unit_id IS NOT NULL
+                  AND li.retrieved_at IS NULL) AS accruing_count
+        FROM work_orders wo
+        JOIN customers c ON c.id = wo.customer_id
+        WHERE {where}
+        ORDER BY wo.start_date DESC NULLS LAST, wo.id DESC
+        LIMIT 200
+    """, params)
+    workorders = cur.fetchall()
+    cur.execute(f"""
+        SELECT COUNT(*) AS count
+        FROM work_orders wo JOIN customers c ON c.id = wo.customer_id
+        WHERE {where}
+    """, params)
+    total = cur.fetchone()['count']
+    cur.close(); conn.close()
+    return render_template('workorder_list.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        workorders=workorders, total=total,
+        search=search, status_filter=status_filter,
+        statuses=WO_OFFICE_STATUSES,
+    )
+
+@app.route('/<company_key>/workorders/search')
+@login_required
+@company_access_required
+def workorders_search(company_key):
+    """JSON endpoint for live work order search — mirrors customers_search."""
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    search        = request.args.get('search', '').strip()
+    status_filter = request.args.get('status', '').strip()
+
+    conditions = ["wo.deleted_at IS NULL"]
+    params     = []
+    if search:
+        conditions.append("""(wo.work_order_number ILIKE %s
+                              OR c.property_name ILIKE %s
+                              OR wo.work_site_label ILIKE %s)""")
+        params.extend([f'%{search}%'] * 3)
+    if status_filter:
+        conditions.append("wo.status = %s")
+        params.append(status_filter)
+    where = " AND ".join(conditions)
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute(f"""
+        SELECT wo.id, wo.work_order_number, wo.status, wo.priority,
+               wo.work_site_label, wo.start_date::text AS start_date,
+               c.property_name AS customer_name,
+               (SELECT COALESCE(SUM(li.total), 0)
+                FROM work_order_line_items li
+                WHERE li.work_order_id = wo.id AND li.deleted_at IS NULL)::float AS order_total,
+               (SELECT COUNT(*)
+                FROM work_order_line_items li
+                WHERE li.work_order_id = wo.id AND li.deleted_at IS NULL
+                  AND li.equipment_unit_id IS NOT NULL
+                  AND li.retrieved_at IS NULL)::int AS accruing_count
+        FROM work_orders wo
+        JOIN customers c ON c.id = wo.customer_id
+        WHERE {where}
+        ORDER BY wo.start_date DESC NULLS LAST, wo.id DESC
+        LIMIT 200
+    """, params)
+    rows = cur.fetchall()
+    cur.execute(f"""
+        SELECT COUNT(*) AS count
+        FROM work_orders wo JOIN customers c ON c.id = wo.customer_id
+        WHERE {where}
+    """, params)
+    total = cur.fetchone()['count']
+    cur.close(); conn.close()
+    return jsonify({'total': total, 'workorders': rows})
+
+@app.route('/<company_key>/workorders/customer/<int:customer_id>/context')
+@login_required
+@company_access_required
+def workorder_customer_context(company_key, customer_id):
+    """JSON: everything the form needs after a customer is picked — type-driven
+    work-site label + prefill flag, service locations, contacts."""
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT id, property_name, customer_type FROM customers
+        WHERE id = %s AND deleted_at IS NULL
+    """, (customer_id,))
+    cust = cur.fetchone()
+    if not cust:
+        cur.close(); conn.close()
+        abort(404)
+    label, prefill = WORK_SITE_LABELS.get(cust['customer_type'], ('Work Site', False))
+    cur.execute("""
+        SELECT id, location_name, address, city, state, is_primary
+        FROM service_locations
+        WHERE customer_id = %s AND deleted_at IS NULL
+        ORDER BY is_primary DESC, location_name NULLS LAST, address
+    """, (customer_id,))
+    locations = [dict(r) for r in cur.fetchall()]
+    cur.execute("""
+        SELECT id, first_name, last_name, title
+        FROM customer_contacts
+        WHERE customer_id = %s
+        ORDER BY last_name, first_name
+    """, (customer_id,))
+    contacts = [dict(r) for r in cur.fetchall()]
+    cur.close(); conn.close()
+    return jsonify({
+        'customer_type': cust['customer_type'],
+        'site_label': label,
+        'site_prefill_from_location': prefill,
+        'locations': locations,
+        'contacts': contacts,
+    })
+
+@app.route('/<company_key>/workorders/dupe_check')
+@login_required
+@company_access_required
+def workorder_dupe_check(company_key):
+    """Double-booking detection: same customer + service location + normalized
+    work_site_label, dated within the last 4 weeks or any time in the future.
+    Non-blocking — the form shows a banner, staff decide."""
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    customer_id         = _opt_num(request.args.get('customer_id'))
+    service_location_id = _opt_num(request.args.get('service_location_id'))
+    site                = (request.args.get('site') or '').strip()
+    exclude_id          = _opt_num(request.args.get('exclude_id'))
+    if not customer_id or not site:
+        return jsonify({'matches': []})
+
+    params = [customer_id, site]
+    loc_clause = "service_location_id IS NULL" if not service_location_id \
+                 else "service_location_id = %s"
+    if service_location_id:
+        params.append(service_location_id)
+    exclude_clause = ""
+    if exclude_id:
+        exclude_clause = "AND id <> %s"
+        params.append(exclude_id)
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute(f"""
+        SELECT id, work_order_number, work_site_label, status,
+               start_date::text AS start_date
+        FROM work_orders
+        WHERE deleted_at IS NULL
+          AND customer_id = %s
+          AND lower(regexp_replace(work_site_label, '[^a-zA-Z0-9]', '', 'g')) =
+              lower(regexp_replace(%s,              '[^a-zA-Z0-9]', '', 'g'))
+          AND {loc_clause}
+          {exclude_clause}
+          AND status NOT IN ('Cancelled')
+          AND (start_date IS NULL OR start_date >= CURRENT_DATE - INTERVAL '28 days')
+        ORDER BY start_date DESC NULLS LAST
+        LIMIT 5
+    """, params)
+    matches = cur.fetchall()
+    cur.close(); conn.close()
+    return jsonify({'matches': matches})
+
+@app.route('/<company_key>/workorders/<int:wo_id>')
+@login_required
+@company_access_required
+@with_branding
+def workorder_detail(company_key, wo_id, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT wo.*, wo.start_date::text AS start_date, wo.end_date::text AS end_date,
+               to_char(wo.arrival_window_start, 'HH12:MI AM') AS arrival_time,
+               to_char(wo.created_at, 'Mon DD, YYYY HH12:MI AM') AS created_at_display,
+               c.property_name AS customer_name, c.customer_type,
+               sl.location_name, sl.address AS location_address,
+               sl.city AS location_city, sl.state AS location_state,
+               cc.first_name AS contact_first, cc.last_name AS contact_last,
+               cc.title AS contact_title
+        FROM work_orders wo
+        JOIN customers c ON c.id = wo.customer_id
+        LEFT JOIN service_locations sl ON sl.id = wo.service_location_id
+        LEFT JOIN customer_contacts cc ON cc.id = wo.primary_contact_id
+        WHERE wo.id = %s AND wo.deleted_at IS NULL
+    """, (wo_id,))
+    wo = cur.fetchone()
+    if not wo:
+        cur.close(); conn.close()
+        abort(404)
+    label, _ = WORK_SITE_LABELS.get(wo['customer_type'], ('Work Site', False))
+    cur.execute("""
+        SELECT li.description, li.quantity::float AS quantity,
+               li.unit_price::float AS unit_price, li.total::float AS total,
+               li.deployed_at::text AS deployed_at, li.retrieved_at::text AS retrieved_at,
+               li.equipment_unit_id,
+               ci.name AS catalog_name, ci.billing_behavior, ci.unit_of_measure,
+               eu.name AS equipment_name
+        FROM work_order_line_items li
+        JOIN catalog_items ci ON ci.id = li.catalog_item_id
+        LEFT JOIN equipment_units eu ON eu.id = li.equipment_unit_id
+        WHERE li.work_order_id = %s AND li.deleted_at IS NULL
+        ORDER BY li.sort_order, li.id
+    """, (wo_id,))
+    line_items = cur.fetchall()
+    subtotal = sum(li['total'] for li in line_items if li['total'] is not None)
+    accruing = [li for li in line_items
+                if li['equipment_unit_id'] and not li['retrieved_at']]
+    cur.execute("""
+        SELECT wt.username, COALESCE(u.full_name, wt.username) AS full_name
+        FROM work_order_techs wt
+        LEFT JOIN users u ON u.username = wt.username
+        WHERE wt.work_order_id = %s
+        ORDER BY full_name
+    """, (wo_id,))
+    techs = cur.fetchall()
+    cur.execute("""
+        SELECT status, extraction_status, changed_by, notes,
+               to_char(changed_at, 'Mon DD, YYYY HH12:MI AM') AS changed_at_display
+        FROM work_order_status_history
+        WHERE work_order_id = %s
+        ORDER BY changed_at DESC, id DESC
+    """, (wo_id,))
+    history = cur.fetchall()
+    cur.close(); conn.close()
+    return render_template('workorder_detail.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        wo=wo, site_label=label, line_items=line_items, subtotal=subtotal,
+        accruing=accruing, techs=techs, history=history,
+    )
+
+@app.route('/<company_key>/workorders/new', methods=['GET', 'POST'])
+@login_required
+@company_access_required
+@with_branding
+def workorder_new(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    error = None
+    if request.method == 'POST':
+        new_id, error = _save_work_order(company_key, wo_id=None)
+        if not error:
+            return redirect(f'/{company_key}/workorders')
+    catalog_std, equipment, techs = _wo_form_data(company_key)
+    customers = _load_wo_customers(company_key)
+    return render_template('workorder_form.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        wo=None, line_items=[], wo_techs=[], error=error,
+        customers=customers, catalog_std=catalog_std, equipment=equipment,
+        techs=techs, statuses=WO_OFFICE_STATUSES,
+        job_sources=WO_JOB_SOURCES, priorities=WO_PRIORITIES,
+        arrival_suggestions=WO_ARRIVAL_SUGGESTIONS,
+        site_labels=WORK_SITE_LABELS,
+    )
+
+@app.route('/<company_key>/workorders/<int:wo_id>/edit', methods=['GET', 'POST'])
+@login_required
+@company_access_required
+@with_branding
+def workorder_edit(company_key, wo_id, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    error = None
+    if request.method == 'POST':
+        _, error = _save_work_order(company_key, wo_id=wo_id)
+        if not error:
+            return redirect(f'/{company_key}/workorders')
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT wo.*, c.property_name AS customer_name, c.customer_type,
+               wo.start_date::text AS start_date, wo.end_date::text AS end_date,
+               to_char(wo.arrival_window_start, 'FMHH12:MI AM') AS arrival_window_start,
+               wo.arrival_window_end::text AS arrival_window_end
+        FROM work_orders wo
+        JOIN customers c ON c.id = wo.customer_id
+        WHERE wo.id = %s AND wo.deleted_at IS NULL
+    """, (wo_id,))
+    wo = cur.fetchone()
+    if not wo:
+        cur.close(); conn.close()
+        abort(404)
+    cur.execute("""
+        SELECT li.id, li.catalog_item_id, li.equipment_unit_id, li.description,
+               li.quantity::float AS quantity, li.unit_price::float AS unit_price,
+               li.total::float AS total, li.is_taxable,
+               li.deployed_at::text AS deployed_at, li.retrieved_at::text AS retrieved_at,
+               ci.name AS catalog_name, ci.billing_behavior,
+               eu.name AS equipment_name
+        FROM work_order_line_items li
+        JOIN catalog_items ci ON ci.id = li.catalog_item_id
+        LEFT JOIN equipment_units eu ON eu.id = li.equipment_unit_id
+        WHERE li.work_order_id = %s AND li.deleted_at IS NULL
+        ORDER BY li.sort_order, li.id
+    """, (wo_id,))
+    line_items = [dict(r) for r in cur.fetchall()]
+    cur.execute("""
+        SELECT username FROM work_order_techs WHERE work_order_id = %s
+    """, (wo_id,))
+    wo_techs = [r['username'] for r in cur.fetchall()]
+    cur.close(); conn.close()
+    catalog_std, equipment, techs = _wo_form_data(company_key)
+    customers = _load_wo_customers(company_key)
+    # Merge in anything this WO already references that the active-only option
+    # lists don't contain (retired units, deactivated items, inactive customers).
+    # Without this, the restricted combobox would silently clear them on edit.
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    missing_cats = ({li['catalog_item_id'] for li in line_items
+                     if li['billing_behavior'] == 'standard'}
+                    - {c['id'] for c in catalog_std})
+    if missing_cats:
+        cur.execute("""
+            SELECT id, name, category, unit_price::float AS unit_price,
+                   unit_of_measure, default_description, estimated_minutes,
+                   is_taxable, is_catch_all,
+                   minimum_quantity::float AS minimum_quantity,
+                   billing_increment::float AS billing_increment
+            FROM catalog_items WHERE id = ANY(%s)
+        """, (list(missing_cats),))
+        catalog_std.extend(dict(r) for r in cur.fetchall())
+    missing_eq = ({li['equipment_unit_id'] for li in line_items
+                   if li['equipment_unit_id']}
+                  - {e['id'] for e in equipment})
+    if missing_eq:
+        cur.execute("""
+            SELECT eu.id, eu.name, ci.id AS catalog_item_id,
+                   ci.name AS billing_type_name, ci.category,
+                   ci.unit_price::float AS daily_rate, ci.is_taxable
+            FROM equipment_units eu
+            JOIN catalog_items ci ON ci.id = eu.catalog_item_id
+            WHERE eu.id = ANY(%s)
+        """, (list(missing_eq),))
+        equipment.extend(dict(r) for r in cur.fetchall())
+    cur.close(); conn.close()
+    if wo['customer_id'] not in {c['id'] for c in customers}:
+        customers.append({'id': wo['customer_id'], 'name': wo['customer_name'],
+                          'category': wo['customer_type']})
+    return render_template('workorder_form.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        wo=wo, line_items=line_items, wo_techs=wo_techs, error=error,
+        customers=customers, catalog_std=catalog_std, equipment=equipment,
+        techs=techs, statuses=WO_OFFICE_STATUSES,
+        job_sources=WO_JOB_SOURCES, priorities=WO_PRIORITIES,
+        arrival_suggestions=WO_ARRIVAL_SUGGESTIONS,
+        site_labels=WORK_SITE_LABELS,
+    )
+
+@app.route('/<company_key>/workorders/<int:wo_id>/delete', methods=['POST'])
+@login_required
+@company_access_required
+def workorder_delete(company_key, wo_id):
+    if session.get('user_role') not in ('admin', 'manager'):
+        abort(403)
+    username = session.get('username')
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        UPDATE work_orders
+        SET deleted_at = CURRENT_TIMESTAMP, deleted_by = %s
+        WHERE id = %s AND deleted_at IS NULL
+    """, (username, wo_id))
+    cur.execute("""
+        UPDATE work_order_line_items
+        SET deleted_at = CURRENT_TIMESTAMP, deleted_by = %s
+        WHERE work_order_id = %s AND deleted_at IS NULL
+    """, (username, wo_id))
+    conn.commit(); cur.close(); conn.close()
+    return redirect(f'/{company_key}/workorders')
 
 # ============================================================================
 # Contacts — new

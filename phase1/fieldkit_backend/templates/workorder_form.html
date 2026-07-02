@@ -1,0 +1,801 @@
+{% extends "base.html" %}
+{% from "_macros.html" import restricted_combo_field, autocomplete_field %}
+{% block title %}{% if wo %}Edit{% else %}New{% endif %} Work Order — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem; }
+    .page-header h1 { font-size:1.6rem; color:{{ branding.color_primary }}; }
+    .wo-number { color:#999; font-weight:400; font-size:1.1rem; margin-left:0.6rem; }
+    .card + .card { margin-top:1.25rem; }
+    .card h2 { font-size:1.05rem; color:#444; margin-bottom:1rem; padding-bottom:0.6rem; border-bottom:1px solid #eee; }
+    .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:1.1rem 1.5rem; }
+    .form-grid-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:1.1rem 1.5rem; }
+    .form-group { display:flex; flex-direction:column; gap:.35rem; }
+    .form-group.full { grid-column:1 / -1; }
+    .form-group label { font-size:.85rem; font-weight:600; color:#555; }
+    .form-group .hint { font-size:.78rem; color:#aaa; font-weight:400; }
+    .form-group input[type=text], .form-group input[type=date], .form-group input[type=time],
+    .form-group input[type=number], .form-group select, .form-group textarea {
+        padding:.6rem .75rem; border:1px solid #ddd; border-radius:4px;
+        font-size:.92rem; background:white; font-family:inherit;
+    }
+    .form-group textarea { resize:vertical; min-height:70px; }
+    .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+        outline:none; border-color:{{ branding.color_primary }};
+    }
+    .check-row { display:flex; align-items:center; gap:.5rem; }
+    .check-row input { width:16px; height:16px; }
+    .check-row label { font-weight:500; font-size:.9rem; color:#444; }
+    .check-pair { display:flex; gap:1.25rem; align-items:center; }
+
+    /* Duplicate booking banner (non-blocking) */
+    .dupe-banner {
+        display:none; margin-top:.6rem; background:#fdf6e3; border:1px solid #f0d9a0;
+        border-radius:4px; padding:.7rem .9rem; font-size:.86rem; color:#7a5c12;
+    }
+    .dupe-banner.show { display:block; }
+    .dupe-banner strong { color:#5f4708; }
+
+    /* Line items */
+    .li-row { border:1px solid #e4e4e4; border-radius:6px; padding:.9rem 1rem; margin-bottom:.8rem; background:#fff; }
+    .li-row.li-eq { background:#f3f7fc; border-color:#cfdff0; }
+    .li-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:.7rem; }
+    .li-badge { font-size:.72rem; padding:.15rem .6rem; border-radius:10px; font-weight:600;
+                text-transform:uppercase; letter-spacing:.03em; }
+    .li-badge-std { background:#f0f0f0; color:#666; }
+    .li-badge-eq  { background:#dcebfa; color:#1d5c9e; }
+    .li-remove { border:none; background:transparent; color:#aaa; cursor:pointer; font-size:1.05rem; padding:0 .3rem; }
+    .li-remove:hover { color:#c33; }
+    .li-fields { display:grid; gap:.7rem .9rem; align-items:end; }
+    .li-fields.cols-std { grid-template-columns:2.2fr .8fr 1fr 1fr; }
+    .li-fields.cols-eq  { grid-template-columns:2fr 1.1fr 1.1fr; }
+    .li-fields-b { display:grid; grid-template-columns:1fr 1fr 1fr; gap:.7rem .9rem; margin-top:.7rem; align-items:end; }
+    .li-lbl { font-size:.75rem; color:#999; display:block; margin-bottom:.25rem; font-weight:600; }
+    .li-fields input, .li-fields-b input {
+        padding:.5rem .65rem; border:1px solid #ddd; border-radius:4px; font-size:.88rem; width:100%;
+        font-family:inherit; background:white;
+    }
+    .li-ro { font-size:.9rem; padding:.5rem 0; color:#333; }
+    .li-total { font-weight:600; text-align:right; }
+    .li-accruing { color:#1d5c9e; font-weight:500; }
+    .li-actions { display:flex; gap:.7rem; margin:.9rem 0 .3rem; }
+    .btn-add { padding:.5rem 1rem; border:1px dashed #bbb; border-radius:4px; background:#fafafa;
+               color:#555; cursor:pointer; font-size:.88rem; font-weight:500; }
+    .btn-add:hover { border-color:{{ branding.color_primary }}; color:{{ branding.color_primary }}; }
+    .li-summary { border-top:1px solid #eee; margin-top:.9rem; padding-top:.8rem;
+                  display:flex; justify-content:flex-end; gap:1.5rem; font-size:.95rem; }
+    .li-summary .amount { font-weight:600; min-width:90px; text-align:right; }
+    .li-accrue-note { text-align:right; font-size:.8rem; color:#1d5c9e; margin-top:.35rem; }
+    .li-empty { color:#aaa; font-size:.9rem; padding:.6rem 0; }
+
+    /* Auto description */
+    .desc-toolbar { display:flex; justify-content:space-between; align-items:center; }
+    .desc-regen { font-size:.8rem; color:{{ branding.color_primary }}; cursor:pointer;
+                  background:none; border:none; padding:0; text-decoration:underline; display:none; }
+    .desc-regen.show { display:inline; }
+
+    /* Techs */
+    .tech-list { display:flex; flex-wrap:wrap; gap:.6rem 1.4rem; }
+    .tech-list .check-row { min-width:180px; }
+    .tech-empty { color:#aaa; font-size:.9rem; }
+
+    .form-actions { margin-top:1.5rem; display:flex; gap:.75rem; align-items:center; }
+    .btn { display:inline-block; padding:.7rem 1.4rem; border-radius:4px; text-decoration:none;
+           font-weight:500; cursor:pointer; border:none; font-size:.95rem; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-primary:hover { opacity:.9; }
+    .btn-secondary { background:#6c757d; color:white; }
+    .btn-secondary:hover { background:#5a6268; }
+    .btn-danger { background:transparent; color:#c33; border:1px solid #e0b4b4; margin-left:auto; }
+    .btn-danger:hover { background:#fdf3f3; }
+    .flash.error { background:#fee; color:#c33; border:1px solid #fcc; padding:.8rem 1rem;
+                   border-radius:4px; margin-bottom:1.25rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>
+        {% if wo %}Edit Work Order<span class="wo-number">{{ wo.work_order_number }}</span>
+        {% else %}New Work Order{% endif %}
+    </h1>
+</div>
+
+{% if error %}
+<div class="flash error">{{ error }}</div>
+{% endif %}
+
+<form method="POST" id="woForm"
+      action="/{{ company_key }}/workorders{% if wo %}/{{ wo.id }}/edit{% else %}/new{% endif %}">
+
+<input type="hidden" name="line_items_json" id="lineItemsJson">
+<input type="hidden" name="description_occ_vac" id="occVacHidden" value="{{ wo.description_occ_vac or '' if wo else '' }}">
+<input type="hidden" name="description_am_pm" id="amPmHidden" value="{{ wo.description_am_pm or '' if wo else '' }}">
+
+<!-- ============================ Customer & Location ============================ -->
+<div class="card">
+    <h2>Customer &amp; Location</h2>
+    <div class="form-grid">
+        <div class="form-group">
+            <label>Customer <span class="hint">(required)</span></label>
+{{ restricted_combo_field('customer_id', customers,
+                   wo.customer_id if wo else none,
+                   (wo.customer_name + ' (' + wo.customer_type + ')') if wo else '',
+                   'Type customer name…', True, 'customerCombo') }}
+        </div>
+        <div class="form-group">
+            <label>Service Location</label>
+            <select name="service_location_id" id="locationSelect" disabled>
+                <option value="">— pick a customer first —</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Contact</label>
+            <select name="primary_contact_id" id="contactSelect" disabled>
+                <option value="">— pick a customer first —</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label id="siteLabel">Work Site</label>
+            <input type="text" name="work_site_label" id="siteInput"
+                   value="{{ wo.work_site_label or '' if wo else '' }}"
+                   placeholder="" autocomplete="off">
+            <div class="dupe-banner" id="dupeBanner"></div>
+        </div>
+    </div>
+</div>
+
+<!-- ============================ Scheduling ============================ -->
+<div class="card">
+    <h2>Scheduling</h2>
+    <div class="form-grid-3">
+        <div class="form-group">
+            <label>Status</label>
+            <select name="status" id="statusSelect">
+                {% if wo and wo.status not in statuses %}
+                <option value="{{ wo.status }}" selected>{{ wo.status }} (system)</option>
+                {% endif %}
+                {% for s in statuses %}
+                <option value="{{ s }}" {% if wo and wo.status == s %}selected{% endif %}>{{ s }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Priority</label>
+            <select name="priority">
+                {% for p in priorities %}
+                <option value="{{ p }}" {% if wo and wo.priority == p %}selected{% endif %}>{{ p }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Job Source</label>
+            <select name="job_source">
+                <option value="">—</option>
+                {% for js in job_sources %}
+                <option value="{{ js }}" {% if wo and wo.job_source == js %}selected{% endif %}>{{ js }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Start Date <span class="hint">(required)</span></label>
+            <input type="date" name="start_date" id="startDate"
+                   value="{{ wo.start_date or '' if wo else '' }}" required>
+        </div>
+        <div class="form-group">
+            <label>End Date <span class="hint">(multi-day jobs)</span></label>
+            <input type="date" name="end_date" value="{{ wo.end_date or '' if wo else '' }}">
+        </div>
+        <div class="form-group">
+            <label>Est. Duration <span class="hint">(hours)</span></label>
+            <input type="number" name="estimated_duration_hours" min="0" step="0.25"
+                   value="{{ wo.estimated_duration_hours or '' if wo else '' }}">
+        </div>
+        <div class="form-group">
+            <label>Arrival Time <span class="hint">(pick or type — e.g. 8:30 AM)</span></label>
+{{ autocomplete_field('arrival_window_start',
+                   wo.arrival_window_start or '' if wo else '',
+                   arrival_suggestions, 'e.g. 8:30 AM') }}
+        </div>
+        <div class="form-group">
+            <label>PO Number</label>
+            <input type="text" name="po_number" value="{{ wo.po_number or '' if wo else '' }}">
+        </div>
+    </div>
+</div>
+
+<!-- ============================ Job Details ============================ -->
+<div class="card">
+    <h2>Job Details</h2>
+    <div class="form-grid">
+        <div class="form-group">
+            <label>Occupancy</label>
+            <div class="check-pair">
+                <div class="check-row">
+                    <input type="checkbox" id="chkOcc" data-pair="occvac" data-val="OCC">
+                    <label for="chkOcc">Occupied (OCC)</label>
+                </div>
+                <div class="check-row">
+                    <input type="checkbox" id="chkVac" data-pair="occvac" data-val="VAC">
+                    <label for="chkVac">Vacant (VAC)</label>
+                </div>
+            </div>
+        </div>
+        <div class="form-group">
+            <label>Time of Day</label>
+            <div class="check-pair">
+                <div class="check-row">
+                    <input type="checkbox" id="chkAm" data-pair="ampm" data-val="AM">
+                    <label for="chkAm">AM</label>
+                </div>
+                <div class="check-row">
+                    <input type="checkbox" id="chkPm" data-pair="ampm" data-val="PM">
+                    <label for="chkPm">PM</label>
+                </div>
+            </div>
+        </div>
+        <div class="form-group">
+            <div class="check-row">
+                <input type="checkbox" name="description_gated" id="chkGated"
+                       {% if wo and wo.description_gated %}checked{% endif %}>
+                <label for="chkGated">Gated Property</label>
+            </div>
+        </div>
+        <div class="form-group">
+            <div class="check-row">
+                <input type="checkbox" name="description_followup" id="chkFollowup"
+                       {% if wo and wo.description_followup %}checked{% endif %}>
+                <label for="chkFollowup">Follow-Up Visit</label>
+            </div>
+        </div>
+        <div class="form-group full">
+            <label>Special Notes <span class="hint">(short — appears in the job description)</span></label>
+            <input type="text" name="description_special_notes" id="specialNotes"
+                   value="{{ wo.description_special_notes or '' if wo else '' }}"
+                   placeholder="e.g. use VENDOR key — tub surround">
+        </div>
+        <div class="form-group full">
+            <div class="desc-toolbar">
+                <label>Job Description <span class="hint">(auto-generated — editable)</span></label>
+                <button type="button" class="desc-regen" id="descRegen">regenerate</button>
+            </div>
+            <textarea name="auto_description" id="autoDesc" rows="4">{{ wo.auto_description or '' if wo else '' }}</textarea>
+        </div>
+    </div>
+</div>
+
+<!-- ============================ Line Items ============================ -->
+<div class="card">
+    <h2>Line Items</h2>
+    <div id="liRows"><div class="li-empty" id="liEmpty">No line items yet — add a service or deploy equipment.</div></div>
+    <div class="li-actions">
+        <button type="button" class="btn-add" onclick="addStdRow()">+ Add Service</button>
+        <button type="button" class="btn-add" onclick="addEqRow()">+ Deploy Equipment</button>
+    </div>
+    <div class="li-summary">
+        <span style="color:#888;">Subtotal</span>
+        <span class="amount" id="liSubtotal">$0.00</span>
+    </div>
+    <div class="li-accrue-note" id="liAccrueNote"></div>
+</div>
+
+<!-- ============================ Assigned Techs ============================ -->
+<div class="card">
+    <h2>Assigned Techs</h2>
+    {% if techs %}
+    <div class="tech-list">
+        {% for t in techs %}
+        <div class="check-row">
+            <input type="checkbox" name="assigned_techs" value="{{ t.username }}"
+                   id="tech_{{ t.username }}"
+                   {% if t.username in wo_techs %}checked{% endif %}>
+            <label for="tech_{{ t.username }}">{{ t.full_name or t.username }}</label>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="tech-empty">No active technicians in this company yet — assignment can wait for the dispatch board.</div>
+    {% endif %}
+</div>
+
+<!-- ============================ Notes ============================ -->
+<div class="card">
+    <h2>Notes</h2>
+    <div class="form-grid">
+        <div class="form-group">
+            <label>Notes for Techs <span class="hint">(visible to the tech, not on the invoice)</span></label>
+            <textarea name="notes_for_techs">{{ wo.notes_for_techs or '' if wo else '' }}</textarea>
+        </div>
+        <div class="form-group">
+            <label>Internal Notes <span class="hint">(office only)</span></label>
+            <textarea name="internal_notes">{{ wo.internal_notes or '' if wo else '' }}</textarea>
+        </div>
+    </div>
+</div>
+
+<div class="form-actions">
+    <button type="submit" class="btn btn-primary">
+        {% if wo %}Save Changes{% else %}Create Work Order{% endif %}
+    </button>
+    <a href="/{{ company_key }}/workorders" class="btn btn-secondary">Cancel</a>
+    {% if wo and session.user_role in ('admin', 'manager') %}
+    <button type="button" class="btn btn-danger" onclick="confirmDelete()">Delete</button>
+    {% endif %}
+</div>
+</form>
+
+{% if wo and session.user_role in ('admin', 'manager') %}
+<form method="POST" id="deleteForm" action="/{{ company_key }}/workorders/{{ wo.id }}/delete" style="display:none;"></form>
+{% endif %}
+
+<script>
+    const companyKey  = "{{ company_key }}";
+    const WO_ID       = {{ wo.id if wo else 'null' }};
+    const IS_EDIT     = WO_ID !== null;
+    const CATALOG     = {{ catalog_std|tojson }};
+    const EQUIPMENT   = {{ equipment|tojson }};
+    const INIT_LINES  = {{ line_items|tojson }};
+    const INIT_LOCATION = {{ wo.service_location_id if wo and wo.service_location_id else 'null' }};
+    const INIT_CONTACT  = {{ wo.primary_contact_id if wo and wo.primary_contact_id else 'null' }};
+    const INIT_OCCVAC   = "{{ wo.description_occ_vac or '' if wo else '' }}";
+    const INIT_AMPM     = "{{ wo.description_am_pm or '' if wo else '' }}";
+
+    const CATALOG_OPTIONS = CATALOG.map(c => ({ id: c.id, name: c.name, category: c.category }));
+    const EQ_OPTIONS = EQUIPMENT.map(e => ({ id: e.id, name: e.name, category: e.billing_type_name }));
+
+    function catById(id) { return CATALOG.find(c => String(c.id) === String(id)); }
+    function eqById(id)  { return EQUIPMENT.find(e => String(e.id) === String(id)); }
+    function esc(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g,
+            c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+    function money(n) {
+        return '$' + Number(n).toLocaleString('en-US',
+            { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    // ========================================================================
+    // Line items — state lives in the DOM; totals recomputed on any input.
+    // ========================================================================
+    const liRows = document.getElementById('liRows');
+    let rowSeq = 0;
+
+    function comboHtml(cls, options, valueId, valueLabel, placeholder) {
+        return `<div class="ac-wrap">
+            <input type="text" class="js-combo-restricted ${cls}" value="${esc(valueLabel)}"
+                   placeholder="${esc(placeholder)}" autocomplete="off"
+                   data-options='${esc(JSON.stringify(options))}' data-required="false">
+            <input type="hidden" value="${valueId != null ? valueId : ''}">
+            <div class="ac-panel" role="listbox"></div>
+        </div>`;
+    }
+
+    function addStdRow(init) {
+        init = init || {};
+        const cat = init.catalog_item_id ? catById(init.catalog_item_id) : null;
+        const label = cat ? (cat.category ? cat.name + ' (' + cat.category + ')' : cat.name) : '';
+        const row = document.createElement('div');
+        row.className = 'li-row li-std';
+        row.dataset.kind = 'std';
+        row.dataset.rowId = ++rowSeq;
+        row.dataset.lineId = init.id || '';
+        row.innerHTML = `
+            <div class="li-head">
+                <span class="li-badge li-badge-std">Service</span>
+                <button type="button" class="li-remove" title="Remove line" onclick="removeRow(this)">✕</button>
+            </div>
+            <div class="li-fields cols-std">
+                <div><span class="li-lbl">Catalog Item</span>
+                    ${comboHtml('li-cat', CATALOG_OPTIONS, init.catalog_item_id, label, 'Type to search the catalog…')}
+                </div>
+                <div><span class="li-lbl">Qty</span>
+                    <input type="number" class="li-qty" min="0" step="0.25"
+                           value="${init.quantity != null ? init.quantity : 1}">
+                </div>
+                <div><span class="li-lbl">Unit Price</span>
+                    <input type="number" class="li-price" min="0" step="0.01"
+                           value="${init.unit_price != null ? init.unit_price : ''}">
+                </div>
+                <div style="text-align:right;"><span class="li-lbl">Line Total</span>
+                    <div class="li-ro li-total">$0.00</div>
+                </div>
+            </div>
+            <div style="margin-top:.7rem;"><span class="li-lbl">Description (pre-filled from catalog — editable)</span>
+                <input type="text" class="li-desc" style="width:100%; padding:.5rem .65rem; border:1px solid #ddd; border-radius:4px; font-size:.88rem;"
+                       value="${esc(init.description || '')}">
+            </div>`;
+        liRows.appendChild(row);
+        initRestrictedComboFields();
+        recalc();
+        return row;
+    }
+
+    function addEqRow(init) {
+        init = init || {};
+        const eq = init.equipment_unit_id ? eqById(init.equipment_unit_id) : null;
+        const label = eq ? (eq.billing_type_name ? eq.name + ' (' + eq.billing_type_name + ')' : eq.name) : '';
+        const defaultDeployed = init.deployed_at || document.getElementById('startDate').value || '';
+        const row = document.createElement('div');
+        row.className = 'li-row li-eq';
+        row.dataset.kind = 'eq';
+        row.dataset.rowId = ++rowSeq;
+        row.dataset.lineId = init.id || '';
+        row.innerHTML = `
+            <div class="li-head">
+                <span class="li-badge li-badge-eq">Per-Day Equipment</span>
+                <button type="button" class="li-remove" title="Remove line" onclick="removeRow(this)">✕</button>
+            </div>
+            <div class="li-fields cols-eq">
+                <div><span class="li-lbl">Equipment Unit (from registry)</span>
+                    ${comboHtml('li-eq-unit', EQ_OPTIONS, init.equipment_unit_id, label, 'Type to search the registry…')}
+                </div>
+                <div><span class="li-lbl">Deployed</span>
+                    <input type="date" class="li-deployed" value="${esc(defaultDeployed)}">
+                </div>
+                <div><span class="li-lbl">Retrieved <span style="font-weight:400;">(blank = still out)</span></span>
+                    <input type="date" class="li-retrieved" value="${esc(init.retrieved_at || '')}">
+                </div>
+            </div>
+            <div class="li-fields-b">
+                <div><span class="li-lbl">Daily Rate</span><div class="li-ro li-rate">—</div></div>
+                <div><span class="li-lbl">Days (auto)</span><div class="li-ro li-days">—</div></div>
+                <div style="text-align:right;"><span class="li-lbl">Line Total</span>
+                    <div class="li-ro li-total">—</div>
+                </div>
+            </div>`;
+        liRows.appendChild(row);
+        initRestrictedComboFields();
+        recalc();
+        return row;
+    }
+
+    function lineContribution(row) {
+        // The text this row contributes to the job description.
+        const hidden = row.querySelector('.ac-wrap input[type=hidden]').value;
+        if (row.dataset.kind === 'std') {
+            const d = row.querySelector('.li-desc').value.trim();
+            if (d) return d;
+            const cat = hidden ? catById(hidden) : null;
+            return cat ? cat.name : '';
+        }
+        const eq = hidden ? eqById(hidden) : null;
+        return eq ? eq.name + ' deployed' : '';
+    }
+
+    function removeRow(btn) {
+        const row = btn.closest('.li-row');
+        const contribution = lineContribution(row);
+        row.remove();
+        recalc();
+        if (!descDirty) {
+            regenDescription();
+        } else if (contribution) {
+            // Description was hand-edited: surgically remove just this line's
+            // text (first exact match) without touching the rest.
+            const lines = autoDesc.value.split('\n');
+            const idx = lines.findIndex(l => l.trim() === contribution.trim());
+            if (idx !== -1) {
+                lines.splice(idx, 1);
+                autoDesc.value = lines.join('\n');
+            }
+        }
+    }
+
+    function rowDays(row) {
+        const dep = row.querySelector('.li-deployed').value;
+        const ret = row.querySelector('.li-retrieved').value;
+        if (!dep || !ret) return null;
+        const d = Math.round((new Date(ret + 'T00:00:00') - new Date(dep + 'T00:00:00')) / 86400000);
+        if (d < 0) return -1;   // invalid: retrieved before deployed
+        return Math.max(d, 1);  // same-day set-and-pull bills one day
+    }
+
+    function recalc() {
+        let sub = 0, accruingPerDay = 0;
+        const rows = liRows.querySelectorAll('.li-row');
+        rows.forEach(row => {
+            if (row.dataset.kind === 'std') {
+                const qty   = parseFloat(row.querySelector('.li-qty').value) || 0;
+                const price = parseFloat(row.querySelector('.li-price').value) || 0;
+                const total = qty * price;
+                sub += total;
+                row.querySelector('.li-total').textContent = money(total);
+            } else {
+                const unitId = row.querySelector('.ac-wrap input[type=hidden]').value;
+                const eq = unitId ? eqById(unitId) : null;
+                const rate = eq ? eq.daily_rate : null;
+                row.querySelector('.li-rate').textContent = rate != null ? money(rate) + ' / day' : '—';
+                const d = rowDays(row);
+                if (d === -1) {
+                    row.querySelector('.li-days').innerHTML = '<span style="color:#c33;">invalid dates</span>';
+                    row.querySelector('.li-total').textContent = '—';
+                } else if (d === null) {
+                    row.querySelector('.li-days').innerHTML = '<span class="li-accruing">accruing</span>';
+                    row.querySelector('.li-total').innerHTML = rate != null
+                        ? '<span class="li-accruing">' + money(rate) + '/day</span>' : '—';
+                    if (rate != null) accruingPerDay += rate;
+                } else {
+                    row.querySelector('.li-days').textContent = d;
+                    const total = rate != null ? d * rate : 0;
+                    if (rate != null) sub += total;
+                    row.querySelector('.li-total').textContent = rate != null ? money(total) : '—';
+                }
+            }
+        });
+        document.getElementById('liEmpty').style.display = rows.length ? 'none' : 'block';
+        document.getElementById('liSubtotal').textContent = money(sub);
+        document.getElementById('liAccrueNote').textContent = accruingPerDay > 0
+            ? 'Plus ' + money(accruingPerDay) + '/day still accruing on deployed equipment' : '';
+    }
+
+    // Any input/change inside the line items area recomputes totals.
+    // Combo selections bubble a change event from their hidden input (brick upgrade).
+    liRows.addEventListener('input', () => { recalc(); regenDescription(); });
+    liRows.addEventListener('change', e => {
+        // A catalog pick pre-fills price + description on its own row.
+        const wrap = e.target.closest('.ac-wrap');
+        if (wrap && e.target.type === 'hidden') {
+            const row = e.target.closest('.li-row');
+            if (row && row.dataset.kind === 'std' && e.target.value) {
+                const cat = catById(e.target.value);
+                if (cat) {
+                    row.querySelector('.li-price').value = cat.unit_price != null ? cat.unit_price : '';
+                    const descInput = row.querySelector('.li-desc');
+                    if (!descInput.value.trim()) descInput.value = cat.default_description || '';
+                }
+            }
+        }
+        recalc(); regenDescription();
+    });
+
+    function serializeLines() {
+        const lines = [];
+        let valid = true;
+        liRows.querySelectorAll('.li-row').forEach(row => {
+            const hidden = row.querySelector('.ac-wrap input[type=hidden]');
+            if (!hidden.value) { valid = false; row.style.borderColor = '#c33'; return; }
+            row.style.borderColor = '';
+            if (row.dataset.kind === 'std') {
+                lines.push({
+                    id: row.dataset.lineId || null, kind: 'std',
+                    catalog_item_id: parseInt(hidden.value, 10),
+                    description: row.querySelector('.li-desc').value,
+                    quantity: row.querySelector('.li-qty').value,
+                    unit_price: row.querySelector('.li-price').value,
+                });
+            } else {
+                lines.push({
+                    id: row.dataset.lineId || null, kind: 'eq',
+                    equipment_unit_id: parseInt(hidden.value, 10),
+                    deployed_at: row.querySelector('.li-deployed').value,
+                    retrieved_at: row.querySelector('.li-retrieved').value,
+                });
+            }
+        });
+        return { lines, valid };
+    }
+
+    // ========================================================================
+    // Customer context: locations, contacts, work-site label + prefill.
+    // ========================================================================
+    const customerHidden = document.querySelector('#customerCombo').closest('.ac-wrap').querySelector('input[type=hidden]');
+    const locationSelect = document.getElementById('locationSelect');
+    const contactSelect  = document.getElementById('contactSelect');
+    const siteInput      = document.getElementById('siteInput');
+    const siteLabelEl    = document.getElementById('siteLabel');
+    let sitePrefillFromLocation = false;
+    let locationsCache = [];
+
+    function loadCustomerContext(customerId, preserve) {
+        if (!customerId) {
+            locationSelect.innerHTML = '<option value="">— pick a customer first —</option>';
+            contactSelect.innerHTML  = '<option value="">— pick a customer first —</option>';
+            locationSelect.disabled = contactSelect.disabled = true;
+            siteLabelEl.textContent = 'Work Site';
+            checkDupes();
+            return;
+        }
+        fetch(`/${companyKey}/workorders/customer/${customerId}/context`)
+            .then(r => r.json())
+            .then(data => {
+                locationsCache = data.locations;
+                sitePrefillFromLocation = data.site_prefill_from_location;
+                siteLabelEl.textContent = data.site_label;
+                siteInput.placeholder = data.site_label === 'Unit Number' ? 'e.g. Unit #3430-308' : '';
+
+                locationSelect.innerHTML = '<option value="">—</option>' + data.locations.map(l => {
+                    const name = l.location_name ? l.location_name + ' — ' : '';
+                    const addr = [l.address, l.city].filter(Boolean).join(', ');
+                    return `<option value="${l.id}">${esc(name + addr)}</option>`;
+                }).join('');
+                contactSelect.innerHTML = '<option value="">—</option>' + data.contacts.map(ct => {
+                    const t = ct.title ? ' (' + ct.title + ')' : '';
+                    return `<option value="${ct.id}">${esc(ct.first_name + ' ' + ct.last_name + t)}</option>`;
+                }).join('');
+                locationSelect.disabled = contactSelect.disabled = false;
+
+                if (preserve) {
+                    if (INIT_LOCATION) locationSelect.value = String(INIT_LOCATION);
+                    if (INIT_CONTACT)  contactSelect.value  = String(INIT_CONTACT);
+                } else {
+                    // Auto-select a primary/only location on a fresh pick.
+                    const primary = data.locations.find(l => l.is_primary) ||
+                                    (data.locations.length === 1 ? data.locations[0] : null);
+                    if (primary) locationSelect.value = String(primary.id);
+                    maybePrefillSite();
+                }
+                checkDupes();
+            })
+            .catch(() => {});
+    }
+
+    function maybePrefillSite() {
+        if (!sitePrefillFromLocation) return;
+        if (siteInput.value.trim() !== '' && !siteInput.dataset.prefilled) return;
+        const loc = locationsCache.find(l => String(l.id) === locationSelect.value);
+        if (loc) {
+            siteInput.value = [loc.address, loc.city].filter(Boolean).join(', ');
+            siteInput.dataset.prefilled = '1';
+            regenDescription();
+        }
+    }
+
+    customerHidden.addEventListener('change', () => loadCustomerContext(customerHidden.value, false));
+    locationSelect.addEventListener('change', () => { maybePrefillSite(); checkDupes(); });
+    siteInput.addEventListener('input', () => { delete siteInput.dataset.prefilled; regenDescription(); });
+
+    // ========================================================================
+    // Double-booking check — non-blocking banner.
+    // ========================================================================
+    const dupeBanner = document.getElementById('dupeBanner');
+    let dupeTimer;
+
+    function checkDupes() {
+        clearTimeout(dupeTimer);
+        dupeTimer = setTimeout(() => {
+            const cid  = customerHidden.value;
+            const site = siteInput.value.trim();
+            if (!cid || !site) { dupeBanner.classList.remove('show'); return; }
+            const params = new URLSearchParams({
+                customer_id: cid,
+                service_location_id: locationSelect.value || '',
+                site: site,
+            });
+            if (IS_EDIT) params.set('exclude_id', WO_ID);
+            fetch(`/${companyKey}/workorders/dupe_check?${params}`)
+                .then(r => r.json())
+                .then(data => {
+                    if (!data.matches || data.matches.length === 0) {
+                        dupeBanner.classList.remove('show');
+                        return;
+                    }
+                    const items = data.matches.map(m => {
+                        const when = m.start_date ? ' scheduled ' + m.start_date : '';
+                        return `<strong>${esc(m.work_order_number)}</strong> at "${esc(m.work_site_label)}" (${esc(m.status)}${when})`;
+                    }).join('; ');
+                    dupeBanner.innerHTML = '⚠️ Possible duplicate booking: ' + items +
+                        '. Review before saving — this does not block anything.';
+                    dupeBanner.classList.add('show');
+                })
+                .catch(() => {});
+        }, 400);
+    }
+    siteInput.addEventListener('input', checkDupes);
+
+    // ========================================================================
+    // OCC/VAC + AM/PM mutually exclusive checkbox pairs -> hidden inputs.
+    // ========================================================================
+    function wirePair(pairName, hiddenId) {
+        const boxes = document.querySelectorAll(`input[data-pair="${pairName}"]`);
+        const hidden = document.getElementById(hiddenId);
+        boxes.forEach(box => {
+            box.addEventListener('change', () => {
+                if (box.checked) {
+                    boxes.forEach(b => { if (b !== box) b.checked = false; });
+                    hidden.value = box.dataset.val;
+                } else {
+                    hidden.value = '';
+                }
+                regenDescription();
+            });
+        });
+    }
+    wirePair('occvac', 'occVacHidden');
+    wirePair('ampm', 'amPmHidden');
+
+    // ========================================================================
+    // Auto-generated job description (editable; auto-updates until hand-edited).
+    // ========================================================================
+    const autoDesc  = document.getElementById('autoDesc');
+    const descRegen = document.getElementById('descRegen');
+    let lastGenerated = autoDesc.value;
+    let descDirty = IS_EDIT;   // editing an existing WO never auto-overwrites
+
+    function buildDescription() {
+        const parts1 = [];
+        if (siteInput.value.trim()) parts1.push(siteInput.value.trim());
+        if (document.getElementById('occVacHidden').value) parts1.push(document.getElementById('occVacHidden').value);
+        if (document.getElementById('amPmHidden').value) parts1.push(document.getElementById('amPmHidden').value);
+        if (document.getElementById('chkGated').checked) parts1.push('GATED');
+        if (document.getElementById('chkFollowup').checked) parts1.push('FOLLOW-UP');
+        const lines = [];
+        if (parts1.length) lines.push(parts1.join(' '));
+        liRows.querySelectorAll('.li-row').forEach(row => {
+            const c = lineContribution(row);
+            if (c) lines.push(c);
+        });
+        const notes = document.getElementById('specialNotes').value.trim();
+        if (notes) lines.push(notes.startsWith('*') ? notes : '*' + notes);
+        return lines.join('\n');
+    }
+
+    function regenDescription(force) {
+        if (descDirty && !force) { descRegen.classList.add('show'); return; }
+        const gen = buildDescription();
+        autoDesc.value = gen;
+        lastGenerated = gen;
+        descDirty = false;
+        descRegen.classList.remove('show');
+    }
+
+    autoDesc.addEventListener('input', () => {
+        descDirty = autoDesc.value !== lastGenerated;
+        descRegen.classList.toggle('show', descDirty);
+    });
+    descRegen.addEventListener('click', () => regenDescription(true));
+    document.getElementById('chkGated').addEventListener('change', () => regenDescription());
+    document.getElementById('chkFollowup').addEventListener('change', () => regenDescription());
+    document.getElementById('specialNotes').addEventListener('input', () => regenDescription());
+
+    // ========================================================================
+    // Submit: serialize line items; block only on structural problems.
+    // ========================================================================
+    document.getElementById('woForm').addEventListener('submit', function(e) {
+        const { lines, valid } = serializeLines();
+        if (!valid) {
+            e.preventDefault();
+            alert('One or more line items is missing a catalog/equipment selection (outlined in red).');
+            return;
+        }
+        if (lines.length === 0) {
+            e.preventDefault();
+            alert('A work order needs at least one line item.');
+            return;
+        }
+        document.getElementById('lineItemsJson').value = JSON.stringify(lines);
+    });
+
+    function confirmDelete() {
+        if (confirm('Delete this work order? It can be restored by an admin within one year.')) {
+            document.getElementById('deleteForm').submit();
+        }
+    }
+
+    // ========================================================================
+    // Init (after DOMContentLoaded so the brick functions exist).
+    // ========================================================================
+    document.addEventListener('DOMContentLoaded', function() {
+        // Restore OCC/VAC + AM/PM from saved values.
+        if (INIT_OCCVAC === 'OCC') document.getElementById('chkOcc').checked = true;
+        if (INIT_OCCVAC === 'VAC') document.getElementById('chkVac').checked = true;
+        if (INIT_AMPM === 'AM') document.getElementById('chkAm').checked = true;
+        if (INIT_AMPM === 'PM') document.getElementById('chkPm').checked = true;
+
+        // Rebuild saved line items.
+        INIT_LINES.forEach(li => {
+            if (li.billing_behavior === 'per_day_equipment' || li.equipment_unit_id) {
+                addEqRow(li);
+            } else {
+                addStdRow(li);
+            }
+        });
+
+        // Editing: load the customer's locations/contacts and restore selections.
+        if (IS_EDIT && customerHidden.value) {
+            loadCustomerContext(customerHidden.value, true);
+        }
+        recalc();
+    });
+</script>
+{% endblock %}

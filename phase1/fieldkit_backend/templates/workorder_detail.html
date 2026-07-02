@@ -1,0 +1,301 @@
+{% extends "base.html" %}
+{% block title %}{{ wo.work_order_number }} — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem; flex-wrap:wrap; gap:.75rem; }
+    .page-header h1 { font-size:1.6rem; color:{{ branding.color_primary }}; display:flex; align-items:center; gap:.75rem; flex-wrap:wrap; }
+    .header-actions { display:flex; gap:.6rem; }
+    .btn { display:inline-block; padding:.6rem 1.2rem; border-radius:4px; text-decoration:none;
+           font-weight:500; cursor:pointer; border:none; font-size:.92rem; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-primary:hover { opacity:.9; }
+    .btn-secondary { background:#6c757d; color:white; }
+    .btn-secondary:hover { background:#5a6268; }
+    .btn-danger { background:transparent; color:#c33; border:1px solid #e0b4b4; }
+    .btn-danger:hover { background:#fdf3f3; }
+    .badge { display:inline-block; padding:.25rem .7rem; border-radius:10px; font-size:.82rem; font-weight:600; }
+    .badge-scheduled  { background:#e6f1fb; color:#185fa5; }
+    .badge-completed  { background:#eaf3de; color:#3b6d11; }
+    .badge-invoiced   { background:#eeedfe; color:#534ab7; }
+    .badge-nocharge   { background:#f1efe8; color:#5f5e5a; }
+    .badge-cancelled  { background:#fcebeb; color:#a32d2d; }
+    .badge-inprogress { background:#faeeda; color:#854f0b; }
+    .badge-ontheway   { background:#faeeda; color:#854f0b; }
+    .badge-extractionactive { background:#dff0ef; color:#0f6b64; }
+    .priority-pill { font-size:.8rem; font-weight:600; }
+    .priority-high   { color:#ba7517; }
+    .priority-urgent { color:#a32d2d; }
+
+    .detail-grid { display:grid; grid-template-columns:2fr 1fr; gap:1.25rem; align-items:start; }
+    @media (max-width: 900px) { .detail-grid { grid-template-columns:1fr; } }
+    .card + .card { margin-top:1.25rem; }
+    .card h2 { font-size:1rem; color:#444; margin-bottom:.9rem; padding-bottom:.55rem; border-bottom:1px solid #eee; }
+    .field-grid { display:grid; grid-template-columns:1fr 1fr; gap:.9rem 1.4rem; }
+    .field { }
+    .field .lbl { font-size:.75rem; color:#999; text-transform:uppercase; letter-spacing:.04em; font-weight:600; margin-bottom:.2rem; }
+    .field .val { font-size:.93rem; color:#333; }
+    .field .val.empty { color:#bbb; }
+    .desc-box { white-space:pre-wrap; background:#fafafa; border:1px solid #eee; border-radius:4px;
+                padding:.8rem .9rem; font-size:.92rem; line-height:1.5; }
+
+    .li-table { width:100%; border-collapse:collapse; }
+    .li-table th { text-align:left; padding:.6rem .5rem; font-size:.75rem; text-transform:uppercase;
+                   letter-spacing:.04em; color:#999; border-bottom:2px solid #eee; }
+    .li-table td { padding:.6rem .5rem; border-bottom:1px solid #f2f2f2; font-size:.9rem; vertical-align:top; }
+    .li-table .num { text-align:right; white-space:nowrap; }
+    .eq-tag { display:inline-block; background:#dcebfa; color:#1d5c9e; font-size:.7rem; font-weight:600;
+              padding:.1rem .5rem; border-radius:8px; text-transform:uppercase; margin-left:.4rem; }
+    .accruing-txt { color:#1d5c9e; font-weight:500; }
+    .summary-row td { border-bottom:none; font-weight:600; padding-top:.8rem; }
+    .accrue-note { text-align:right; font-size:.8rem; color:#1d5c9e; margin-top:.35rem; }
+
+    .history-item { padding:.55rem 0; border-bottom:1px solid #f4f4f4; font-size:.87rem; }
+    .history-item:last-child { border-bottom:none; }
+    .history-item .when { color:#999; font-size:.78rem; }
+    .tech-chip { display:inline-block; background:#f0f0f0; border-radius:12px; padding:.25rem .8rem;
+                 font-size:.85rem; margin:0 .4rem .4rem 0; }
+    .empty-note { color:#aaa; font-size:.88rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>
+        {{ wo.work_order_number }}
+        <span class="badge badge-{{ wo.status|lower|replace(' ', '') }}">{{ wo.status }}</span>
+        {% if wo.priority != 'Normal' %}
+        <span class="priority-pill priority-{{ wo.priority|lower }}">{{ wo.priority }}</span>
+        {% endif %}
+    </h1>
+    <div class="header-actions">
+        <a href="/{{ company_key }}/workorders" class="btn btn-secondary">← Work Orders</a>
+        <a href="/{{ company_key }}/workorders/{{ wo.id }}/edit" class="btn btn-primary">Edit</a>
+        {% if session.user_role in ('admin', 'manager') %}
+        <button type="button" class="btn btn-danger" onclick="confirmDelete()">Delete</button>
+        {% endif %}
+    </div>
+</div>
+
+<div class="detail-grid">
+    <div><!-- ============== main column ============== -->
+
+        <div class="card">
+            <h2>Customer &amp; Location</h2>
+            <div class="field-grid">
+                <div class="field">
+                    <div class="lbl">Customer</div>
+                    <div class="val">
+                        <a href="/{{ company_key }}/customers/{{ wo.customer_id }}"
+                           style="color:{{ branding.color_primary }}; text-decoration:none;">
+                            {{ wo.customer_name }}
+                        </a>
+                        <span style="color:#999; font-size:.85rem;">({{ wo.customer_type }})</span>
+                    </div>
+                </div>
+                <div class="field">
+                    <div class="lbl">{{ site_label }}</div>
+                    <div class="val {% if not wo.work_site_label %}empty{% endif %}">
+                        {{ wo.work_site_label or '—' }}
+                    </div>
+                </div>
+                <div class="field">
+                    <div class="lbl">Service Location</div>
+                    <div class="val {% if not wo.location_address and not wo.location_name %}empty{% endif %}">
+                        {% if wo.location_name %}{{ wo.location_name }} — {% endif %}
+                        {{ [wo.location_address, wo.location_city, wo.location_state] | select | join(', ') or '—' }}
+                    </div>
+                </div>
+                <div class="field">
+                    <div class="lbl">Contact</div>
+                    <div class="val {% if not wo.contact_first %}empty{% endif %}">
+                        {% if wo.contact_first %}
+                        {{ wo.contact_first }} {{ wo.contact_last }}
+                        {% if wo.contact_title %}<span style="color:#999;">({{ wo.contact_title }})</span>{% endif %}
+                        {% else %}—{% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Job Description</h2>
+            {% if wo.auto_description %}
+            <div class="desc-box">{{ wo.auto_description }}</div>
+            {% else %}
+            <div class="empty-note">No description.</div>
+            {% endif %}
+        </div>
+
+        <div class="card">
+            <h2>Line Items</h2>
+            {% if line_items %}
+            <table class="li-table">
+                <thead>
+                    <tr>
+                        <th>Item</th>
+                        <th>Description</th>
+                        <th class="num">Qty</th>
+                        <th class="num">Rate</th>
+                        <th class="num">Total</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for li in line_items %}
+                    <tr>
+                        <td>
+                            {% if li.equipment_unit_id %}
+                            {{ li.equipment_name or li.catalog_name }}<span class="eq-tag">Per-Day</span>
+                            {% else %}
+                            {{ li.catalog_name }}
+                            {% endif %}
+                        </td>
+                        <td>
+                            {{ li.description or '' }}
+                            {% if li.equipment_unit_id %}
+                            <div style="font-size:.78rem; color:#888; margin-top:.15rem;">
+                                Deployed {{ li.deployed_at }}{% if li.retrieved_at %} → retrieved {{ li.retrieved_at }}{% else %} — <span class="accruing-txt">still out</span>{% endif %}
+                            </div>
+                            {% endif %}
+                        </td>
+                        <td class="num">
+                            {% if li.quantity is not none %}{{ '%g'|format(li.quantity) }}{% if li.equipment_unit_id %} days{% elif li.unit_of_measure and li.unit_of_measure != 'each' %} {{ li.unit_of_measure }}{% endif %}
+                            {% else %}<span class="accruing-txt">accruing</span>{% endif %}
+                        </td>
+                        <td class="num">${{ '%.2f'|format(li.unit_price) }}{% if li.equipment_unit_id %}/day{% endif %}</td>
+                        <td class="num">
+                            {% if li.total is not none %}${{ '%.2f'|format(li.total) }}
+                            {% else %}<span class="accruing-txt">${{ '%.2f'|format(li.unit_price) }}/day</span>{% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    <tr class="summary-row">
+                        <td colspan="4" class="num">Subtotal</td>
+                        <td class="num">${{ '%.2f'|format(subtotal) }}</td>
+                    </tr>
+                </tbody>
+            </table>
+            {% if accruing %}
+            <div class="accrue-note">
+                {{ accruing|length }} equipment line{{ 's' if accruing|length != 1 }} still accruing — subtotal will grow until retrieval.
+            </div>
+            {% endif %}
+            {% else %}
+            <div class="empty-note">No line items.</div>
+            {% endif %}
+        </div>
+
+        {% if wo.notes_for_techs or wo.internal_notes or wo.completion_notes %}
+        <div class="card">
+            <h2>Notes</h2>
+            <div class="field-grid">
+                {% if wo.notes_for_techs %}
+                <div class="field">
+                    <div class="lbl">Notes for Techs</div>
+                    <div class="val" style="white-space:pre-wrap;">{{ wo.notes_for_techs }}</div>
+                </div>
+                {% endif %}
+                {% if wo.internal_notes %}
+                <div class="field">
+                    <div class="lbl">Internal Notes (office only)</div>
+                    <div class="val" style="white-space:pre-wrap;">{{ wo.internal_notes }}</div>
+                </div>
+                {% endif %}
+                {% if wo.completion_notes %}
+                <div class="field">
+                    <div class="lbl">Completion Notes</div>
+                    <div class="val" style="white-space:pre-wrap;">{{ wo.completion_notes }}</div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+
+    </div>
+    <div><!-- ============== side column ============== -->
+
+        <div class="card">
+            <h2>Schedule</h2>
+            <div class="field-grid" style="grid-template-columns:1fr;">
+                <div class="field">
+                    <div class="lbl">Start Date</div>
+                    <div class="val">{{ wo.start_date or '—' }}</div>
+                </div>
+                {% if wo.end_date %}
+                <div class="field">
+                    <div class="lbl">End Date</div>
+                    <div class="val">{{ wo.end_date }}</div>
+                </div>
+                {% endif %}
+                <div class="field">
+                    <div class="lbl">Arrival Time</div>
+                    <div class="val {% if not wo.arrival_time %}empty{% endif %}">{{ wo.arrival_time or '—' }}</div>
+                </div>
+                {% if wo.estimated_duration_hours %}
+                <div class="field">
+                    <div class="lbl">Est. Duration</div>
+                    <div class="val">{{ '%g'|format(wo.estimated_duration_hours) }} hrs</div>
+                </div>
+                {% endif %}
+                {% if wo.job_source %}
+                <div class="field">
+                    <div class="lbl">Job Source</div>
+                    <div class="val">{{ wo.job_source }}</div>
+                </div>
+                {% endif %}
+                {% if wo.po_number %}
+                <div class="field">
+                    <div class="lbl">PO Number</div>
+                    <div class="val">{{ wo.po_number }}</div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Assigned Techs</h2>
+            {% if techs %}
+            {% for t in techs %}<span class="tech-chip">{{ t.full_name }}</span>{% endfor %}
+            {% else %}
+            <div class="empty-note">No techs assigned yet.</div>
+            {% endif %}
+        </div>
+
+        <div class="card">
+            <h2>Status History</h2>
+            {% if history %}
+            {% for h in history %}
+            <div class="history-item">
+                <span class="badge badge-{{ h.status|lower|replace(' ', '') }}" style="font-size:.72rem; padding:.1rem .5rem;">{{ h.status }}</span>
+                {% if h.extraction_status %}<span style="color:#0f6b64; font-size:.8rem;">{{ h.extraction_status }}</span>{% endif %}
+                {% if h.notes %}<span style="color:#777;">— {{ h.notes }}</span>{% endif %}
+                <div class="when">{{ h.changed_at_display }} · {{ h.changed_by or 'system' }}</div>
+            </div>
+            {% endfor %}
+            {% else %}
+            <div class="empty-note">No history recorded.</div>
+            {% endif %}
+        </div>
+
+        <div class="card">
+            <h2>Record</h2>
+            <div class="field">
+                <div class="lbl">Created</div>
+                <div class="val">{{ wo.created_at_display }}{% if wo.created_by %} · {{ wo.created_by }}{% endif %}</div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+{% if session.user_role in ('admin', 'manager') %}
+<form method="POST" id="deleteForm" action="/{{ company_key }}/workorders/{{ wo.id }}/delete" style="display:none;"></form>
+<script>
+    function confirmDelete() {
+        if (confirm('Delete this work order? It can be restored by an admin within one year.')) {
+            document.getElementById('deleteForm').submit();
+        }
+    }
+</script>
+{% endif %}
+{% endblock %}
