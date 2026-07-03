@@ -1,6 +1,7 @@
 # FieldKit — Design Doc Addendum
 *Session: June 30, 2026 | Topic: After-Hours Water Extraction — Mobile Capture & Retroactive Work Orders*
 *Phase 6 (Mobile) design note. Written to match FIELDKIT_COMPLETE_SYSTEM_DESIGN_v2.md conventions.*
+*Updated: July 3, 2026 — added the `equipment_incomplete` gap-forwarding section (Reconciliation Framework, Pattern 3) and aligned the billable-time reference.*
 
 ---
 
@@ -55,6 +56,26 @@ After an extraction, the tech reports which machines they placed. This is a **si
 
 ---
 
+## When equipment isn't reported: the `equipment_incomplete` flag (Pattern 3)
+
+Equipment is the one part of an after-hours extraction that **no backstop can reconstruct.** The `CLVisit` trail recovers *which property* and *roughly when*, but it cannot see *which machines, or how many* sat in the room — that is not physically observable. So when the tech forgets to log equipment, reconstruction fails at the source, and the correct move is Pattern 3 of the Reconciliation Framework: **forward the gap to the next human positioned to fill it** — not nag the exhausted 2am tech, and not leave the office guessing.
+
+### How the flag gets set
+- **Explicit:** the after-hours flow offers "couldn't log equipment now" so a tired tech can defer it in one tap instead of skipping the whole report.
+- **Automatic:** any extraction confirmed via the **passive backstop path** finalizes with **zero equipment line items** — because the backstop inherently can't capture equipment — so it is auto-flagged.
+
+Either way, the work order is created/finalized with `equipment_incomplete = true`. The extraction is still real, still billable for time; only the equipment lines are known-missing.
+
+### Where the gap gets filled
+The natural next touchpoint is the **follow-up visit** — a tech going out to check the drying state is standing in the room looking at the machines anyway. On a work order carrying the flag, the follow-up tech gets **"Confirm equipment on site"** as a required first task on arrival, reported the same registry-backed way (one box, autocomplete, no free text). Each pick becomes a draft per-day equipment line item, and — critically — its day-accrual is **backdated to the original extraction start**, not the follow-up date (Pattern 4: effective time = when the machine was actually placed). This reuses the backdated-start requirement already established for retroactive work orders below.
+
+Confirming the equipment clears the flag. As everywhere else, the follow-up tech's picks are still **drafts the office confirms** — phone proposes, office commits.
+
+### If there's no follow-up visit
+The flag does not silently resolve and the system never invents equipment it has no record of. The unresolved flag **stays visible and countable on the office review queue** so Michele can chase it directly rather than have it rot. The invariant: equipment is either reported, explicitly forwarded and later confirmed, or a visible open gap — never silently billed and never silently dropped.
+
+---
+
 ## Retroactive work order creation
 
 This inverts the normal deployment flow and is the key constraint to bake in now. Normally: deploy → accrue days → retrieve. After-hours extraction means **the work happened with no work order at all**, and the work order is **born retroactively** carrying an **already-deployed machine and an already-elapsed first session**.
@@ -70,18 +91,21 @@ The "Start Extraction" press (or a confirmed passive draft) drops a **pending wo
 - Start time (button press or visit arrival)
 - End time (auto-stop on departure)
 - Draft equipment line items (from the tech's registry picks)
+- `equipment_incomplete` flag, if equipment was deferred or auto-flagged (see above)
 
-Michele opens it the next morning, confirms/adjusts, and **finalizes it into a real work order**. The queue item *is* the morning verbal report — just structured and already half-filled.
+Michele opens it the next morning, confirms/adjusts, and **finalizes it into a real work order**. The queue item *is* the morning verbal report — just structured and already half-filled. Any `equipment_incomplete` flags remain visible on the queue until resolved.
 
 ---
 
 ## Dependencies & cross-references
+- **Reconciliation Framework** (the four-pattern lens; this note is Patterns 1, 3, and 4 in practice) — see `FIELDKIT_DESIGN_ADDENDUM_reconciliation-framework.md`. The `equipment_incomplete` flag is that addendum's canonical Pattern 3 example.
 - **Equipment Registry** and **per-day equipment billing** — see `FIELDKIT_DESIGN_ADDENDUM_catalog-and-equipment.md`.
 - **Deployment/rollover engine** (day accrual, retrieval close-out, backdated start) — Phase 4 water-extraction queue.
 - **Water Extraction Service min/increment rounding** — catalog addendum; pairs with the per-quarter-hour billing rule referenced above.
-- **Actual hours from tech clock-in/out** — Phase 6; once available, can drive the rounding rule from real time-on-site instead of manual entry.
+- **Billable interval capture for extraction** — the *timed-interval capture with backstop + backdated confirm* candidate brick (Reconciliation Framework addendum). Once built, it can drive the per-quarter-hour rounding from real time-on-site instead of manual entry. Note: this is **billable** time, not a payroll clock — techs are commission-paid and FieldKit has **no attendance timeclock**.
 
 ---
 
 *Drafted: June 30, 2026*
+*Updated: July 3, 2026*
 *Phase 6 mobile design note. For merge into FIELDKIT_COMPLETE_SYSTEM_DESIGN_v2.md.*
