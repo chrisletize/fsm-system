@@ -1355,6 +1355,58 @@ def _compute_invoice_tax(cur, invoice_id):
     return rate_pct, subtotal, tax_total, total
 
 
+def _resolve_equipment_labels(cur, invoice_id):
+    """Single source of truth for per_day_equipment line labels on an invoice.
+
+    Groups the invoice's per_day_equipment lines by billing type
+    (catalog_item_id), orders each group by (deployed_at ASC, line id ASC),
+    and applies the ordinal rule:
+      * group of 1  -> bare customer label ("Set Dehu", no number)
+      * group of N  -> "Set Dehu 1" .. "Set Dehu N"
+    The ordinal is the Nth machine of that TYPE on THIS invoice — never the
+    registry unit identity (equipment_unit.name stays internal and unshown).
+
+    Customer-facing base text is catalog_items.invoice_label, falling back to
+    catalog_items.name when invoice_label is unset.
+
+    Returns {line_item_id: resolved_label}. Used both for live rendering
+    (derive fresh every time, so edits renumber cleanly 1..N with no stale
+    gaps) and for baking the frozen snapshot at harden — same logic both ways,
+    so a live preview and the hardened print can never disagree.
+
+    Non-equipment lines are simply absent from the returned map; callers render
+    those from their own description as usual.
+    """
+    cur.execute("""
+        SELECT ili.id,
+               ili.catalog_item_id,
+               ili.deployed_at,
+               COALESCE(ci.invoice_label, ci.name) AS base_label
+        FROM invoice_line_items ili
+        JOIN catalog_items ci ON ci.id = ili.catalog_item_id
+        WHERE ili.invoice_id = %s
+          AND ili.deleted_at IS NULL
+          AND ci.billing_behavior = 'per_day_equipment'
+        ORDER BY ili.catalog_item_id,
+                 ili.deployed_at ASC NULLS LAST,
+                 ili.id ASC
+    """, (invoice_id,))
+    rows = cur.fetchall()
+
+    # Bucket by billing type, preserving the ORDER BY sequence within each type.
+    groups = {}
+    for r in rows:
+        groups.setdefault(r['catalog_item_id'], []).append(r)
+
+    labels = {}
+    for _cat_id, members in groups.items():
+        n = len(members)
+        for idx, m in enumerate(members, start=1):
+            base = m['base_label']
+            labels[m['id']] = base if n == 1 else f'{base} {idx}'
+    return labels
+
+
 def transition_invoice(cur, company_key, invoice_id, to_state, username, notes=None):
     """Move one invoice to to_state: the single choke point for every invoice
     state change. Validates legality + guards, runs the state's side effects,
@@ -1410,8 +1462,16 @@ def transition_invoice(cur, company_key, invoice_id, to_state, username, notes=N
                 updated_at = CURRENT_TIMESTAMP, updated_by = %s
             WHERE id = %s
         """, (subtotal, rate_pct, tax_total, total, username, username, invoice_id))
-        # STEP 3 HOOK: bake equipment-ordinal resolved_label into the frozen
-        # line-item snapshot here. Not implemented in this step.
+        # Bake equipment-ordinal labels into the frozen snapshot so a reprint
+        # years later is byte-identical (same freeze discipline as the tax rate).
+        # Derived from the SAME resolver used for live rendering, so preview and
+        # print never disagree.
+        for _li_id, _label in _resolve_equipment_labels(cur, invoice_id).items():
+            cur.execute("""
+                UPDATE invoice_line_items
+                SET resolved_label = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+                WHERE id = %s
+            """, (_label, username, _li_id))
 
     elif to_state == 'Sent':
         cur.execute("""
