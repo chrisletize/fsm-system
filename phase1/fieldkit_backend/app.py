@@ -1235,6 +1235,39 @@ WORK_SITE_LABELS = {
     'Contractors':  ('Job Site',    False),
 }
 
+# Invoices reuse the same per-company prefixes as work orders (GAG/KC/CTS/KSF).
+# The number is shared across revisions of one invoice; a void+reissue gets a
+# brand-new number. See _next_invoice_number.
+INVOICE_NUMBER_PREFIXES = WO_NUMBER_PREFIXES  # same mapping, one source of truth
+
+# The lifecycle states. The DB CHECK constraint on invoices.state is the real
+# guarantee; this tuple is for readable membership tests in Python.
+INVOICE_STATES = ('Live', 'Hardened', 'Sent', 'Paid', 'Void', 'Revision')
+
+# Legal transitions: from_state -> set of allowed to_states. Single source of
+# truth for "what moves are possible." The transition function consults it;
+# routes never hardcode their own edges. Void/Revision targets are listed so
+# the map is complete, but their handlers arrive in steps 4 & 5.
+INVOICE_TRANSITIONS = {
+    'Live':     {'Hardened'},
+    'Hardened': {'Live', 'Sent'},                       # Hardened->Live = reopen
+    'Sent':     {'Live', 'Paid', 'Void', 'Revision'},   # Sent->Live = reopen
+    'Paid':     {'Void', 'Revision'},                   # no reopen once paid
+    'Void':     {'Live'},                               # reissue (step 4)
+    'Revision': {'Live'},                               # new version (step 5)
+}
+
+# Transitions implemented in THIS step. Anything legal-but-not-here returns a
+# clear "not yet implemented" so we never silently do nothing.
+INVOICE_TRANSITIONS_IMPLEMENTED = {
+    ('Live', 'Hardened'),
+    ('Hardened', 'Live'),
+    ('Hardened', 'Sent'),
+    ('Sent', 'Live'),
+    ('Sent', 'Paid'),
+}
+
+
 def _next_wo_number(cur, company_key):
     """Next per-company work order number, e.g. GAG-2026-0007.
     Sequence resets each year; the UNIQUE constraint is the real guarantee."""
@@ -1254,6 +1287,188 @@ def _next_wo_number(cur, company_key):
         except (ValueError, IndexError):
             seq = 1
     return f'{prefix}-{year}-{seq:04d}'
+
+def _next_invoice_number(cur, company_key):
+    """Next per-company invoice number, e.g. GAG-2026-0007.
+    Sequence resets each year; the UNIQUE(invoice_number, revision_number)
+    constraint is the real guarantee. Only original rows (revision_number = 1)
+    advance the sequence — revisions reuse their parent's number."""
+    prefix = INVOICE_NUMBER_PREFIXES.get(company_key, company_key.upper()[:3])
+    year   = datetime.now().year
+    like   = f'{prefix}-{year}-%'
+    cur.execute("""
+        SELECT invoice_number FROM invoices
+        WHERE invoice_number LIKE %s AND revision_number = 1
+        ORDER BY id DESC LIMIT 1
+    """, (like,))
+    row = cur.fetchone()
+    seq = 1
+    if row:
+        try:
+            seq = int(row['invoice_number'].rsplit('-', 1)[1]) + 1
+        except (ValueError, IndexError):
+            seq = 1
+    return f'{prefix}-{year}-{seq:04d}'
+
+
+def _compute_invoice_tax(cur, invoice_id):
+    """Resolve and total the tax for an invoice from its CURRENT county rate.
+    Returns (tax_rate_pct, subtotal, tax_total, total).
+
+    Reads the live tax_rates table — this is the freeze-at-harden read. Once
+    the caller writes these onto the invoice, later edits to tax_rates never
+    change this invoice (Pattern 4: effective-time pinning). A county with no
+    row resolves to 0% (a valid un-taxed invoice, e.g. Florida) rather than
+    failing; the absence shows as tax_rate_pct = None for optional flagging."""
+    cur.execute("""
+        SELECT tax_county FROM invoices WHERE id = %s AND deleted_at IS NULL
+    """, (invoice_id,))
+    inv = cur.fetchone()
+    if not inv:
+        return None, None, None, None
+    county = inv['tax_county']
+
+    cur.execute("""
+        SELECT
+            COALESCE(SUM(total), 0)                            AS subtotal,
+            COALESCE(SUM(total) FILTER (WHERE is_taxable), 0)  AS taxable_base
+        FROM invoice_line_items
+        WHERE invoice_id = %s AND deleted_at IS NULL
+    """, (invoice_id,))
+    sums = cur.fetchone()
+    subtotal     = sums['subtotal']
+    taxable_base = sums['taxable_base']
+
+    rate_pct = None
+    if county:
+        cur.execute("""
+            SELECT total_pct FROM tax_rates
+            WHERE county = %s AND is_active = TRUE AND deleted_at IS NULL
+        """, (county,))
+        r = cur.fetchone()
+        if r:
+            rate_pct = r['total_pct']
+
+    effective_rate = rate_pct if rate_pct is not None else 0
+    tax_total = (taxable_base * effective_rate) / 100
+    total     = subtotal + tax_total
+    return rate_pct, subtotal, tax_total, total
+
+
+def transition_invoice(cur, company_key, invoice_id, to_state, username, notes=None):
+    """Move one invoice to to_state: the single choke point for every invoice
+    state change. Validates legality + guards, runs the state's side effects,
+    and appends an invoice_status_history row. Does NOT commit — the calling
+    route owns the transaction (same convention as the work-order save path).
+    Returns (True, None) on success or (False, "human reason") on rejection."""
+    if to_state not in INVOICE_STATES:
+        return False, f'Unknown target state "{to_state}".'
+
+    cur.execute("""
+        SELECT id, state, amount_paid, invoice_number, revision_number
+        FROM invoices
+        WHERE id = %s AND deleted_at IS NULL
+    """, (invoice_id,))
+    inv = cur.fetchone()
+    if not inv:
+        return False, 'Invoice not found.'
+
+    from_state = inv['state']
+    if from_state == to_state:
+        return False, f'Invoice is already {to_state}.'
+
+    # (a) Legality: is this edge allowed at all?
+    if to_state not in INVOICE_TRANSITIONS.get(from_state, set()):
+        return False, f'Cannot move an invoice from {from_state} to {to_state}.'
+
+    # Implemented-in-this-step gate (honest partial build).
+    if (from_state, to_state) not in INVOICE_TRANSITIONS_IMPLEMENTED:
+        return False, (f'{from_state} -> {to_state} is a valid transition but '
+                       f'is not implemented yet.')
+
+    # (b) Guards.
+    is_reopen = (to_state == 'Live')
+    if is_reopen:
+        # THE governing guard: once any payment attaches, reopen is gone. This
+        # prevents a payment application from ever being orphaned by an in-place
+        # edit. amount_paid > 0 is the trip wire.
+        if inv['amount_paid'] and inv['amount_paid'] > 0:
+            return False, ('This invoice has a payment applied and can no longer '
+                           'be reopened. Use Void or Revision to correct it.')
+
+    # (c) State-specific side effects.
+    history_note = notes
+
+    if to_state == 'Hardened':
+        # Freeze tax from the CURRENT county rate. After this write the invoice
+        # total is pinned regardless of later tax_rates edits.
+        rate_pct, subtotal, tax_total, total = _compute_invoice_tax(cur, invoice_id)
+        cur.execute("""
+            UPDATE invoices
+            SET subtotal = %s, tax_rate_pct = %s, tax_total = %s, total = %s,
+                hardened_at = CURRENT_TIMESTAMP, hardened_by = %s,
+                updated_at = CURRENT_TIMESTAMP, updated_by = %s
+            WHERE id = %s
+        """, (subtotal, rate_pct, tax_total, total, username, username, invoice_id))
+        # STEP 3 HOOK: bake equipment-ordinal resolved_label into the frozen
+        # line-item snapshot here. Not implemented in this step.
+
+    elif to_state == 'Sent':
+        cur.execute("""
+            UPDATE invoices
+            SET sent_at = CURRENT_TIMESTAMP, sent_by = %s,
+                updated_at = CURRENT_TIMESTAMP, updated_by = %s
+            WHERE id = %s
+        """, (username, username, invoice_id))
+
+    elif to_state == 'Paid':
+        # This step marks the state only. Recording the actual payment amount
+        # (which sets amount_paid and thereby closes the reopen gate) is the
+        # payment-recording increment. Marking Paid here is the state flip.
+        cur.execute("""
+            UPDATE invoices
+            SET updated_at = CURRENT_TIMESTAMP, updated_by = %s
+            WHERE id = %s
+        """, (username, invoice_id))
+
+    elif to_state == 'Live':  # reopen
+        # Read frozen figures BEFORE clearing, to preserve them in the audit
+        # trail (the "always keep it referenceable" decision).
+        cur.execute("""
+            SELECT tax_rate_pct, tax_total, total FROM invoices WHERE id = %s
+        """, (invoice_id,))
+        prior = cur.fetchone()
+        if prior and prior['total'] is not None:
+            prior_bit = (f'Prior frozen total: ${prior["total"]:.2f} '
+                         f'(tax ${prior["tax_total"] or 0:.2f} '
+                         f'@ {prior["tax_rate_pct"] or 0}%).')
+            history_note = f'{notes + " " if notes else ""}{prior_bit}'
+        # Clear frozen values — Live means not-yet-determined.
+        cur.execute("""
+            UPDATE invoices
+            SET tax_rate_pct = NULL, tax_total = NULL, total = NULL,
+                hardened_at = NULL, hardened_by = NULL,
+                sent_at = NULL, sent_by = NULL,
+                updated_at = CURRENT_TIMESTAMP, updated_by = %s
+            WHERE id = %s
+        """, (username, invoice_id))
+
+    # Flip the state itself (all paths).
+    cur.execute("""
+        UPDATE invoices SET state = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s
+    """, (to_state, username, invoice_id))
+
+    # (d) Append history. Always, on every real transition.
+    cur.execute("""
+        INSERT INTO invoice_status_history (invoice_id, state, changed_by, notes)
+        VALUES (%s, %s, %s, %s)
+    """, (invoice_id, to_state, username,
+          history_note or f'Changed from {from_state}'))
+
+    return True, None
+
+
 
 def _parse_arrival_time(raw):
     """Normalize a typed arrival time ('8:15 am', '815', '8', '14:30') to
