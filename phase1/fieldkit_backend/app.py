@@ -1265,6 +1265,9 @@ INVOICE_TRANSITIONS_IMPLEMENTED = {
     ('Hardened', 'Sent'),
     ('Sent', 'Live'),
     ('Sent', 'Paid'),
+    ('Sent', 'Void'),      # step 4
+    ('Paid', 'Void'),      # step 4 — opens a credit (paid money stranded)
+    ('Void', 'Live'),      # step 4 — reissue: mints a NEW-numbered Live invoice
 }
 
 
@@ -1407,14 +1410,101 @@ def _resolve_equipment_labels(cur, invoice_id):
     return labels
 
 
+def _reissue_invoice(cur, company_key, old_invoice_id, username):
+    """Void -> Live reissue. Mints a NEW-numbered Live invoice that supersedes
+    the voided one and CLONES its line items as the editable starting point.
+    The voided invoice is retained untouched as Void; only its forward link is
+    set. Links are wired BOTH directions and history rows are written on BOTH
+    rows. Returns the new invoice id. Caller owns the transaction/commit.
+
+    Body policy = CLONE (see the reissue design discussion): the new invoice
+    begins as a faithful copy of the void's lines, then lives as Live where the
+    office edits freely before re-hardening. Deliberate resets on the copy:
+      * invoice_number -> a fresh _next_invoice_number (revision_number = 1);
+      * state -> 'Live'; frozen figures (tax_rate_pct/tax_total/total) stay NULL
+        until the new harden re-resolves them;
+      * resolved_label -> NULL on every cloned line (Live derives ordinals
+        fresh; they re-bake at the next harden);
+      * amount_paid -> 0 and NO credit_* fields carry over — any credit belongs
+        to the void, not to the clean reissue.
+    invoice_date is preserved from the source (the work's effective date,
+    Pattern 4) and remains editable while Live."""
+    cur.execute("""
+        SELECT work_order_id, customer_id, service_location_id, invoice_date,
+               subtotal, tax_county, notes
+        FROM invoices
+        WHERE id = %s AND deleted_at IS NULL
+    """, (old_invoice_id,))
+    src = cur.fetchone()
+
+    new_number = _next_invoice_number(cur, company_key)
+
+    cur.execute("""
+        INSERT INTO invoices
+            (invoice_number, revision_number, state,
+             work_order_id, customer_id, service_location_id, invoice_date,
+             subtotal, tax_county,
+             supersedes_invoice_id, notes, created_by, updated_by)
+        VALUES (%s, 1, 'Live',
+                %s, %s, %s, %s,
+                %s, %s,
+                %s, %s, %s, %s)
+        RETURNING id
+    """, (new_number,
+          src['work_order_id'], src['customer_id'], src['service_location_id'],
+          src['invoice_date'], src['subtotal'], src['tax_county'],
+          old_invoice_id, src['notes'], username, username))
+    new_id = cur.fetchone()['id']
+
+    # Clone the line items (resolved_label cleared; audit stamped to the actor).
+    cur.execute("""
+        INSERT INTO invoice_line_items
+            (invoice_id, catalog_item_id, equipment_unit_id, description,
+             resolved_label, quantity, unit_price, total, is_taxable,
+             deployed_at, retrieved_at, sort_order, created_by, updated_by)
+        SELECT %s, catalog_item_id, equipment_unit_id, description,
+               NULL, quantity, unit_price, total, is_taxable,
+               deployed_at, retrieved_at, sort_order, %s, %s
+        FROM invoice_line_items
+        WHERE invoice_id = %s AND deleted_at IS NULL
+    """, (new_id, username, username, old_invoice_id))
+
+    # Close the forward link on the retained void.
+    cur.execute("""
+        UPDATE invoices
+        SET superseded_by_invoice_id = %s,
+            updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s
+    """, (new_id, username, old_invoice_id))
+
+    # History on BOTH rows: the void points forward, the new points back.
+    cur.execute("""
+        INSERT INTO invoice_status_history (invoice_id, state, changed_by, notes)
+        VALUES (%s, 'Void', %s, %s)
+    """, (old_invoice_id, username, f'Reissued as {new_number} (id {new_id}).'))
+    cur.execute("""
+        INSERT INTO invoice_status_history (invoice_id, state, changed_by, notes)
+        VALUES (%s, 'Live', %s, %s)
+    """, (new_id, username, f'Created via reissue of voided invoice id {old_invoice_id}.'))
+
+    return new_id
+
+
 def transition_invoice(cur, company_key, invoice_id, to_state, username, notes=None):
     """Move one invoice to to_state: the single choke point for every invoice
     state change. Validates legality + guards, runs the state's side effects,
     and appends an invoice_status_history row. Does NOT commit — the calling
     route owns the transaction (same convention as the work-order save path).
-    Returns (True, None) on success or (False, "human reason") on rejection."""
+
+    Returns a 3-tuple (ok, reason, extra):
+      * ok     — True on success, False on rejection.
+      * reason — human-readable rejection reason, or None on success.
+      * extra  — dict of side-effect outputs, or None. Reissue (Void->Live)
+                 returns {'new_invoice_id': <id>} because it spawns a SECOND
+                 invoice row the caller must redirect to; every other
+                 transition returns None here."""
     if to_state not in INVOICE_STATES:
-        return False, f'Unknown target state "{to_state}".'
+        return False, f'Unknown target state "{to_state}".', None
 
     cur.execute("""
         SELECT id, state, amount_paid, invoice_number, revision_number
@@ -1423,20 +1513,30 @@ def transition_invoice(cur, company_key, invoice_id, to_state, username, notes=N
     """, (invoice_id,))
     inv = cur.fetchone()
     if not inv:
-        return False, 'Invoice not found.'
+        return False, 'Invoice not found.', None
 
     from_state = inv['state']
     if from_state == to_state:
-        return False, f'Invoice is already {to_state}.'
+        return False, f'Invoice is already {to_state}.', None
 
     # (a) Legality: is this edge allowed at all?
     if to_state not in INVOICE_TRANSITIONS.get(from_state, set()):
-        return False, f'Cannot move an invoice from {from_state} to {to_state}.'
+        return False, f'Cannot move an invoice from {from_state} to {to_state}.', None
 
     # Implemented-in-this-step gate (honest partial build).
     if (from_state, to_state) not in INVOICE_TRANSITIONS_IMPLEMENTED:
         return False, (f'{from_state} -> {to_state} is a valid transition but '
-                       f'is not implemented yet.')
+                       f'is not implemented yet.'), None
+
+    # --- Reissue (Void -> Live) is structurally special and handled up front,
+    #     BEFORE the reopen guard. It must NOT be treated as a reopen: a voided
+    #     PAID invoice has amount_paid > 0 and would trip the reopen guard. It
+    #     also must NOT flip the current row's state — the void is retained as
+    #     Void forever. It mints a NEW Live invoice that supersedes the void,
+    #     clones its lines, writes history on BOTH rows, and returns the new id.
+    if from_state == 'Void' and to_state == 'Live':
+        new_id = _reissue_invoice(cur, company_key, invoice_id, username)
+        return True, None, {'new_invoice_id': new_id}
 
     # (b) Guards.
     is_reopen = (to_state == 'Live')
@@ -1446,7 +1546,7 @@ def transition_invoice(cur, company_key, invoice_id, to_state, username, notes=N
         # edit. amount_paid > 0 is the trip wire.
         if inv['amount_paid'] and inv['amount_paid'] > 0:
             return False, ('This invoice has a payment applied and can no longer '
-                           'be reopened. Use Void or Revision to correct it.')
+                           'be reopened. Use Void or Revision to correct it.'), None
 
     # (c) State-specific side effects.
     history_note = notes
@@ -1491,6 +1591,39 @@ def transition_invoice(cur, company_key, invoice_id, to_state, username, notes=N
             WHERE id = %s
         """, (username, invoice_id))
 
+    elif to_state == 'Void':
+        # Voiding a committed invoice is never silent — a reason is mandatory.
+        void_reason = (notes or '').strip()
+        if not void_reason:
+            return False, 'A void reason is required.', None
+        paid_amt = inv['amount_paid'] or 0
+        opens_credit = (from_state == 'Paid' and paid_amt > 0)
+        if opens_credit:
+            # Paid invoice voided => real money now sits against no valid
+            # invoice. Capture it as a STRUCTURED, queryable OPEN credit (not a
+            # buried note) and flag it LOUDLY in history. Reconciliation
+            # Pattern 3: an open gap forwarded to AR to RESOLVE (refund / apply
+            # / write-off) — never a balance left to linger. The credit
+            # resolution lifecycle is its own later step; here we open + shout.
+            cur.execute("""
+                UPDATE invoices
+                SET voided_at = CURRENT_TIMESTAMP, voided_by = %s, void_reason = %s,
+                    credit_amount = %s, credit_status = 'open',
+                    credit_opened_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP, updated_by = %s
+                WHERE id = %s
+            """, (username, void_reason, paid_amt, username, invoice_id))
+            history_note = (f'[OPEN CREDIT ${paid_amt:.2f} - REQUIRES RESOLUTION] '
+                            f'Paid invoice voided. {void_reason}')
+        else:
+            cur.execute("""
+                UPDATE invoices
+                SET voided_at = CURRENT_TIMESTAMP, voided_by = %s, void_reason = %s,
+                    updated_at = CURRENT_TIMESTAMP, updated_by = %s
+                WHERE id = %s
+            """, (username, void_reason, username, invoice_id))
+            history_note = void_reason
+
     elif to_state == 'Live':  # reopen
         # Read frozen figures BEFORE clearing, to preserve them in the audit
         # trail (the "always keep it referenceable" decision).
@@ -1526,7 +1659,7 @@ def transition_invoice(cur, company_key, invoice_id, to_state, username, notes=N
     """, (invoice_id, to_state, username,
           history_note or f'Changed from {from_state}'))
 
-    return True, None
+    return True, None, None
 
 
 
