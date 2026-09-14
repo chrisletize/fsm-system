@@ -1,0 +1,336 @@
+{% extends "base.html" %}
+{% block title %}{% if location %}Edit Location{% else %}Add Location{% endif %} — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .breadcrumb { font-size:.9rem; color:#888; margin-bottom:1.25rem; }
+    .breadcrumb a { color:{{ branding.color_primary }}; text-decoration:none; }
+    .breadcrumb a:hover { text-decoration:underline; }
+    .breadcrumb span { margin:0 .4rem; }
+
+    .page-header { margin-bottom:1.5rem; }
+    .page-header h1 { font-size:1.75rem; color:{{ branding.color_primary }}; }
+    .page-header p { color:#888; margin-top:.35rem; font-size:.95rem; }
+
+    .form-grid {
+        display: grid; grid-template-columns: 1fr 1fr;
+        gap: 1rem; margin-bottom: 0;
+    }
+    .form-grid.full { grid-template-columns: 1fr; }
+    @media(max-width:700px){ .form-grid{ grid-template-columns:1fr; } }
+
+    .section-title {
+        font-size:.75rem; font-weight:700; text-transform:uppercase;
+        letter-spacing:.6px; color:#888;
+        margin-bottom:.75rem; padding-bottom:.5rem;
+        border-bottom:1px solid #eee;
+    }
+    .form-group { display:flex; flex-direction:column; gap:.35rem; }
+    .form-group label { font-size:.85rem; font-weight:600; color:#555; }
+    .form-group input,
+    .form-group select,
+    .form-group textarea {
+        padding:.6rem .75rem; border:1px solid #ddd; border-radius:4px;
+        font-size:.95rem; font-family:inherit; background:white; width:100%;
+    }
+    .form-group input:focus,
+    .form-group select:focus,
+    .form-group textarea:focus {
+        outline:none; border-color:{{ branding.color_primary }};
+        box-shadow:0 0 0 2px {{ branding.color_primary }}22;
+    }
+    .form-group textarea { resize:vertical; min-height:80px; }
+    .field-hint { font-size:.78rem; color:#aaa; margin-top:.2rem; }
+
+    /* Tax toggle */
+    .toggle-row { display:flex; align-items:center; gap:.75rem; padding:.5rem 0; }
+    .toggle-switch { position:relative; width:44px; height:24px; flex-shrink:0; }
+    .toggle-switch input { opacity:0; width:0; height:0; }
+    .toggle-slider {
+        position:absolute; inset:0; background:#ccc;
+        border-radius:24px; cursor:pointer; transition:.2s;
+    }
+    .toggle-slider:before {
+        content:''; position:absolute; width:18px; height:18px;
+        left:3px; top:3px; background:white; border-radius:50%; transition:.2s;
+    }
+    input:checked + .toggle-slider { background:{{ branding.color_primary }}; }
+    input:checked + .toggle-slider:before { transform:translateX(20px); }
+    .toggle-label { font-size:.95rem; color:#333; }
+
+    .county-row { margin-top:.75rem; }
+
+    .error-banner {
+        background:#fee; border:1px solid #fcc; color:#c33;
+        padding:.75rem 1rem; border-radius:4px; margin-bottom:1.25rem; font-size:.9rem;
+    }
+    .form-actions { display:flex; gap:.75rem; align-items:center; margin-top:1.5rem; }
+
+    .btn { display:inline-block; padding:.65rem 1.5rem; border-radius:4px;
+           text-decoration:none; font-weight:500; cursor:pointer;
+           border:none; font-size:.95rem; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-primary:hover { opacity:.9; }
+    .btn-outline {
+        background:white; color:{{ branding.color_primary }};
+        border:1px solid {{ branding.color_primary }};
+    }
+    .btn-outline:hover { background:{{ branding.color_primary }}11; }
+
+    .auto-detect-btn {
+        display: inline-flex; align-items: center; gap: .4rem;
+        font-size: .82rem; color: {{ branding.color_primary }};
+        background: none; border: none; cursor: pointer;
+        padding: .25rem 0; text-decoration: underline;
+    }
+    .auto-detect-btn:hover { opacity: .7; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<div class="breadcrumb">
+    <a href="/{{ company_key }}/customers">Customers</a>
+    <span>›</span>
+    <a href="/{{ company_key }}/customers/{{ customer.id }}">{{ customer.property_name }}</a>
+    <span>›</span>
+    <span>{% if location %}Edit Location{% else %}Add Location{% endif %}</span>
+</div>
+
+<div class="page-header">
+    <h1>{% if location %}Edit Service Location{% else %}Add Service Location{% endif %}</h1>
+    <p>{{ customer.property_name }}</p>
+</div>
+
+{% if error %}
+<div class="error-banner">⚠️ {{ error }}</div>
+{% endif %}
+
+<form method="POST">
+
+    <!-- Location identity -->
+    <div class="card" style="margin-bottom:1.25rem;">
+        <div class="section-title">Location Details</div>
+        <div class="form-grid full">
+            <div class="form-group">
+                <label>Location Name <span style="font-weight:400; color:#aaa;">(optional)</span></label>
+                <input type="text" name="location_name"
+                    value="{{ location.location_name if location and location.location_name else '' }}"
+                    placeholder="e.g. Building A, North Campus, Main Office...">
+                <span class="field-hint">
+                    Leave blank to use the customer name as the location label.
+                    Use a name when this customer has multiple distinct locations.
+                </span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Address -->
+    <div class="card" style="margin-bottom:1.25rem;">
+        <div class="section-title">Service Address</div>
+        <div class="form-grid">
+            <div class="form-group">
+                <label>Address</label>
+                <input type="text" name="address" id="addressInput"
+                    value="{{ location.address if location else '' }}"
+                    placeholder="123 Main St">
+            </div>
+            <div class="form-group">
+                <label>Address Line 2</label>
+                <input type="text" name="address_2"
+                    value="{{ location.address_2 if location else '' }}"
+                    placeholder="Suite, Unit, Building...">
+            </div>
+            <div class="form-group">
+                <label>City</label>
+                <input type="text" name="city" id="cityInput"
+                    value="{{ location.city if location else '' }}">
+            </div>
+            <div class="form-group">
+                <label>State</label>
+                <input type="text" name="state" id="stateInput" maxlength="2"
+                    value="{{ location.state if location else '' }}"
+                    placeholder="NC" style="text-transform:uppercase;">
+            </div>
+            <div class="form-group">
+                <label>ZIP Code</label>
+                <input type="text" name="zip" id="zipInput" maxlength="10"
+                    value="{{ location.zip if location else '' }}"
+                    placeholder="28202">
+            </div>
+        </div>
+    </div>
+
+    <!-- Tax -->
+    <div class="card" style="margin-bottom:1.25rem;">
+        <div class="section-title">Tax Settings</div>
+        <div class="toggle-row">
+            <label class="toggle-switch">
+                <input type="checkbox" name="is_taxable" id="taxableToggle"
+                    {% if not location or location.is_taxable %}checked{% endif %}
+                    onchange="toggleCounty(this.checked)">
+                <span class="toggle-slider"></span>
+            </label>
+            <span class="toggle-label">This location is taxable</span>
+        </div>
+        <div class="county-row" id="countyRow"
+             style="{% if location and not location.is_taxable %}display:none{% endif %}">
+            <div class="form-group">
+                <label>
+                    County
+                    <button type="button" class="auto-detect-btn" onclick="autoDetectCounty()"
+                            style="margin-left:.5rem;">
+                        ✦ Auto-detect from ZIP
+                    </button>
+                </label>
+                <select name="county" id="countySelect">
+                    <option value="">— Select county —</option>
+                    {% for county in nc_counties %}
+                    <option value="{{ county }}"
+                        {% if location and location.county == county %}selected{% endif %}>
+                        {{ county }}
+                    </option>
+                    {% endfor %}
+                </select>
+                <span class="field-hint" id="countyHint">
+                    County determines the tax rate applied to jobs at this location.
+                </span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Location notes -->
+    <div class="card" style="margin-bottom:1.25rem;">
+        <div class="section-title">Location Notes</div>
+        <div class="form-group">
+            <textarea name="notes" rows="3"
+                placeholder="Notes specific to this location...">{{ location.notes if location else '' }}</textarea>
+        </div>
+    </div>
+
+    <!-- Custom fields (location-scoped) -->
+    {% if field_defs %}
+    <div class="card" style="margin-bottom:1.25rem;">
+        <div class="section-title">
+            Additional Information
+            <a href="/{{ company_key }}/settings/fields"
+               style="font-size:.75rem; font-weight:400; color:{{ branding.color_primary }};
+                      text-transform:none; letter-spacing:0; margin-left:.75rem;">
+                Manage fields →
+            </a>
+        </div>
+        <div class="form-grid">
+            {% for field in field_defs %}
+            {% if field.is_active %}
+            <div class="form-group {% if field.field_type == 'textarea' %}form-grid full{% endif %}">
+                <label>{{ field.field_name }}</label>
+                {% if field.field_type == 'textarea' %}
+                <textarea name="field_{{ field.id }}" rows="3">{{ field_values[field.id] if field_values is defined and field.id in field_values else '' }}</textarea>
+                {% elif field.field_type == 'toggle' %}
+                <div class="toggle-row" style="padding:0;">
+                    <label class="toggle-switch">
+                        <input type="checkbox" name="field_{{ field.id }}"
+                            {% if field_values is defined and field_values.get(field.id) == 'on' %}checked{% endif %}>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                {% else %}
+                <input type="text" name="field_{{ field.id }}"
+                    value="{{ field_values[field.id] if field_values is defined and field.id in field_values else '' }}"
+                    placeholder="{{ field.field_name }}...">
+                {% endif %}
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="form-actions">
+        <button type="submit" class="btn btn-primary">
+            {% if location %}Save Changes{% else %}Add Location{% endif %}
+        </button>
+        <a href="/{{ company_key }}/customers/{{ customer.id }}" class="btn btn-outline">Cancel</a>
+    </div>
+</form>
+
+<script>
+function toggleCounty(checked) {
+    document.getElementById('countyRow').style.display = checked ? '' : 'none';
+}
+
+// ZIP → county auto-detect using Zippopotam API (free, no key required)
+async function autoDetectCounty() {
+    const zip = document.getElementById('zipInput').value.trim();
+    if (!zip || zip.length < 5) {
+        document.getElementById('countyHint').textContent = 'Enter a ZIP code first.';
+        return;
+    }
+
+    document.getElementById('countyHint').textContent = 'Looking up county...';
+
+    try {
+        const resp = await fetch(`https://api.zippopotam.us/us/${zip}`);
+        if (!resp.ok) {
+            document.getElementById('countyHint').textContent = 'ZIP not found. Select county manually.';
+            return;
+        }
+        const data = await resp.json();
+        const place = data.places[0];
+        const city  = place['place name'];
+        const state = place['state abbreviation'];
+
+        // Auto-fill city and state if empty
+        if (!document.getElementById('cityInput').value) {
+            document.getElementById('cityInput').value = city;
+        }
+        if (!document.getElementById('stateInput').value) {
+            document.getElementById('stateInput').value = state;
+        }
+
+        // For NC ZIPs, try to match county from the state
+        // Zippopotam doesn't return county directly, so we use a second lookup
+        // via the Census Geocoder which is free and returns county
+        const geocodeResp = await fetch(
+            `https://geocoding.geo.census.gov/geocoder/geographies/address?` +
+            `street=&city=${encodeURIComponent(city)}&state=${encodeURIComponent(state)}` +
+            `&zip=${zip}&benchmark=Public_AR_Current&vintage=Current_Current&format=json`
+        );
+
+        if (geocodeResp.ok) {
+            const geoData = await geocodeResp.json();
+            const matches = geoData?.result?.addressMatches;
+            if (matches && matches.length > 0) {
+                const county = matches[0]?.geographies?.Counties?.[0]?.NAME;
+                if (county) {
+                    // Strip " County" suffix if present
+                    const countyName = county.replace(/ County$/i, '');
+                    const select = document.getElementById('countySelect');
+                    // Try to match against our dropdown options
+                    for (let opt of select.options) {
+                        if (opt.value.toLowerCase() === countyName.toLowerCase()) {
+                            opt.selected = true;
+                            document.getElementById('countyHint').textContent =
+                                `✓ County auto-detected: ${opt.value}`;
+                            return;
+                        }
+                    }
+                    document.getElementById('countyHint').textContent =
+                        `Detected "${countyName}" — not in NC county list. Select manually.`;
+                    return;
+                }
+            }
+        }
+
+        // Fallback: just filled city/state, county needs manual selection
+        document.getElementById('countyHint').textContent =
+            `City/state filled from ZIP. Select county manually.`;
+
+    } catch (err) {
+        document.getElementById('countyHint').textContent =
+            'Auto-detect unavailable. Select county manually.';
+    }
+}
+</script>
+
+{% endblock %}

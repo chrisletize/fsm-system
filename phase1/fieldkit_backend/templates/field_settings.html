@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}Custom Fields — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { margin-bottom:1.5rem; }
+    .page-header h1 { font-size:1.75rem; color:{{ branding.color_primary }}; }
+    .section-title {
+        font-size:.75rem; font-weight:700; text-transform:uppercase;
+        letter-spacing:.6px; color:#888;
+        margin-bottom:.75rem; padding-bottom:.5rem;
+        border-bottom:1px solid #eee;
+    }
+    table { width:100%; border-collapse:collapse; font-size:.9rem; }
+    th { text-align:left; padding:.6rem 1rem; border-bottom:2px solid #eee;
+         font-size:.78rem; text-transform:uppercase; letter-spacing:.4px; color:#888; }
+    td { padding:.7rem 1rem; border-bottom:1px solid #f0f0f0; vertical-align:middle; }
+    tr:last-child td { border-bottom:none; }
+    tr:hover td { background:#fafafa; }
+    .badge { display:inline-block; padding:.15rem .55rem; border-radius:8px;
+             font-size:.78rem; font-weight:500; }
+    .badge-active { background:#e8f5e9; color:#2e7d32; }
+    .badge-inactive { background:#f5f5f5; color:#aaa; }
+    .btn { display:inline-block; padding:.45rem 1rem; border-radius:4px;
+           text-decoration:none; font-weight:500; cursor:pointer;
+           border:none; font-size:.85rem; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-primary:hover { opacity:.9; }
+    .btn-outline { background:white; color:{{ branding.color_primary }};
+                   border:1px solid {{ branding.color_primary }}; }
+    .add-field-form {
+        display:flex; gap:.75rem; align-items:flex-end;
+        margin-top:1.25rem; flex-wrap:wrap;
+    }
+    .add-field-form .form-group { display:flex; flex-direction:column; gap:.3rem; }
+    .add-field-form label { font-size:.82rem; font-weight:600; color:#555; }
+    .add-field-form input,
+    .add-field-form select {
+        padding:.55rem .75rem; border:1px solid #ddd; border-radius:4px;
+        font-size:.9rem; background:white; min-width:180px;
+    }
+    .add-field-form input:focus,
+    .add-field-form select:focus {
+        outline:none; border-color:{{ branding.color_primary }};
+    }
+    .examples { margin-top:1rem; font-size:.82rem; color:#aaa; }
+    .examples span { 
+        display:inline-block; background:#f5f5f5; border-radius:4px;
+        padding:.15rem .5rem; margin:.15rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Custom Fields</h1>
+    <p style="color:#666; margin-top:.35rem; font-size:.95rem;">
+        Define additional information fields that appear on every customer record for
+        <strong>{{ branding.name }}</strong>.
+    </p>
+</div>
+
+<div class="card">
+    <div class="section-title">Current Fields</div>
+
+    {% if field_defs %}
+    <table>
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Field Name</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for field in field_defs %}
+            <tr>
+                <td style="color:#ccc;">{{ field.display_order }}</td>
+                <td style="font-weight:500;">{{ field.field_name }}</td>
+                <td style="color:#666; text-transform:capitalize;">{{ field.field_type }}</td>
+                <td>
+                    <span class="badge {% if field.is_active %}badge-active{% else %}badge-inactive{% endif %}">
+                        {% if field.is_active %}Active{% else %}Hidden{% endif %}
+                    </span>
+                </td>
+                <td>
+                    <form method="POST"
+                          action="/{{ company_key }}/settings/fields/{{ field.id }}/toggle"
+                          style="display:inline;">
+                        <button type="submit" class="btn btn-outline" style="font-size:.78rem; padding:.3rem .7rem;">
+                            {% if field.is_active %}Hide{% else %}Show{% endif %}
+                        </button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color:#aaa; padding:1rem 0; text-align:center;">No custom fields defined yet.</p>
+    {% endif %}
+
+    <!-- Add new field -->
+    <div style="margin-top:1.5rem; padding-top:1.25rem; border-top:1px solid #eee;">
+        <div class="section-title">Add New Field</div>
+        <form method="POST" action="/{{ company_key }}/settings/fields/add">
+            <div class="add-field-form">
+                <div class="form-group">
+                    <label>Field Name</label>
+                    <input type="text" name="field_name" placeholder="e.g. Access Codes" required>
+                </div>
+                <div class="form-group">
+                    <label>Field Type</label>
+                    <select name="field_type">
+                        <option value="text">Text (single line)</option>
+                        <option value="textarea">Text Area (multi-line)</option>
+                        <option value="toggle">Toggle (yes/no)</option>
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-primary">Add Field</button>
+            </div>
+        </form>
+        <div class="examples">
+            <strong style="color:#888;">Examples:</strong>
+            <span>Colors</span>
+            <span>Access Codes</span>
+            <span>Gate Code</span>
+            <span>Special Instructions</span>
+            <span>Preferred Contact Method</span>
+            <span>Pet on Property</span>
+            <span>Key Location</span>
+        </div>
+    </div>
+</div>
+
+<div style="margin-top:1rem;">
+    <a href="/{{ company_key }}/customers" style="color:{{ branding.color_primary }}; font-size:.9rem;">
+        ← Back to Customers
+    </a>
+</div>
+{% endblock %}

@@ -1,0 +1,257 @@
+{% extends "base.html" %}
+{% block title %}Work Orders - {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.5rem;
+    }
+    .page-header h1 {
+        font-size: 1.75rem;
+        color: {{ branding.color_primary }};
+    }
+    .toolbar {
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+        margin-bottom: 1.25rem;
+        flex-wrap: wrap;
+    }
+    .search-box {
+        flex: 1;
+        min-width: 220px;
+        max-width: 380px;
+        position: relative;
+    }
+    .search-box input {
+        width: 100%;
+        padding: 0.6rem 1rem 0.6rem 2.4rem;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 0.95rem;
+    }
+    .search-box input:focus {
+        outline: none;
+        border-color: {{ branding.color_primary }};
+        box-shadow: 0 0 0 2px {{ branding.color_primary }}22;
+    }
+    .search-icon {
+        position: absolute;
+        left: 0.75rem;
+        top: 50%;
+        transform: translateY(-50%);
+        color: #999;
+        font-size: 0.9rem;
+    }
+    .filter-select {
+        padding: 0.6rem 1rem;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 0.95rem;
+        background: white;
+        cursor: pointer;
+    }
+    .filter-select:focus {
+        outline: none;
+        border-color: {{ branding.color_primary }};
+    }
+    .result-count { color: #888; font-size: 0.9rem; margin-left: auto; }
+    .btn { display: inline-block; padding: 0.7rem 1.4rem; border-radius: 4px;
+           text-decoration: none; font-weight: 500; cursor: pointer; border: none;
+           font-size: 0.95rem; }
+    .btn-primary { background: {{ branding.color_primary }}; color: white; }
+    .btn-primary:hover { opacity: 0.9; }
+    .wo-table { width: 100%; border-collapse: collapse; }
+    .wo-table th {
+        text-align: left; padding: 0.75rem; font-size: 0.8rem;
+        text-transform: uppercase; letter-spacing: 0.04em; color: #888;
+        border-bottom: 2px solid #eee;
+    }
+    .wo-table td { padding: 0.75rem; border-bottom: 1px solid #f2f2f2; font-size: 0.92rem; }
+    .wo-table tr:hover { background: #fafafa; }
+    .badge {
+        display: inline-block; padding: 0.2rem 0.6rem; border-radius: 10px;
+        font-size: 0.78rem; font-weight: 500;
+    }
+    .badge-scheduled  { background: #e6f1fb; color: #185fa5; }
+    .badge-completed  { background: #eaf3de; color: #3b6d11; }
+    .badge-invoiced   { background: #eeedfe; color: #534ab7; }
+    .badge-nocharge   { background: #f1efe8; color: #5f5e5a; }
+    .badge-cancelled  { background: #fcebeb; color: #a32d2d; }
+    .badge-inprogress { background: #faeeda; color: #854f0b; }
+    .badge-accruing   { background: #faeeda; color: #854f0b; font-size: 0.72rem; margin-left: 0.4rem; }
+    .priority-high   { color: #ba7517; font-weight: 600; }
+    .priority-urgent { color: #a32d2d; font-weight: 600; }
+    .empty-state { text-align: center; padding: 3rem 1rem; color: #999; }
+    .empty-state .icon { font-size: 2.5rem; margin-bottom: 0.5rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Work Orders</h1>
+    <a href="/{{ company_key }}/workorders/new" class="btn btn-primary">+ New Work Order</a>
+</div>
+
+<div class="card">
+    <form method="GET" action="/{{ company_key }}/workorders" id="filterForm">
+        <div class="toolbar">
+            <div class="search-box">
+                <span class="search-icon">🔍</span>
+                <input type="text" name="search" placeholder="Search WO #, customer, or site..."
+                       value="{{ search }}" id="searchInput" autocomplete="off">
+            </div>
+            <select name="status" class="filter-select" onchange="document.getElementById('filterForm').submit()">
+                <option value="">All Statuses</option>
+                {% for s in statuses %}
+                <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ s }}</option>
+                {% endfor %}
+            </select>
+            <span class="result-count" id="resultCount">{{ total }} work order{{ 's' if total != 1 }}</span>
+        </div>
+    </form>
+
+    <div id="resultsArea">
+    {% if workorders %}
+    <table class="wo-table">
+        <thead>
+            <tr>
+                <th>WO #</th>
+                <th>Customer</th>
+                <th>Work Site</th>
+                <th>Start Date</th>
+                <th>Status</th>
+                <th>Priority</th>
+                <th style="text-align:right;">Total</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for wo in workorders %}
+            <tr>
+                <td style="font-weight:500;">
+                    <a href="/{{ company_key }}/workorders/{{ wo.id }}"
+                       style="color:{{ branding.color_primary }}; text-decoration:none;">
+                        {{ wo.work_order_number }}
+                    </a>
+                </td>
+                <td>{{ wo.customer_name }}</td>
+                <td>{{ wo.work_site_label or '—' }}</td>
+                <td>{{ wo.start_date.strftime('%b %-d, %Y') if wo.start_date else '—' }}</td>
+                <td>
+                    <span class="badge badge-{{ wo.status|lower|replace(' ', '') }}">{{ wo.status }}</span>
+                    {% if wo.accruing_count %}
+                    <span class="badge badge-accruing">{{ wo.accruing_count }} accruing</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if wo.priority == 'Normal' %}<span style="color:#999;">Normal</span>
+                    {% else %}<span class="priority-{{ wo.priority|lower }}">{{ wo.priority }}</span>{% endif %}
+                </td>
+                <td style="text-align:right;">${{ '%.2f'|format(wo.order_total or 0) }}</td>
+                <td>
+                    <a href="/{{ company_key }}/workorders/{{ wo.id }}/edit"
+                       style="color:{{ branding.color_primary }}; text-decoration:none; font-size:0.9rem;">
+                        Edit →
+                    </a>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+        <div class="icon">📋</div>
+        <p>No work orders found{% if search %} for "{{ search }}"{% endif %}.</p>
+        {% if search or status_filter %}
+        <a href="/{{ company_key }}/workorders" style="color:{{ branding.color_primary }}; margin-top:1rem; display:inline-block;">
+            Clear filters
+        </a>
+        {% endif %}
+    </div>
+    {% endif %}
+    </div><!-- end resultsArea -->
+</div>
+
+<script>
+    const companyKey = "{{ company_key }}";
+    const colorPrimary = "{{ branding.color_primary }}";
+    let searchTimer;
+
+    function badgeClass(status) {
+        return 'badge-' + status.toLowerCase().replace(/ /g, '');
+    }
+
+    function fmtDate(d) {
+        if (!d) return '—';
+        const dt = new Date(d + 'T00:00:00');
+        return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    }
+
+    function buildRow(wo) {
+        const site = wo.work_site_label || '—';
+        const accruing = wo.accruing_count > 0
+            ? ` <span class="badge badge-accruing">${wo.accruing_count} accruing</span>` : '';
+        const priority = wo.priority === 'Normal'
+            ? '<span style="color:#999;">Normal</span>'
+            : `<span class="priority-${wo.priority.toLowerCase()}">${wo.priority}</span>`;
+        const total = (wo.order_total || 0).toFixed(2);
+        return `<tr>
+            <td style="font-weight:500;"><a href="/${companyKey}/workorders/${wo.id}" style="color:${colorPrimary};text-decoration:none;">${wo.work_order_number}</a></td>
+            <td>${wo.customer_name}</td>
+            <td>${site}</td>
+            <td>${fmtDate(wo.start_date)}</td>
+            <td><span class="badge ${badgeClass(wo.status)}">${wo.status}</span>${accruing}</td>
+            <td>${priority}</td>
+            <td style="text-align:right;">$${total}</td>
+            <td><a href="/${companyKey}/workorders/${wo.id}/edit" style="color:${colorPrimary};text-decoration:none;font-size:0.9rem;">Edit →</a></td>
+        </tr>`;
+    }
+
+    function liveSearch() {
+        const search = document.getElementById('searchInput').value;
+        const status = document.querySelector('select[name="status"]').value;
+
+        const params = new URLSearchParams({ search, status });
+        fetch(`/${companyKey}/workorders/search?${params}`)
+            .then(r => r.json())
+            .then(data => {
+                const area = document.getElementById('resultsArea');
+                const count = document.getElementById('resultCount');
+                count.textContent = `${data.total} work order${data.total !== 1 ? 's' : ''}`;
+
+                if (data.workorders.length === 0) {
+                    area.innerHTML = `<div class="empty-state"><div class="icon">📋</div><p>No work orders found${search ? ` for "${search}"` : ''}.</p></div>`;
+                    return;
+                }
+
+                const rows = data.workorders.map(buildRow).join('');
+                area.innerHTML = `<table class="wo-table">
+                    <thead><tr>
+                        <th>WO #</th><th>Customer</th><th>Work Site</th><th>Start Date</th>
+                        <th>Status</th><th>Priority</th><th style="text-align:right;">Total</th><th></th>
+                    </tr></thead>
+                    <tbody>${rows}</tbody>
+                </table>`;
+            })
+            .catch(() => {});
+    }
+
+    document.getElementById('searchInput').addEventListener('input', function() {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(liveSearch, 300);
+    });
+
+    document.querySelectorAll('.filter-select').forEach(sel => {
+        sel.removeAttribute('onchange');
+        sel.addEventListener('change', liveSearch);
+    });
+
+    document.getElementById('searchInput').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); liveSearch(); }
+    });
+</script>
+{% endblock %}

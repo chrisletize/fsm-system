@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Equipment Registry — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { margin-bottom:1.5rem; display:flex; justify-content:space-between; align-items:flex-end; gap:1rem; flex-wrap:wrap; }
+    .page-header h1 { font-size:1.75rem; color:{{ branding.color_primary }}; }
+    .page-header p { color:#666; margin-top:.35rem; font-size:.95rem; }
+    .section-title {
+        font-size:.75rem; font-weight:700; text-transform:uppercase;
+        letter-spacing:.6px; color:#888; margin-bottom:.75rem;
+        padding-bottom:.5rem; border-bottom:1px solid #eee;
+    }
+    table { width:100%; border-collapse:collapse; font-size:.9rem; }
+    th { text-align:left; padding:.6rem 1rem; border-bottom:2px solid #eee;
+         font-size:.78rem; text-transform:uppercase; letter-spacing:.4px; color:#888; }
+    td { padding:.7rem 1rem; border-bottom:1px solid #f0f0f0; vertical-align:middle; }
+    tr:last-child td { border-bottom:none; }
+    tr:hover td { background:#fafafa; }
+    .muted { color:#aaa; }
+    .badge { display:inline-block; padding:.15rem .55rem; border-radius:8px; font-size:.76rem; font-weight:500; }
+    .badge-active { background:#e8f5e9; color:#2e7d32; }
+    .badge-inactive { background:#f5f5f5; color:#aaa; }
+    .btn { display:inline-block; padding:.45rem 1rem; border-radius:4px; text-decoration:none;
+           font-weight:500; cursor:pointer; border:none; font-size:.85rem; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-primary:hover { opacity:.9; }
+    .btn-outline { background:white; color:{{ branding.color_primary }};
+                   border:1px solid {{ branding.color_primary }}; }
+    .btn-link-danger { background:none; border:none; color:#c0392b; cursor:pointer;
+                       font-size:.78rem; padding:.3rem .5rem; }
+    .btn-link-danger:hover { text-decoration:underline; }
+    .row-actions { white-space:nowrap; text-align:right; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>Equipment Registry</h1>
+        <p>Physical units owned by <strong>{{ branding.name }}</strong>, each billing as a
+           per-day equipment item from the catalog.</p>
+    </div>
+    <a href="/{{ company_key }}/settings/equipment/new" class="btn btn-primary">+ Add Equipment</a>
+</div>
+
+<div class="card">
+    <div class="section-title">Equipment Units</div>
+
+    {% if units %}
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Billing Type</th>
+                <th>Notes</th>
+                <th>Status</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for unit in units %}
+            <tr>
+                <td style="font-weight:500;">{{ unit.name }}</td>
+                <td class="muted">
+                    {{ unit.billing_type_name }}{% if unit.billing_type_category %} ({{ unit.billing_type_category }}){% endif %}
+                </td>
+                <td class="muted">{{ unit.notes or '—' }}</td>
+                <td>
+                    <span class="badge {% if unit.is_active %}badge-active{% else %}badge-inactive{% endif %}">
+                        {% if unit.is_active %}Active{% else %}Inactive{% endif %}
+                    </span>
+                </td>
+                <td class="row-actions">
+                    <a href="/{{ company_key }}/settings/equipment/{{ unit.id }}/edit"
+                       class="btn btn-outline" style="font-size:.78rem; padding:.3rem .7rem;">Edit</a>
+                    <form method="POST"
+                          action="/{{ company_key }}/settings/equipment/{{ unit.id }}/delete"
+                          style="display:inline;"
+                          onsubmit="return confirm('Remove “{{ unit.name }}” from the equipment registry? It will be hidden from new deployments but kept on past ones.');">
+                        <button type="submit" class="btn-link-danger">Delete</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color:#aaa; padding:1.5rem 0; text-align:center;">
+        No equipment units yet. Add your first physical unit to start tracking the fleet.
+    </p>
+    {% endif %}
+</div>
+
+<div style="margin-top:1rem;">
+    <a href="/{{ company_key }}/dashboard" style="color:{{ branding.color_primary }}; font-size:.9rem;">
+        ← Back to Dashboard
+    </a>
+</div>
+{% endblock %}

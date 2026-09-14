@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+{% from "_macros.html" import autocomplete_field %}
+{% block title %}{% if item %}Edit{% else %}New{% endif %} Catalog Item — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { margin-bottom:1.5rem; }
+    .page-header h1 { font-size:1.6rem; color:{{ branding.color_primary }}; }
+    .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:1.1rem 1.5rem; }
+    .form-group { display:flex; flex-direction:column; gap:.35rem; }
+    .form-group.full { grid-column:1 / -1; }
+    .form-group label { font-size:.85rem; font-weight:600; color:#555; }
+    .form-group .hint { font-size:.78rem; color:#aaa; font-weight:400; }
+    .form-group input[type=text],
+    .form-group input[type=number],
+    .form-group select,
+    .form-group textarea {
+        padding:.6rem .75rem; border:1px solid #ddd; border-radius:4px;
+        font-size:.92rem; background:white; font-family:inherit;
+    }
+    .form-group textarea { resize:vertical; min-height:70px; }
+    .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+        outline:none; border-color:{{ branding.color_primary }};
+    }
+    .check-row { display:flex; align-items:center; gap:.5rem; }
+    .check-row input { width:16px; height:16px; }
+    .check-row label { font-weight:500; font-size:.9rem; color:#444; }
+    .subhead { grid-column:1 / -1; font-size:.74rem; font-weight:700; text-transform:uppercase;
+               letter-spacing:.5px; color:#999; margin-top:.5rem; padding-bottom:.4rem; border-bottom:1px solid #f0f0f0; }
+    .form-actions { margin-top:1.75rem; display:flex; gap:.75rem; align-items:center; }
+    .btn { display:inline-block; padding:.7rem 1.4rem; border-radius:4px; text-decoration:none;
+           font-weight:500; cursor:pointer; border:none; font-size:.95rem; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-primary:hover { opacity:.9; }
+    .btn-secondary { background:#6c757d; color:white; }
+    .btn-secondary:hover { background:#5a6268; }
+    .flash.error { background:#fee; color:#c33; border:1px solid #fcc; padding:.8rem 1rem;
+                   border-radius:4px; margin-bottom:1.25rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>{% if item %}Edit Catalog Item{% else %}New Catalog Item{% endif %}</h1>
+</div>
+
+{% if error %}
+<div class="flash error">{{ error }}</div>
+{% endif %}
+
+<div class="card">
+<form method="POST"
+      action="/{{ company_key }}/settings/catalog{% if item %}/{{ item.id }}/edit{% else %}/new{% endif %}">
+    <div class="form-grid">
+
+        <div class="form-group">
+            <label>Name <span class="hint">(required)</span></label>
+            <input type="text" name="name" value="{{ item.name if item else '' }}"
+                   placeholder="e.g. Bathtub Resurface" required>
+        </div>
+
+        <div class="form-group">
+            <label>Category</label>
+{{ autocomplete_field('category',
+                   item.category if item and item.category else '',
+                   categories,
+                   'e.g. Resurfacing, Water Extraction, Ozone') }}
+        </div>
+
+        <div class="form-group">
+            <label>Billing Behavior</label>
+            <select name="billing_behavior" id="billing_behavior" onchange="onBehaviorChange()">
+                <option value="standard"
+                    {% if not item or item.billing_behavior == 'standard' %}selected{% endif %}>
+                    Standard (point-in-time)
+                </option>
+                <option value="per_day_equipment"
+                    {% if item and item.billing_behavior == 'per_day_equipment' %}selected{% endif %}>
+                    Per-Day Equipment
+                </option>
+            </select>
+            <span class="hint" id="behavior_hint"></span>
+        </div>
+
+        <div class="form-group">
+            <label>Unit of Measure</label>
+            <select name="unit_of_measure">
+                {% for u in valid_units %}
+                <option value="{{ u }}"
+                    {% if (item and item.unit_of_measure == u) or (not item and u == 'each') %}selected{% endif %}>
+                    {{ u }}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label>Unit Price ($) <span class="hint" id="price_hint"></span></label>
+            <input type="number" name="unit_price" step="0.01" min="0"
+                   value="{{ '%.2f'|format(item.unit_price) if item else '0.00' }}">
+        </div>
+
+        <div class="form-group">
+            <label>Internal Cost ($) <span class="hint">(optional, for margin)</span></label>
+            <input type="number" name="cost" step="0.01" min="0"
+                   value="{{ '%.2f'|format(item.cost) if item and item.cost is not none else '' }}">
+        </div>
+
+        <div class="form-group full">
+            <label>Default Description <span class="hint">(pre-fills the line item on a work order)</span></label>
+            <textarea name="default_description"
+                      placeholder="Optional default text...">{{ item.default_description if item and item.default_description else '' }}</textarea>
+        </div>
+
+        <div class="subhead">Scheduling &amp; Tax</div>
+
+        <div class="form-group" id="est_min_group">
+            <label>Estimated Minutes <span class="hint">(per unit; sizes the schedule block)</span></label>
+            <input type="number" name="estimated_minutes" step="1" min="0"
+                   value="{{ item.estimated_minutes if item and item.estimated_minutes is not none else '' }}">
+        </div>
+
+        <div class="form-group">
+            <div class="check-row" style="margin-top:1.6rem;">
+                <input type="checkbox" name="is_taxable" id="is_taxable"
+                       {% if not item or item.is_taxable %}checked{% endif %}>
+                <label for="is_taxable">Taxable</label>
+            </div>
+        </div>
+
+        <div class="subhead">Advanced <span style="font-weight:400; text-transform:none; letter-spacing:0;">— water-extraction rounding &amp; catch-all</span></div>
+
+        <div class="form-group">
+            <label>Minimum Quantity <span class="hint">(billing floor — water ext. = 1)</span></label>
+            <input type="number" name="minimum_quantity" step="0.01" min="0"
+                   value="{{ item.minimum_quantity if item and item.minimum_quantity is not none else '' }}">
+        </div>
+
+        <div class="form-group">
+            <label>Billing Increment <span class="hint">(rounding step — water ext. = 0.25)</span></label>
+            <input type="number" name="billing_increment" step="0.01" min="0"
+                   value="{{ item.billing_increment if item and item.billing_increment is not none else '' }}">
+        </div>
+
+        <div class="form-group">
+            <div class="check-row">
+                <input type="checkbox" name="is_catch_all" id="is_catch_all"
+                       {% if item and item.is_catch_all %}checked{% endif %}>
+                <label for="is_catch_all">Catch-all (requires a description on use)</label>
+            </div>
+            <span class="hint">For the "Custom Service" item only.</span>
+        </div>
+
+        <div class="form-group">
+            <div class="check-row">
+                <input type="checkbox" name="is_active" id="is_active"
+                       {% if not item or item.is_active %}checked{% endif %}>
+                <label for="is_active">Active (available on new work orders)</label>
+            </div>
+        </div>
+
+    </div>
+
+    <div class="form-actions">
+        <button type="submit" class="btn btn-primary">
+            {% if item %}Save Changes{% else %}Create Item{% endif %}
+        </button>
+        <a href="/{{ company_key }}/settings/catalog" class="btn btn-secondary">Cancel</a>
+    </div>
+</form>
+</div>
+
+<script>
+    function onBehaviorChange() {
+        var b = document.getElementById('billing_behavior').value;
+        var perDay = (b === 'per_day_equipment');
+        var estGroup = document.getElementById('est_min_group');
+        var estInput = estGroup.querySelector('input');
+        var behaviorHint = document.getElementById('behavior_hint');
+        var priceHint = document.getElementById('price_hint');
+
+        // Per-day equipment carries no labor estimate and bills a daily rate.
+        estInput.disabled = perDay;
+        estGroup.style.opacity = perDay ? '0.45' : '1';
+        if (perDay) { estInput.value = ''; }
+        behaviorHint.textContent = perDay
+            ? 'Bills per day deployed; days accrue via the equipment queue.'
+            : 'Bills price × quantity when the work is done.';
+        priceHint.textContent = perDay ? '(daily rate)' : '';
+    }
+    document.addEventListener('DOMContentLoaded', onBehaviorChange);
+</script>
+{% endblock %}

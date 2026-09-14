@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}Service Catalog — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { margin-bottom:1.5rem; display:flex; justify-content:space-between; align-items:flex-end; gap:1rem; flex-wrap:wrap; }
+    .page-header h1 { font-size:1.75rem; color:{{ branding.color_primary }}; }
+    .page-header p { color:#666; margin-top:.35rem; font-size:.95rem; }
+    .section-title {
+        font-size:.75rem; font-weight:700; text-transform:uppercase;
+        letter-spacing:.6px; color:#888; margin-bottom:.75rem;
+        padding-bottom:.5rem; border-bottom:1px solid #eee;
+    }
+    table { width:100%; border-collapse:collapse; font-size:.9rem; }
+    th { text-align:left; padding:.6rem 1rem; border-bottom:2px solid #eee;
+         font-size:.78rem; text-transform:uppercase; letter-spacing:.4px; color:#888; }
+    td { padding:.7rem 1rem; border-bottom:1px solid #f0f0f0; vertical-align:middle; }
+    tr:last-child td { border-bottom:none; }
+    tr:hover td { background:#fafafa; }
+    .num { text-align:right; font-variant-numeric:tabular-nums; }
+    .muted { color:#aaa; }
+    .badge { display:inline-block; padding:.15rem .55rem; border-radius:8px; font-size:.76rem; font-weight:500; }
+    .badge-active { background:#e8f5e9; color:#2e7d32; }
+    .badge-inactive { background:#f5f5f5; color:#aaa; }
+    .badge-standard { background:#eef2ff; color:#3949ab; }
+    .badge-perday { background:#fff4e5; color:#b26a00; }
+    .badge-tax { background:#f1f8e9; color:#558b2f; }
+    .badge-notax { background:#f5f5f5; color:#999; }
+    .btn { display:inline-block; padding:.45rem 1rem; border-radius:4px; text-decoration:none;
+           font-weight:500; cursor:pointer; border:none; font-size:.85rem; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-primary:hover { opacity:.9; }
+    .btn-outline { background:white; color:{{ branding.color_primary }};
+                   border:1px solid {{ branding.color_primary }}; }
+    .btn-link-danger { background:none; border:none; color:#c0392b; cursor:pointer;
+                       font-size:.78rem; padding:.3rem .5rem; }
+    .btn-link-danger:hover { text-decoration:underline; }
+    .row-actions { white-space:nowrap; text-align:right; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>Service Catalog</h1>
+        <p>Every service or product that can be added to a work order for
+           <strong>{{ branding.name }}</strong>. Line items always come from here.</p>
+    </div>
+    <a href="/{{ company_key }}/settings/catalog/new" class="btn btn-primary">+ Add Catalog Item</a>
+</div>
+
+<div class="card">
+    <div class="section-title">Catalog Items</div>
+
+    {% if items %}
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Category</th>
+                <th>Billing</th>
+                <th class="num">Price</th>
+                <th>Unit</th>
+                <th class="num">Est. Min</th>
+                <th>Tax</th>
+                <th>Status</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in items %}
+            <tr>
+                <td style="font-weight:500;">{{ item.name }}</td>
+                <td class="muted">{{ item.category or '—' }}</td>
+                <td>
+                    {% if item.billing_behavior == 'per_day_equipment' %}
+                    <span class="badge badge-perday">Per-Day Equipment</span>
+                    {% else %}
+                    <span class="badge badge-standard">Standard</span>
+                    {% endif %}
+                </td>
+                <td class="num">${{ '%.2f'|format(item.unit_price) }}</td>
+                <td class="muted">{{ item.unit_of_measure }}{% if item.billing_behavior == 'per_day_equipment' %}/day{% endif %}</td>
+                <td class="num muted">{{ item.estimated_minutes if item.estimated_minutes is not none else '—' }}</td>
+                <td>
+                    {% if item.is_taxable %}
+                    <span class="badge badge-tax">Taxable</span>
+                    {% else %}
+                    <span class="badge badge-notax">Exempt</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <span class="badge {% if item.is_active %}badge-active{% else %}badge-inactive{% endif %}">
+                        {% if item.is_active %}Active{% else %}Inactive{% endif %}
+                    </span>
+                </td>
+                <td class="row-actions">
+                    <a href="/{{ company_key }}/settings/catalog/{{ item.id }}/edit"
+                       class="btn btn-outline" style="font-size:.78rem; padding:.3rem .7rem;">Edit</a>
+                    <form method="POST"
+                          action="/{{ company_key }}/settings/catalog/{{ item.id }}/delete"
+                          style="display:inline;"
+                          onsubmit="return confirm('Remove “{{ item.name }}” from the catalog? It will be hidden from new work orders but kept on past ones.');">
+                        <button type="submit" class="btn-link-danger">Delete</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color:#aaa; padding:1.5rem 0; text-align:center;">
+        No catalog items yet. Add your first one to start building work orders.
+    </p>
+    {% endif %}
+</div>
+
+<div style="margin-top:1rem;">
+    <a href="/{{ company_key }}/dashboard" style="color:{{ branding.color_primary }}; font-size:.9rem;">
+        ← Back to Dashboard
+    </a>
+</div>
+{% endblock %}
