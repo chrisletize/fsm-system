@@ -514,7 +514,10 @@ def get_tax_data(company_id):
     result = []
     for t in transactions:
         tax_collected = float(t['tax_collected'])
-        breakdown = get_tax_breakdown(t['county'], tax_collected)
+        # Rate billed on THIS invoice selects the component structure. Passing the
+        # county alone silently mis-splits any county that has had a rate change
+        # (Mecklenburg, 7.25% -> 8.25% on 07/01/2026).
+        breakdown = get_tax_breakdown(t['county'], tax_collected, t['tax_rate'])
         
         result.append({
             'id': t['id'],
@@ -529,7 +532,9 @@ def get_tax_data(company_id):
             'tax_collected': tax_collected,
             'state_tax': breakdown['state'],
             'county_tax': breakdown['county'],
-            'transit_tax': breakdown['transit']
+            'transit_tax': breakdown['transit'],
+            'additional_county_tax': breakdown['additional_county'],
+            'rate_recognized': breakdown['matched']
         })
     
     return jsonify(result)

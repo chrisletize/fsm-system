@@ -358,6 +358,74 @@
             margin-bottom: 10px;
         }
 
+        /* Totals-by-county summary table, shown above the per-county detail */
+        .totals-table th,
+        .totals-table td {
+            font-size: 13px;
+            padding: 10px 12px;
+        }
+
+        .totals-table tfoot td {
+            font-weight: 700;
+            background: #f8f9fa;
+            border-top: 2px solid var(--primary-color);
+            border-bottom: none;
+        }
+
+        .totals-table tbody tr {
+            cursor: default;
+        }
+
+        /* Subtotal line closing out each county's invoice table */
+        .subtotal-row td {
+            font-weight: 700;
+            background: #f8f9fa;
+            border-top: 2px solid var(--border);
+            border-bottom: none;
+        }
+
+        .rate-cell {
+            white-space: nowrap;
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* Unrecognized tax rates. Deliberately loud. */
+        .exception-panel {
+            background: #fff3cd;
+            border-left: 5px solid var(--danger);
+            border-radius: 8px;
+            padding: 20px 25px;
+            margin-bottom: 30px;
+        }
+
+        .exception-panel h3 {
+            color: #856404;
+            font-size: 17px;
+            margin-bottom: 6px;
+        }
+
+        .exception-panel p.lead {
+            color: #856404;
+            font-size: 13px;
+            margin-bottom: 15px;
+        }
+
+        .exception-panel table {
+            background: white;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        .exception-reason {
+            color: var(--danger);
+            font-weight: 600;
+        }
+
+        .unallocated-note {
+            color: var(--danger);
+            font-weight: 600;
+        }
+
         .customer-totals {
             max-height: 400px;
             overflow-y: auto;
@@ -555,6 +623,14 @@
                 <h3>Total Transit Tax</h3>
                 <div class="value" id="transit-tax">$0.00</div>
             </div>
+            <div class="summary-card" id="additional-county-card" style="display: none;">
+                <h3>Additional County Tax</h3>
+                <div class="value" id="additional-county-tax">$0.00</div>
+            </div>
+            <div class="summary-card">
+                <h3>Total Taxable Sales</h3>
+                <div class="value" id="taxable-sales">$0.00</div>
+            </div>
             <div class="summary-card">
                 <h3>Total Tax Collected</h3>
                 <div class="value" id="tax-collected">$0.00</div>
@@ -563,6 +639,15 @@
                 <h3>Paid Invoices</h3>
                 <div class="value" id="invoice-count">-</div>
             </div>
+        </div>
+
+        <div id="exception-panel-container"></div>
+
+        <div class="section" id="county-totals-section" style="display: none;">
+            <div class="section-header">
+                <h2>Totals by County</h2>
+            </div>
+            <div id="county-totals"></div>
         </div>
 
         <div class="section">
@@ -857,39 +942,184 @@
         }
 
         // Display tax data
+        // Format a number as $ with thousands separators.
+        function money(n) {
+            return '$' + (Number(n) || 0).toLocaleString('en-US', {
+                minimumFractionDigits: 2, maximumFractionDigits: 2
+            });
+        }
+
         function displayTaxData(report) {
             if (!report || !report.counties || report.counties.length === 0) {
                 clearDisplay();
                 return;
-                // Show PDF download button when data is displayed
             }
 
-            // Display county breakdown
+            displayExceptions(report);
+            displayCountyTotals(report);
+            displayCountyDetail(report);
+            displayCustomerTotals(report);
+            updateSummary(report);
+
+            document.getElementById('download-pdf-btn').style.display = 'inline-block';
+        }
+
+        // Unrecognized (county, rate) pairs. These allocate to no component, so
+        // they are surfaced before anything else rather than buried.
+        function displayExceptions(report) {
+            const container = document.getElementById('exception-panel-container');
+            const exceptions = report.exceptions || [];
+
+            if (exceptions.length === 0) {
+                container.innerHTML = '';
+                return;
+            }
+
+            let rows = '';
+            exceptions.forEach(ex => {
+                const expected = (ex.expected_rates || []).map(r => r.toFixed(2) + '%').join(' or ');
+                rows += `
+                    <tr>
+                        <td>${ex.county}</td>
+                        <td>${ex.invoice_num || ''}</td>
+                        <td>${ex.customer_name || ''}</td>
+                        <td class="text-right rate-cell">${Number(ex.tax_rate).toFixed(2)}%</td>
+                        <td class="text-right rate-cell">${expected}</td>
+                        <td class="text-right">${money(ex.tax)}</td>
+                    </tr>
+                `;
+            });
+
+            container.innerHTML = `
+                <div class="exception-panel">
+                    <h3>⚠ ${exceptions.length} invoice${exceptions.length === 1 ? '' : 's'} billed at an unexpected tax rate</h3>
+                    <p class="lead">
+                        These are included in the county and grand totals, but their tax is
+                        <strong>not</strong> split into state / county / transit components,
+                        because the rate billed does not match a known rate for that county.
+                        Each one is either a mis-billed invoice or a rate change the system
+                        has not been told about.
+                    </p>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>County</th>
+                                <th>Invoice #</th>
+                                <th>Customer</th>
+                                <th class="text-right">Billed</th>
+                                <th class="text-right">Expected</th>
+                                <th class="text-right">Tax</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        // Totals-by-county summary, shown above the invoice-level detail.
+        function displayCountyTotals(report) {
+            const t = report.totals;
+            const showTransit = (t.transit_tax || 0) > 0;
+            const showAddl = (t.additional_county_tax || 0) > 0;
+            const showUnalloc = (t.unallocated_tax || 0) > 0;
+
+            let head = `
+                <tr>
+                    <th>County</th>
+                    <th class="text-right">Rate</th>
+                    <th class="text-right">Taxable Sales</th>
+                    <th class="text-right">State</th>
+                    <th class="text-right">County</th>
+                    ${showTransit ? '<th class="text-right">Transit</th>' : ''}
+                    ${showAddl ? '<th class="text-right">Addl County</th>' : ''}
+                    ${showUnalloc ? '<th class="text-right">Unallocated</th>' : ''}
+                    <th class="text-right">Total Tax</th>
+                    <th class="text-right">Invoices</th>
+                </tr>
+            `;
+
+            let rows = '';
+            report.counties.forEach(c => {
+                rows += `
+                    <tr>
+                        <td>${c.name}</td>
+                        <td class="text-right rate-cell">${c.rate_label}</td>
+                        <td class="text-right">${money(c.taxable_amount)}</td>
+                        <td class="text-right">${money(c.state_tax)}</td>
+                        <td class="text-right">${money(c.county_tax)}</td>
+                        ${showTransit ? `<td class="text-right">${money(c.transit_tax)}</td>` : ''}
+                        ${showAddl ? `<td class="text-right">${money(c.additional_county_tax)}</td>` : ''}
+                        ${showUnalloc ? `<td class="text-right ${c.unallocated_tax > 0 ? 'unallocated-note' : ''}">${money(c.unallocated_tax)}</td>` : ''}
+                        <td class="text-right">${money(c.total_tax)}</td>
+                        <td class="text-right">${c.invoice_count}</td>
+                    </tr>
+                `;
+            });
+
+            document.getElementById('county-totals').innerHTML = `
+                <table class="totals-table">
+                    <thead>${head}</thead>
+                    <tbody>${rows}</tbody>
+                    <tfoot>
+                        <tr>
+                            <td>TOTAL</td>
+                            <td class="text-right">${report.counties.length} counties</td>
+                            <td class="text-right">${money(t.taxable_amount)}</td>
+                            <td class="text-right">${money(t.state_tax)}</td>
+                            <td class="text-right">${money(t.county_tax)}</td>
+                            ${showTransit ? `<td class="text-right">${money(t.transit_tax)}</td>` : ''}
+                            ${showAddl ? `<td class="text-right">${money(t.additional_county_tax)}</td>` : ''}
+                            ${showUnalloc ? `<td class="text-right unallocated-note">${money(t.unallocated_tax)}</td>` : ''}
+                            <td class="text-right">${money(t.total_tax)}</td>
+                            <td class="text-right">${t.invoice_count}</td>
+                        </tr>
+                    </tfoot>
+                </table>
+            `;
+            document.getElementById('county-totals-section').style.display = 'block';
+        }
+
+        // Per-county invoice detail.
+        function displayCountyDetail(report) {
             let html = '';
+
             report.counties.forEach(county => {
-                const stateRate = 4.75;
-                const countyRate = (county.tax_rate - stateRate).toFixed(2);
-                
+                const parts = [
+                    `State: ${money(county.state_tax)}`,
+                    `County: ${money(county.county_tax)}`
+                ];
+                if (county.transit_tax > 0) parts.push(`Transit: ${money(county.transit_tax)}`);
+                if (county.additional_county_tax > 0) parts.push(`Addl County: ${money(county.additional_county_tax)}`);
+                if (county.unallocated_tax > 0) parts.push(`<span class="unallocated-note">Unallocated: ${money(county.unallocated_tax)}</span>`);
+
+                // Show the per-invoice rate column when a county has more than one
+                // billed rate (otherwise there is no way to tell which row is which),
+                // or when any invoice carries an unrecognized rate (otherwise the
+                // flagged row is invisible in the detail table).
+                const hasUnrecognized = county.customers.some(c => !c.rate_recognized);
+                const mixedRates = (county.rates || []).length > 1 || hasUnrecognized;
+
                 html += `
                     <div class="county-group">
                         <div class="county-header">
                             <div>
-                                <div class="county-name">${county.name} County - ${county.tax_rate}%</div>
-                                <div class="county-breakdown">
-                                    State: $${county.state_tax.toFixed(2)} | County: $${county.county_tax.toFixed(2)}${county.transit_tax > 0 ? ` | Transit: $${county.transit_tax.toFixed(2)}` : ''}
-                                </div>
+                                <div class="county-name">${county.name} County &mdash; ${county.rate_label}</div>
+                                <div class="county-breakdown">${parts.join(' | ')}</div>
                             </div>
                             <div style="text-align: right;">
-                                <div style="font-size: 13px; opacity: 0.85; margin-bottom: 4px;">Taxable Sales: $${county.taxable_amount.toFixed(2)}</div>
-                                <div class="county-total">Tax: $${county.total_tax.toFixed(2)}</div>
+                                <div style="font-size: 13px; opacity: 0.85; margin-bottom: 4px;">Taxable Sales: ${money(county.taxable_amount)}</div>
+                                <div class="county-total">Tax: ${money(county.total_tax)}</div>
                             </div>
                         </div>
                         <table>
                             <thead>
                                 <tr>
                                     <th>Customer</th>
+                                    <th>Invoice #</th>
                                     <th>Payment Date</th>
-                                    <th class="text-right">Invoice Amount</th>
+                                    ${mixedRates ? '<th class="text-right">Rate</th>' : ''}
+                                    <th class="text-right">Taxable Sales</th>
                                     <th class="text-right">Tax</th>
                                 </tr>
                             </thead>
@@ -898,31 +1128,36 @@
 
                 county.customers.forEach(cust => {
                     const paymentDate = new Date(cust.payment_date).toLocaleDateString('en-US');
+                    const rateCell = mixedRates
+                        ? `<td class="text-right rate-cell">${Number(cust.tax_rate).toFixed(2)}%${cust.rate_recognized ? '' : ' ⚠'}</td>`
+                        : '';
                     html += `
                         <tr>
                             <td>${cust.customer_name}</td>
+                            <td>${cust.invoice_num || ''}</td>
                             <td>${paymentDate}</td>
-                            <td class="text-right">$${cust.total_sales.toFixed(2)}</td>
-                            <td class="text-right">$${cust.tax.toFixed(2)}</td>
+                            ${rateCell}
+                            <td class="text-right">${money(cust.taxable_amount)}</td>
+                            <td class="text-right">${money(cust.tax)}</td>
                         </tr>
                     `;
                 });
 
                 html += `
                             </tbody>
+                            <tfoot>
+                                <tr class="subtotal-row">
+                                    <td colspan="${mixedRates ? 4 : 3}">SUBTOTAL &mdash; ${county.name} County</td>
+                                    <td class="text-right">${money(county.taxable_amount)}</td>
+                                    <td class="text-right">${money(county.total_tax)}</td>
+                                </tr>
+                            </tfoot>
                         </table>
                     </div>
                 `;
             });
 
             document.getElementById('county-breakdown').innerHTML = html;
-
-            // Display customer totals
-            displayCustomerTotals(report);
-
-            // Update summary
-            updateSummary(report);
-            document.getElementById('download-pdf-btn').style.display = 'inline-block';
         }
 
         // Display customer totals
@@ -934,12 +1169,12 @@
                     if (!customerMap[cust.customer_name]) {
                         customerMap[cust.customer_name] = {
                             count: 0,
-                            total_sales: 0,
+                            taxable_amount: 0,
                             tax: 0
                         };
                     }
                     customerMap[cust.customer_name].count++;
-                    customerMap[cust.customer_name].total_sales += cust.total_sales;
+                    customerMap[cust.customer_name].taxable_amount += cust.taxable_amount;
                     customerMap[cust.customer_name].tax += cust.tax;
                 });
             });
@@ -954,7 +1189,7 @@
                         <tr>
                             <th>Customer</th>
                             <th class="text-right">Transactions</th>
-                            <th class="text-right">Total Sales</th>
+                            <th class="text-right">Taxable Sales</th>
                             <th class="text-right">Tax Collected</th>
                         </tr>
                     </thead>
@@ -967,8 +1202,8 @@
                     <tr>
                         <td>${customer}</td>
                         <td class="text-right">${data.count}</td>
-                        <td class="text-right">$${data.total_sales.toFixed(2)}</td>
-                        <td class="text-right">$${data.tax.toFixed(2)}</td>
+                        <td class="text-right">${money(data.taxable_amount)}</td>
+                        <td class="text-right">${money(data.tax)}</td>
                     </tr>
                 `;
             });
@@ -983,19 +1218,23 @@
 
         // Update summary
         function updateSummary(report) {
-            document.getElementById('state-tax').textContent = `$${report.totals.state_tax.toFixed(2)}`;
-            document.getElementById('county-tax').textContent = `$${report.totals.county_tax.toFixed(2)}`;
-            document.getElementById('tax-collected').textContent = `$${report.totals.total_tax.toFixed(2)}`;
-            document.getElementById('invoice-count').textContent = report.totals.invoice_count;
+            const t = report.totals;
+            document.getElementById('state-tax').textContent = money(t.state_tax);
+            document.getElementById('county-tax').textContent = money(t.county_tax);
+            document.getElementById('tax-collected').textContent = money(t.total_tax);
+            document.getElementById('taxable-sales').textContent = money(t.taxable_amount);
+            document.getElementById('invoice-count').textContent = t.invoice_count;
 
-            // Show transit card only when transit tax exists
-            const transitTax = report.totals.transit_tax || 0;
-            if (transitTax > 0) {
-                document.getElementById('transit-tax').textContent = `$${transitTax.toFixed(2)}`;
-                document.getElementById('transit-card').style.display = 'block';
-            } else {
-                document.getElementById('transit-card').style.display = 'none';
-            }
+            // Transit and additional-county cards appear only for periods that
+            // actually contain them, so counties without them are not cluttered
+            // with permanent $0.00 tiles.
+            const transitTax = t.transit_tax || 0;
+            document.getElementById('transit-tax').textContent = money(transitTax);
+            document.getElementById('transit-card').style.display = transitTax > 0 ? 'block' : 'none';
+
+            const addlTax = t.additional_county_tax || 0;
+            document.getElementById('additional-county-tax').textContent = money(addlTax);
+            document.getElementById('additional-county-card').style.display = addlTax > 0 ? 'block' : 'none';
         }
 
         // Clear display
@@ -1011,9 +1250,15 @@
                     <p>No customer data to display</p>
                 </div>
             `;
+            document.getElementById('exception-panel-container').innerHTML = '';
+            document.getElementById('county-totals').innerHTML = '';
+            document.getElementById('county-totals-section').style.display = 'none';
             document.getElementById('state-tax').textContent = '$0.00';
             document.getElementById('county-tax').textContent = '$0.00';
             document.getElementById('tax-collected').textContent = '$0.00';
+            document.getElementById('taxable-sales').textContent = '$0.00';
+            document.getElementById('transit-card').style.display = 'none';
+            document.getElementById('additional-county-card').style.display = 'none';
             document.getElementById('invoice-count').textContent = '-';
             document.getElementById('download-pdf-btn').style.display = 'none';
         }
