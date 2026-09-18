@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% from "_macros.html" import autocomplete_field %}
+{% block title %}{% if rate %}Edit{% else %}New{% endif %} Tax Rate — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { margin-bottom:1.5rem; }
+    .page-header h1 { font-size:1.6rem; color:{{ branding.color_primary }}; }
+    .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:1.1rem 1.5rem; }
+    .form-group { display:flex; flex-direction:column; gap:.35rem; }
+    .form-group.full { grid-column:1 / -1; }
+    .form-group label { font-size:.85rem; font-weight:600; color:#555; }
+    .form-group .hint { font-size:.78rem; color:#aaa; font-weight:400; }
+    .form-group input[type=text],
+    .form-group input[type=number],
+    .form-group input[type=date],
+    .form-group select {
+        padding:.6rem .75rem; border:1px solid #ddd; border-radius:4px;
+        font-size:.92rem; background:white; font-family:inherit;
+    }
+    .form-group input:focus, .form-group select:focus {
+        outline:none; border-color:{{ branding.color_primary }};
+    }
+    .check-row { display:flex; align-items:center; gap:.5rem; }
+    .check-row input { width:16px; height:16px; }
+    .check-row label { font-weight:500; font-size:.9rem; color:#444; }
+    .form-actions { margin-top:1.75rem; display:flex; gap:.75rem; align-items:center; }
+    .btn { display:inline-block; padding:.7rem 1.4rem; border-radius:4px; text-decoration:none;
+           font-weight:500; cursor:pointer; border:none; font-size:.95rem; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-primary:hover { opacity:.9; }
+    .btn-secondary { background:#6c757d; color:white; }
+    .btn-secondary:hover { background:#5a6268; }
+    .flash.error { background:#fee; color:#c33; border:1px solid #fcc; padding:.8rem 1rem;
+                   border-radius:4px; margin-bottom:1.25rem; }
+    .help-note { background:#fff8e1; border:1px solid #ffe082; border-radius:6px;
+                 padding:.9rem 1.1rem; font-size:.85rem; color:#6d5300; margin-bottom:1.25rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>{% if rate %}Edit Tax Rate — {{ rate.county }}{% else %}New Tax Rate{% endif %}</h1>
+</div>
+
+{% if error %}
+<div class="flash error">{{ error }}</div>
+{% endif %}
+
+{% if rate %}
+<div class="help-note">
+    Editing this row changes its percentages retroactively wherever it's the effective rate on a given date.
+    If NC (or Florida) actually changed this rate on a specific date, don't edit the percentages here — instead
+    <strong>End</strong> this row from the list page and add a <strong>New</strong> row with the new percentages
+    and effective-from date.
+</div>
+{% endif %}
+
+<div class="card">
+<form method="POST"
+      action="/{{ company_key }}/settings/tax{% if rate %}/{{ rate.id }}/edit{% else %}/new{% endif %}">
+    <div class="form-grid">
+
+        <div class="form-group">
+            <label>County <span class="hint">(required)</span></label>
+{{ autocomplete_field('county',
+                   rate.county if rate else '',
+                   county_suggestions,
+                   'e.g. Mecklenburg') }}
+        </div>
+
+        <div class="form-group">
+            <div class="check-row" style="margin-top:1.6rem;">
+                <input type="checkbox" name="is_active" id="is_active"
+                       {% if not rate or rate.is_active %}checked{% endif %}>
+                <label for="is_active">Active</label>
+            </div>
+            <span class="hint">Cleared automatically when a row is ended.</span>
+        </div>
+
+        <div class="form-group">
+            <label>State % <span class="hint">(required)</span></label>
+            <input type="number" name="state_pct" step="0.001" min="0"
+                   value="{{ '%.3f'|format(rate.state_pct) if rate else '4.750' }}" required>
+        </div>
+
+        <div class="form-group">
+            <label>County %</label>
+            <input type="number" name="county_pct" step="0.001" min="0"
+                   value="{{ '%.3f'|format(rate.county_pct) if rate else '0.000' }}">
+        </div>
+
+        <div class="form-group">
+            <label>Transit %</label>
+            <input type="number" name="transit_pct" step="0.001" min="0"
+                   value="{{ '%.3f'|format(rate.transit_pct) if rate else '0.000' }}">
+        </div>
+
+        <div class="form-group">
+            <label>Total % <span class="hint">(computed, informational)</span></label>
+            <input type="text" value="{{ '%.3f'|format(rate.total_pct) if rate else '—' }}" disabled>
+        </div>
+
+        <div class="form-group">
+            <label>Effective From <span class="hint">(required)</span></label>
+            <input type="date" name="effective_from"
+                   value="{{ rate.effective_from if rate else today }}" required>
+        </div>
+
+        <div class="form-group">
+            <label>Effective To <span class="hint">(leave blank if still current)</span></label>
+            <input type="date" name="effective_to"
+                   value="{{ rate.effective_to if rate and rate.effective_to else '' }}">
+        </div>
+
+    </div>
+
+    <div class="form-actions">
+        <button type="submit" class="btn btn-primary">
+            {% if rate %}Save Changes{% else %}Create Rate{% endif %}
+        </button>
+        <a href="/{{ company_key }}/settings/tax" class="btn btn-secondary">Cancel</a>
+    </div>
+</form>
+</div>
+{% endblock %}

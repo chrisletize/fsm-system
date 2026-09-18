@@ -491,6 +491,15 @@
                     {% endif %}
                     {% if session.user_role == 'admin' %}
                     <div class="subnav-divider"></div>
+                    <a href="/{{ company_key }}/settings/tax"
+                       class="{% if '/settings/tax' in current_path %}active{% endif %}">
+                        Tax Rates
+                    </a>
+                    <a href="/{{ company_key }}/settings/company"
+                       class="{% if '/settings/company' in current_path %}active{% endif %}">
+                        Company Settings
+                    </a>
+                    <div class="subnav-divider"></div>
                     <a href="/{{ company_key }}/settings/users"
                        class="{% if '/settings/users' in current_path %}active{% endif %}">
                         User Management

@@ -95,8 +95,19 @@ ORM, no connection pool, raw SQL throughout. This is deliberate: cash-basis tax
 compliance logic needs to match the exact SQL being executed, not whatever an ORM
 generates. Don't introduce an ORM.
 
-Note: the `users` table (auth) lives only in the `fieldkit_getagrip` database — it's
-the de facto shared/admin database for login, not per-company.
+Note: the `users` table schema is replicated to all four databases, and the user
+create/edit routes write through `write_to_all_dbs()` so new/edited users land in all
+four. But **authentication always reads only `fieldkit_getagrip.users`**
+(`get_user_by_username`, `update_last_login` hardcode `'getagrip'`) — that DB is the
+de facto canonical/admin source for login and `session['company_access']`. There is
+no FK from any per-company table to the local `users` row (tech assignment columns
+like `work_order_techs.username` are plain `VARCHAR`, not a foreign key), so the other
+three DBs' `users` tables being out of sync doesn't break anything today. As of
+2026-09-18, `fieldkit_getagrip.users` has 7 rows; the other three DBs have 0 — those 7
+were seeded directly into `getagrip` before `write_to_all_dbs()` existed and were never
+backfilled. Verified live against all four DBs at the start of the September 2026 build
+(see `docs/FIELDKIT_BUILD_DIRECTIVE_2026-09.md` §0.1 and
+`docs/DECISIONS-MADE-DURING-BUILD.md`).
 
 ## Soft delete, everywhere
 

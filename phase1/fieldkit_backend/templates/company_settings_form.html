@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block title %}Company Settings — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { margin-bottom:1.5rem; }
+    .page-header h1 { font-size:1.75rem; color:{{ branding.color_primary }}; }
+    .page-header p { color:#666; margin-top:.35rem; font-size:.95rem; }
+    .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:1.1rem 1.5rem; }
+    .form-group { display:flex; flex-direction:column; gap:.35rem; }
+    .form-group.full { grid-column:1 / -1; }
+    .form-group label { font-size:.85rem; font-weight:600; color:#555; }
+    .form-group .hint { font-size:.78rem; color:#aaa; font-weight:400; }
+    .form-group input[type=text],
+    .form-group input[type=number],
+    .form-group input[type=time],
+    .form-group input[type=email],
+    .form-group textarea {
+        padding:.6rem .75rem; border:1px solid #ddd; border-radius:4px;
+        font-size:.92rem; background:white; font-family:inherit;
+    }
+    .form-group textarea { resize:vertical; min-height:70px; }
+    .form-group input:focus, .form-group textarea:focus {
+        outline:none; border-color:{{ branding.color_primary }};
+    }
+    .check-row { display:flex; align-items:center; gap:.5rem; }
+    .check-row input { width:16px; height:16px; }
+    .check-row label { font-weight:500; font-size:.9rem; color:#444; }
+    .subhead { grid-column:1 / -1; font-size:.74rem; font-weight:700; text-transform:uppercase;
+               letter-spacing:.5px; color:#999; margin-top:.5rem; padding-bottom:.4rem; border-bottom:1px solid #f0f0f0; }
+    .form-actions { margin-top:1.75rem; display:flex; gap:.75rem; align-items:center; }
+    .btn { display:inline-block; padding:.7rem 1.4rem; border-radius:4px; text-decoration:none;
+           font-weight:500; cursor:pointer; border:none; font-size:.95rem; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-primary:hover { opacity:.9; }
+    .btn-secondary { background:#6c757d; color:white; }
+    .btn-secondary:hover { background:#5a6268; }
+    .flash.error { background:#fee; color:#c33; border:1px solid #fcc; padding:.8rem 1rem;
+                   border-radius:4px; margin-bottom:1.25rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Company Settings</h1>
+    <p>Used across FieldKit for invoice/estimate PDFs, email sending, and the default tax county for new work.</p>
+</div>
+
+{% if error %}
+<div class="flash error">{{ error }}</div>
+{% endif %}
+
+<div class="card">
+<form method="POST" action="/{{ company_key }}/settings/company">
+    <div class="form-grid">
+
+        <div class="subhead">Identity</div>
+
+        <div class="form-group">
+            <label>Company Name <span class="hint">(required — shown throughout FieldKit)</span></label>
+            <input type="text" name="company_name" value="{{ settings.company_name if settings else '' }}" required>
+        </div>
+
+        <div class="form-group">
+            <label>Legal Name <span class="hint">(for invoices, if different)</span></label>
+            <input type="text" name="legal_name" value="{{ settings.legal_name if settings and settings.legal_name else '' }}">
+        </div>
+
+        <div class="form-group full">
+            <label>Address</label>
+            <input type="text" name="address" placeholder="Street address"
+                   value="{{ settings.address if settings and settings.address else '' }}">
+        </div>
+
+        <div class="form-group">
+            <label>Address Line 2</label>
+            <input type="text" name="address_2" value="{{ settings.address_2 if settings and settings.address_2 else '' }}">
+        </div>
+
+        <div class="form-group">
+            <label>City</label>
+            <input type="text" name="city" value="{{ settings.city if settings and settings.city else '' }}">
+        </div>
+
+        <div class="form-group">
+            <label>State</label>
+            <input type="text" name="state" maxlength="2" style="text-transform:uppercase;"
+                   value="{{ settings.state if settings and settings.state else '' }}">
+        </div>
+
+        <div class="form-group">
+            <label>ZIP</label>
+            <input type="text" name="zip" value="{{ settings.zip if settings and settings.zip else '' }}">
+        </div>
+
+        <div class="form-group">
+            <label>Phone</label>
+            <input type="text" name="phone" value="{{ settings.phone if settings and settings.phone else '' }}">
+        </div>
+
+        <div class="subhead">Email</div>
+
+        <div class="form-group">
+            <label>Email From Name</label>
+            <input type="text" name="email_from_name" placeholder="e.g. Get a Grip Charlotte"
+                   value="{{ settings.email_from_name if settings and settings.email_from_name else '' }}">
+        </div>
+
+        <div class="form-group">
+            <label>Email Reply-To</label>
+            <input type="email" name="email_reply_to" value="{{ settings.email_reply_to if settings and settings.email_reply_to else '' }}">
+        </div>
+
+        <div class="form-group">
+            <label>Alert Email <span class="hint">(uninvoiced-job alerts, escalations)</span></label>
+            <input type="email" name="alert_email" value="{{ settings.alert_email if settings and settings.alert_email else '' }}">
+        </div>
+
+        <div class="subhead">Tax &amp; Hours</div>
+
+        <div class="form-group">
+            <label>Default Tax County</label>
+            <input type="text" name="default_tax_county" value="{{ settings.default_tax_county if settings and settings.default_tax_county else '' }}">
+        </div>
+
+        <div class="form-group">
+            <div class="check-row" style="margin-top:1.6rem;">
+                <input type="checkbox" name="tax_exempt_by_default" id="tax_exempt_by_default"
+                       {% if settings and settings.tax_exempt_by_default %}checked{% endif %}>
+                <label for="tax_exempt_by_default">Tax-exempt by default</label>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label>Business Hours Start</label>
+            <input type="time" name="business_hours_start"
+                   value="{{ settings.business_hours_start if settings else '08:00' }}">
+        </div>
+
+        <div class="form-group">
+            <label>Business Hours End</label>
+            <input type="time" name="business_hours_end"
+                   value="{{ settings.business_hours_end if settings else '17:00' }}">
+        </div>
+
+        <div class="subhead">Invoices &amp; Statements</div>
+
+        <div class="form-group full">
+            <label>Remit-To Text <span class="hint">(printed on invoices/statements)</span></label>
+            <textarea name="remit_to_text">{{ settings.remit_to_text if settings and settings.remit_to_text else '' }}</textarea>
+        </div>
+
+        <div class="form-group full">
+            <label>Invoice Footer Text</label>
+            <textarea name="invoice_footer_text">{{ settings.invoice_footer_text if settings and settings.invoice_footer_text else '' }}</textarea>
+        </div>
+
+    </div>
+
+    <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Save Changes</button>
+        <a href="/{{ company_key }}/settings/tax" class="btn btn-secondary">Cancel</a>
+    </div>
+</form>
+</div>
+{% endblock %}

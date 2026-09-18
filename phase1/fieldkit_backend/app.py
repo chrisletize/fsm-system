@@ -8,7 +8,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 import bcrypt
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from functools import wraps
 import json
 import math
@@ -1199,6 +1199,259 @@ def equipment_delete(company_key, unit_id):
     return redirect(f'/{company_key}/settings/equipment')
 
 # ============================================================================
+# Tax rates & company settings  (admin only)
+#   Effective-dated county tax rates (versioned whole-row, not per-component —
+#   see migration 009) and the single-row-per-DB company_settings table that
+#   the invoice engine (Stage 1) will read for default_tax_county,
+#   tax_exempt_by_default, and the email/PDF branding fields.
+# ============================================================================
+
+def _tax_rate_county_suggestions(company_key):
+    """Existing counties already in this company's tax_rates table, plus the
+    full NC county list for the three NC companies. Kleanit South Florida
+    uses Florida counties, which aren't enumerated anywhere in this codebase,
+    so it only ever suggests counties already entered for it."""
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("SELECT DISTINCT county FROM tax_rates WHERE deleted_at IS NULL ORDER BY county")
+    existing = [r['county'] for r in cur.fetchall()]
+    cur.close(); conn.close()
+    if company_key == 'kleanit_sf':
+        return existing
+    return sorted(set(existing) | set(NC_COUNTIES))
+
+def _save_tax_rate(company_key, rate_id):
+    """Insert (rate_id is None) or update a tax_rates row from request.form.
+    Returns an error string, or None on success.
+
+    Editing an existing row is allowed here (nothing today links a hardened
+    invoice back to a specific tax_rates row id to guard against), but the
+    intended workflow per the build directive is: to actually change a rate,
+    End the current row (sets effective_to) and add a New row for the new
+    rate/date range, so historical invoices keep resolving to the right
+    number via _tax_rate_as_of(). The form carries a warning to that effect."""
+    county         = request.form.get('county', '').strip()
+    state_pct      = _opt_num(request.form.get('state_pct')) or '0'
+    county_pct     = _opt_num(request.form.get('county_pct')) or '0'
+    transit_pct    = _opt_num(request.form.get('transit_pct')) or '0'
+    effective_from = request.form.get('effective_from', '').strip()
+    effective_to   = request.form.get('effective_to', '').strip() or None
+    is_active      = request.form.get('is_active') == 'on'
+
+    if not county:
+        return 'County is required.'
+    if not effective_from:
+        return 'Effective-from date is required.'
+    if effective_to and effective_to < effective_from:
+        return 'Effective-to date cannot be before effective-from.'
+
+    username = session.get('username')
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    try:
+        if rate_id is None:
+            cur.execute("""
+                INSERT INTO tax_rates
+                    (county, state_pct, county_pct, transit_pct,
+                     effective_from, effective_to, is_active, created_by, updated_by)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """, (county, state_pct, county_pct, transit_pct,
+                  effective_from, effective_to, is_active, username, username))
+        else:
+            cur.execute("""
+                UPDATE tax_rates
+                SET county=%s, state_pct=%s, county_pct=%s, transit_pct=%s,
+                    effective_from=%s, effective_to=%s, is_active=%s,
+                    updated_at=CURRENT_TIMESTAMP, updated_by=%s
+                WHERE id=%s AND deleted_at IS NULL
+            """, (county, state_pct, county_pct, transit_pct,
+                  effective_from, effective_to, is_active, username, rate_id))
+    except psycopg2.errors.UniqueViolation:
+        conn.rollback(); cur.close(); conn.close()
+        return f'{county} already has a rate row effective {effective_from}. Pick a different date or edit that row instead.'
+    conn.commit(); cur.close(); conn.close()
+    return None
+
+@app.route('/<company_key>/settings/tax')
+@login_required
+@company_access_required
+@with_branding
+def tax_rates_list(company_key, branding, all_companies, company_access):
+    if session.get('user_role') != 'admin':
+        abort(403)
+    show_all = request.args.get('show_all') == '1'
+    as_of    = request.args.get('as_of', '').strip() or date.today().isoformat()
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    if show_all:
+        cur.execute("""
+            SELECT * FROM tax_rates WHERE deleted_at IS NULL
+            ORDER BY county, effective_from DESC
+        """)
+    else:
+        cur.execute("""
+            SELECT * FROM tax_rates
+            WHERE deleted_at IS NULL
+              AND effective_from <= %s
+              AND (effective_to IS NULL OR effective_to >= %s)
+            ORDER BY county
+        """, (as_of, as_of))
+    rates = cur.fetchall()
+    cur.close(); conn.close()
+    return render_template('tax_rates_list.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        rates=rates, show_all=show_all, as_of=as_of, today=date.today().isoformat(),
+    )
+
+@app.route('/<company_key>/settings/tax/new', methods=['GET', 'POST'])
+@login_required
+@company_access_required
+@with_branding
+def tax_rate_new(company_key, branding, all_companies, company_access):
+    if session.get('user_role') != 'admin':
+        abort(403)
+    error = None
+    if request.method == 'POST':
+        error = _save_tax_rate(company_key, rate_id=None)
+        if not error:
+            return redirect(f'/{company_key}/settings/tax')
+    return render_template('tax_rate_form.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        rate=None, error=error,
+        county_suggestions=_tax_rate_county_suggestions(company_key),
+        today=date.today().isoformat(),
+    )
+
+@app.route('/<company_key>/settings/tax/<int:rate_id>/edit', methods=['GET', 'POST'])
+@login_required
+@company_access_required
+@with_branding
+def tax_rate_edit(company_key, rate_id, branding, all_companies, company_access):
+    if session.get('user_role') != 'admin':
+        abort(403)
+    if request.method == 'POST':
+        error = _save_tax_rate(company_key, rate_id=rate_id)
+        if not error:
+            return redirect(f'/{company_key}/settings/tax')
+    else:
+        error = None
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("SELECT * FROM tax_rates WHERE id = %s AND deleted_at IS NULL", (rate_id,))
+    rate = cur.fetchone()
+    cur.close(); conn.close()
+    if not rate:
+        abort(404)
+    return render_template('tax_rate_form.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        rate=rate, error=error,
+        county_suggestions=_tax_rate_county_suggestions(company_key),
+        today=date.today().isoformat(),
+    )
+
+@app.route('/<company_key>/settings/tax/<int:rate_id>/end', methods=['POST'])
+@login_required
+@company_access_required
+def tax_rate_end(company_key, rate_id):
+    if session.get('user_role') != 'admin':
+        abort(403)
+    effective_to = request.form.get('effective_to', '').strip() or date.today().isoformat()
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("SELECT effective_from FROM tax_rates WHERE id = %s AND deleted_at IS NULL", (rate_id,))
+    row = cur.fetchone()
+    if not row:
+        cur.close(); conn.close()
+        abort(404)
+    if effective_to < row['effective_from'].isoformat():
+        cur.close(); conn.close()
+        return redirect(f'/{company_key}/settings/tax')
+    cur.execute("""
+        UPDATE tax_rates
+        SET effective_to = %s, is_active = FALSE,
+            updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s AND deleted_at IS NULL
+    """, (effective_to, session.get('username'), rate_id))
+    conn.commit(); cur.close(); conn.close()
+    return redirect(f'/{company_key}/settings/tax')
+
+def _save_company_settings(company_key):
+    """Update the single company_settings row from request.form.
+    Returns an error string, or None on success."""
+    company_name    = request.form.get('company_name', '').strip()
+    if not company_name:
+        return 'Company name is required.'
+
+    fields = {
+        'company_name':          company_name,
+        'legal_name':            request.form.get('legal_name', '').strip() or None,
+        'address':               request.form.get('address', '').strip() or None,
+        'address_2':             request.form.get('address_2', '').strip() or None,
+        'city':                  request.form.get('city', '').strip() or None,
+        'state':                 request.form.get('state', '').strip().upper()[:2] or None,
+        'zip':                   request.form.get('zip', '').strip() or None,
+        'phone':                 request.form.get('phone', '').strip() or None,
+        'email_from_name':       request.form.get('email_from_name', '').strip() or None,
+        'email_reply_to':        request.form.get('email_reply_to', '').strip() or None,
+        'alert_email':           request.form.get('alert_email', '').strip() or None,
+        'default_tax_county':    request.form.get('default_tax_county', '').strip() or None,
+        'tax_exempt_by_default': request.form.get('tax_exempt_by_default') == 'on',
+        'state_base_rate':       _opt_num(request.form.get('state_base_rate')),
+        'business_hours_start':  request.form.get('business_hours_start') or '08:00',
+        'business_hours_end':    request.form.get('business_hours_end') or '17:00',
+        'remit_to_text':         request.form.get('remit_to_text', '').strip() or None,
+        'invoice_footer_text':   request.form.get('invoice_footer_text', '').strip() or None,
+    }
+
+    username = session.get('username')
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        UPDATE company_settings
+        SET company_name=%s, legal_name=%s, address=%s, address_2=%s, city=%s,
+            state=%s, zip=%s, phone=%s, email_from_name=%s, email_reply_to=%s,
+            alert_email=%s, default_tax_county=%s, tax_exempt_by_default=%s,
+            state_base_rate=%s, business_hours_start=%s, business_hours_end=%s,
+            remit_to_text=%s, invoice_footer_text=%s,
+            updated_at=CURRENT_TIMESTAMP, updated_by=%s
+        WHERE deleted_at IS NULL
+    """, (fields['company_name'], fields['legal_name'], fields['address'], fields['address_2'],
+          fields['city'], fields['state'], fields['zip'], fields['phone'],
+          fields['email_from_name'], fields['email_reply_to'], fields['alert_email'],
+          fields['default_tax_county'], fields['tax_exempt_by_default'], fields['state_base_rate'],
+          fields['business_hours_start'], fields['business_hours_end'],
+          fields['remit_to_text'], fields['invoice_footer_text'], username))
+    conn.commit(); cur.close(); conn.close()
+    return None
+
+@app.route('/<company_key>/settings/company', methods=['GET', 'POST'])
+@login_required
+@company_access_required
+@with_branding
+def company_settings_edit(company_key, branding, all_companies, company_access):
+    if session.get('user_role') != 'admin':
+        abort(403)
+    error = None
+    if request.method == 'POST':
+        error = _save_company_settings(company_key)
+        if not error:
+            return redirect(f'/{company_key}/settings/company')
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("SELECT * FROM company_settings WHERE deleted_at IS NULL LIMIT 1")
+    settings = cur.fetchone()
+    cur.close(); conn.close()
+    return render_template('company_settings_form.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        settings=settings, error=error,
+    )
+
+# ============================================================================
 # Work orders  (admin + manager + office)
 #   Core create/edit/list. Dispatch board, extraction queue, and reports are
 #   Phase 4 items built on top of this later.
@@ -1314,22 +1567,44 @@ def _next_invoice_number(cur, company_key):
     return f'{prefix}-{year}-{seq:04d}'
 
 
-def _compute_invoice_tax(cur, invoice_id):
-    """Resolve and total the tax for an invoice from its CURRENT county rate.
-    Returns (tax_rate_pct, subtotal, tax_total, total).
-
-    Reads the live tax_rates table — this is the freeze-at-harden read. Once
-    the caller writes these onto the invoice, later edits to tax_rates never
-    change this invoice (Pattern 4: effective-time pinning). A county with no
-    row resolves to 0% (a valid un-taxed invoice, e.g. Florida) rather than
-    failing; the absence shows as tax_rate_pct = None for optional flagging."""
+def _tax_rate_as_of(cur, county, as_of):
+    """The tax_rates row effective for `county` on date `as_of`, or None.
+    Single source of truth for effective-dated rate lookups — anything that
+    needs "what rate applied on this date" (invoice hardening, the tax
+    report, the /settings/tax page's "active as of" filter) goes through
+    this, never a bare `WHERE is_active = TRUE` query (is_active marks
+    "currently the live row for editing purposes", not "in range on a given
+    date" — a row can be is_active=FALSE and still be the correct historical
+    answer for an old date, as Mecklenburg's pre-2026-07-01 row is)."""
     cur.execute("""
-        SELECT tax_county FROM invoices WHERE id = %s AND deleted_at IS NULL
+        SELECT * FROM tax_rates
+        WHERE county = %s AND deleted_at IS NULL
+          AND effective_from <= %s
+          AND (effective_to IS NULL OR effective_to >= %s)
+    """, (county, as_of, as_of))
+    return cur.fetchone()
+
+def _compute_invoice_tax(cur, invoice_id):
+    """Resolve and total the tax for an invoice from the county rate that was
+    effective on the invoice's own invoice_date. Returns
+    (tax_rate_pct, subtotal, tax_total, total).
+
+    Anchoring on invoice_date (not "today") is what makes a later correction
+    to tax_rates (e.g. NC changing a county's rate) never change an invoice
+    that was hardened under the old rate — the freeze happens because the
+    caller writes these resolved numbers onto the invoice at harden time, not
+    because this function is only ever called once. A county with no row
+    effective on that date resolves to 0% (a valid un-taxed invoice, e.g.
+    Florida before its rate table is filled in) rather than failing; the
+    absence shows as tax_rate_pct = None for optional flagging."""
+    cur.execute("""
+        SELECT tax_county, invoice_date FROM invoices WHERE id = %s AND deleted_at IS NULL
     """, (invoice_id,))
     inv = cur.fetchone()
     if not inv:
         return None, None, None, None
     county = inv['tax_county']
+    as_of  = inv['invoice_date']
 
     cur.execute("""
         SELECT
@@ -1343,12 +1618,8 @@ def _compute_invoice_tax(cur, invoice_id):
     taxable_base = sums['taxable_base']
 
     rate_pct = None
-    if county:
-        cur.execute("""
-            SELECT total_pct FROM tax_rates
-            WHERE county = %s AND is_active = TRUE AND deleted_at IS NULL
-        """, (county,))
-        r = cur.fetchone()
+    if county and as_of:
+        r = _tax_rate_as_of(cur, county, as_of)
         if r:
             rate_pct = r['total_pct']
 

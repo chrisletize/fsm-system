@@ -206,3 +206,6 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 .env
+
+# Claude Code local permission overrides
+.claude/settings.local.json
