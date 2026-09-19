@@ -391,6 +391,72 @@
     {% endif %}
 </div>
 
+<!-- Jobs -->
+<div class="card" style="margin-bottom:1.25rem;">
+    <div class="section-title">
+        Jobs
+        {% if jobs %}<span style="font-weight:400; text-transform:none; letter-spacing:0; color:#aaa; margin-left:0.4rem;">({{ jobs|length }})</span>{% endif %}
+    </div>
+    {% if jobs %}
+    <table style="width:100%; border-collapse:collapse; font-size:.88rem;">
+        <thead>
+            <tr>
+                <th style="text-align:left; padding:.4rem .5rem; border-bottom:1px solid #eee; color:#888; font-size:.74rem; text-transform:uppercase;">Number</th>
+                <th style="text-align:left; padding:.4rem .5rem; border-bottom:1px solid #eee; color:#888; font-size:.74rem; text-transform:uppercase;">Date</th>
+                <th style="text-align:left; padding:.4rem .5rem; border-bottom:1px solid #eee; color:#888; font-size:.74rem; text-transform:uppercase;">Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for job in jobs %}
+            <tr>
+                <td style="padding:.5rem; border-bottom:1px solid #f5f5f5;">
+                    <a href="/{{ company_key }}/workorders/{{ job.id }}" style="color:{{ branding.color_primary }};">{{ job.work_order_number }}</a>
+                </td>
+                <td style="padding:.5rem; border-bottom:1px solid #f5f5f5; color:#999;">{{ job.start_date or '—' }}</td>
+                <td style="padding:.5rem; border-bottom:1px solid #f5f5f5;">{{ job.status }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="no-locations">No jobs on file.</div>
+    {% endif %}
+</div>
+
+<!-- Invoices -->
+<div class="card" style="margin-bottom:1.25rem;">
+    <div class="section-title">
+        Invoices
+        {% if customer_invoices %}<span style="font-weight:400; text-transform:none; letter-spacing:0; color:#aaa; margin-left:0.4rem;">({{ customer_invoices|length }})</span>{% endif %}
+    </div>
+    {% if customer_invoices %}
+    <table style="width:100%; border-collapse:collapse; font-size:.88rem;">
+        <thead>
+            <tr>
+                <th style="text-align:left; padding:.4rem .5rem; border-bottom:1px solid #eee; color:#888; font-size:.74rem; text-transform:uppercase;">Number</th>
+                <th style="text-align:left; padding:.4rem .5rem; border-bottom:1px solid #eee; color:#888; font-size:.74rem; text-transform:uppercase;">Date</th>
+                <th style="text-align:left; padding:.4rem .5rem; border-bottom:1px solid #eee; color:#888; font-size:.74rem; text-transform:uppercase;">Status</th>
+                <th style="text-align:right; padding:.4rem .5rem; border-bottom:1px solid #eee; color:#888; font-size:.74rem; text-transform:uppercase;">Balance</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for inv in customer_invoices %}
+            <tr>
+                <td style="padding:.5rem; border-bottom:1px solid #f5f5f5;">
+                    <a href="/{{ company_key }}/invoices/{{ inv.id }}" style="color:{{ branding.color_primary }};">{{ inv.invoice_number }}</a>
+                </td>
+                <td style="padding:.5rem; border-bottom:1px solid #f5f5f5; color:#999;">{{ inv.invoice_date }}</td>
+                <td style="padding:.5rem; border-bottom:1px solid #f5f5f5;">{{ inv.display_status }}</td>
+                <td style="padding:.5rem; border-bottom:1px solid #f5f5f5; text-align:right;">{% if inv.balance is not none %}${{ '%.2f'|format(inv.balance) }}{% else %}—{% endif %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="no-locations">No invoices on file.</div>
+    {% endif %}
+</div>
+
 <!-- Contacts -->
 <div class="card" style="margin-bottom:1.25rem;">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">

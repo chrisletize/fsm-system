@@ -138,7 +138,58 @@ regression check — still 14/14. Confirmed via direct query that the smoke test
 transaction (including its temp tables) left zero trace after rollback.
 
 **Deferred:** `v_invoice_balances` SQL view and the real `payment_applications`/
-`invoice_adjustments` tables — Increment 1.4 (migration 011), per D-009. No routes/UI
-yet — that's Increment 1.3, next.
+`invoice_adjustments` tables — Increment 1.4 (migration 011), per D-009.
 
-Proceeding to Increment 1.3 (create invoice from work order + invoice UI).
+---
+
+## 2026-09-19 — Stage 1, Increment 1.3 — Create invoice from work order + invoice UI
+
+**What:**
+- `POST /<company>/workorders/<id>/invoice/new`: guards (Completed required, No Charge
+  refused, one invoice per WO — a second attempt follows any reissue chain and
+  redirects to the current invoice instead of creating a duplicate), snapshots
+  `work_order_line_items` onto a new Live rev-0 version (equipment lines keep whatever
+  billable-days quantity `_save_work_order` already computed — copied, not
+  recomputed), resolves `tax_county` via the service-location → customer →
+  `company_settings.default_tax_county` fallback chain, applies the three-layer
+  taxability exemption (catalog item → customer → location), flips the WO to
+  `Invoiced` with a status-history row, redirects to the new invoice.
+- `GET /<company>/invoices` (search/status/date-range/with-balance filters),
+  `GET /<company>/invoices/<id>` (two-column detail: line items with live-or-frozen
+  ordinals, totals, full revision history, status timeline, state-gated sidebar
+  actions), `GET/POST /<company>/invoices/<id>/edit` (Live only — description/qty/
+  price/taxable per line, remove a line, add a new standard-catalog line via the
+  restricted combobox, `notes_to_customer`/`invoice_date`/`tax_county`),
+  `POST .../regenerate` (re-snapshot from the WO), and the six thin transition routes
+  (`harden`/`reopen`/`send`/`void`/`reissue`/`revise`) that all just call
+  `transition_invoice()` — see D-014 on why the line editor isn't a literal copy of the
+  work-order form's brick.
+- Work order detail: "Generate invoice now?" banner when Completed and uninvoiced,
+  yellow "not invoiced yet" banner otherwise, "View Invoice" link once one exists
+  (follows the reissue chain). Work order edit redirects to detail (not the list) when
+  status becomes Completed, so the prompt is right there.
+- Customer detail: new Jobs and Invoices sections (D-015).
+- Added minimal flash-message infrastructure (D-013) since this increment's own spec
+  needed it and nothing existed yet.
+
+**Migration:** none (pure application-layer increment on top of migration 010's schema).
+
+**Commit:** (pending — `app.py`, five templates, two smoke tests, this entry, decisions log).
+
+**Smoke test:** `tests/smoke_invoice_routes.py` — drives the real Flask routes (test
+client, forged admin session) against live `fieldkit_getagrip`, not just the DB layer:
+creates a real Completed work order with a standard + a retrieved equipment line,
+posts to `/invoice/new`, verifies the WO flips to Invoiced, the snapshot subtotal
+matches, a second `/invoice/new` redirects to the same invoice rather than
+duplicating; renders every new page (list with each filter, detail, edit); drives
+edit → harden → send → revise through the actual HTTP routes and checks
+`current_version_id` moves; drives void → reissue on a second work order and checks
+the redirect lands on a genuinely new invoice id. Everything created is hard-deleted
+in a `finally` block — confirmed zero residue afterward. Also confirmed a No-Charge
+work order is correctly refused. Re-ran `smoke_tax_settings.py` and
+`smoke_invoice_versions.py` as regression checks — both still green.
+
+**Deferred:** Record Payment, PDF download, and the Portal panel — later increments
+(1.4/1.5/1.8) — the invoice detail sidebar says so rather than showing dead buttons.
+
+Proceeding to Increment 1.4 (payments, applications, adjustments, credits).

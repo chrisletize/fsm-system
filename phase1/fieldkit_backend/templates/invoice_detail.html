@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+{% block title %}{{ inv.invoice_number }} — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .breadcrumb { font-size:.82rem; color:#999; margin-bottom:.75rem; }
+    .breadcrumb a { color:{{ branding.color_primary }}; text-decoration:none; }
+    .page-header { margin-bottom:1.5rem; display:flex; justify-content:space-between; align-items:flex-start; gap:1rem; flex-wrap:wrap; }
+    .page-header h1 { font-size:1.6rem; color:{{ branding.color_primary }}; }
+    .detail-grid { display:grid; grid-template-columns:70% 30%; gap:1.5rem; align-items:start; }
+    @media (max-width: 900px) { .detail-grid { grid-template-columns:1fr; } }
+    .section-title { font-size:.75rem; font-weight:700; text-transform:uppercase; letter-spacing:.6px;
+                      color:#888; margin-bottom:.75rem; padding-bottom:.5rem; border-bottom:1px solid #eee; }
+    table { width:100%; border-collapse:collapse; font-size:.88rem; }
+    th { text-align:left; padding:.5rem .7rem; border-bottom:2px solid #eee;
+         font-size:.74rem; text-transform:uppercase; color:#888; }
+    td { padding:.6rem .7rem; border-bottom:1px solid #f0f0f0; }
+    .num { text-align:right; font-variant-numeric:tabular-nums; }
+    .muted { color:#aaa; }
+    .totals-row td { border-top:2px solid #ddd; border-bottom:none; font-weight:600; }
+    .badge { display:inline-block; padding:.2rem .65rem; border-radius:8px; font-size:.8rem; font-weight:500; }
+    .badge-draft { background:#f5f5f5; color:#777; }
+    .badge-hardened { background:#fff4e5; color:#b26a00; }
+    .badge-sent { background:#eef2ff; color:#3949ab; }
+    .badge-partiallypaid { background:#fff8e1; color:#8a6d00; }
+    .badge-paid { background:#e8f5e9; color:#2e7d32; }
+    .badge-void { background:#fdecea; color:#c0392b; }
+    .sidebar-card { margin-bottom:1.25rem; }
+    .sidebar-card .section-title { margin-bottom: .6rem; }
+    .side-field { font-size:.85rem; margin-bottom:.6rem; }
+    .side-field .label { color:#999; font-size:.74rem; text-transform:uppercase; letter-spacing:.4px; }
+    .side-field a { color:{{ branding.color_primary }}; }
+    .btn { display:block; width:100%; box-sizing:border-box; padding:.6rem .9rem; border-radius:4px;
+           text-decoration:none; font-weight:500; cursor:pointer; border:none; font-size:.88rem;
+           margin-bottom:.5rem; text-align:center; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-primary:hover { opacity:.9; }
+    .btn-outline { background:white; color:{{ branding.color_primary }}; border:1px solid {{ branding.color_primary }}; }
+    .btn-danger { background:#fdecea; color:#c0392b; border:1px solid #f5c6cb; }
+    .action-form textarea, .action-form input[type=text] {
+        width:100%; box-sizing:border-box; padding:.5rem .6rem; border:1px solid #ddd;
+        border-radius:4px; font-size:.85rem; margin-bottom:.5rem; font-family:inherit;
+    }
+    .history-row { font-size:.82rem; padding:.5rem 0; border-bottom:1px solid #f5f5f5; }
+    .history-row .meta { color:#aaa; }
+    .version-row.superseded { opacity:.6; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="/{{ company_key }}/invoices">Invoices</a> /
+    <a href="/{{ company_key }}/customers/{{ inv.customer_id }}">{{ inv.customer_name }}</a> /
+    {{ inv.invoice_number }}
+</div>
+
+<div class="page-header">
+    <div>
+        <h1>{{ inv.invoice_number }}
+            {% if ver and ver.revision_number > 0 %}<span class="muted" style="font-size:1rem;">Rev {{ ver.revision_number }}</span>{% endif %}
+        </h1>
+        <span class="badge badge-{{ display_status|lower|replace(' ', '') }}">{{ display_status }}</span>
+    </div>
+</div>
+
+<div class="detail-grid">
+    <div>
+        <div class="card">
+            <div class="section-title">Line Items</div>
+            {% if line_items %}
+            <table>
+                <thead>
+                    <tr><th>Description</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Total</th><th>Tax</th></tr>
+                </thead>
+                <tbody>
+                    {% for li in line_items %}
+                    <tr>
+                        <td>{{ li.resolved_label or li.description or li.catalog_name }}</td>
+                        <td class="num">{{ li.quantity if li.quantity is not none else '—' }}</td>
+                        <td class="num">${{ '%.2f'|format(li.unit_price) }}</td>
+                        <td class="num">{% if li.total is not none %}${{ '%.2f'|format(li.total) }}{% else %}<span class="muted">accruing</span>{% endif %}</td>
+                        <td class="muted">{{ 'Taxable' if li.is_taxable else 'Exempt' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+                <tfoot>
+                    <tr class="totals-row"><td colspan="3">Subtotal</td><td class="num">${{ '%.2f'|format(ver.subtotal) }}</td><td></td></tr>
+                    {% if ver.total is not none %}
+                    <tr class="totals-row"><td colspan="3">Tax ({{ ver.tax_rate_pct or 0 }}% — {{ ver.tax_county or '—' }})</td><td class="num">${{ '%.2f'|format(ver.tax_total or 0) }}</td><td></td></tr>
+                    <tr class="totals-row"><td colspan="3">Total</td><td class="num">${{ '%.2f'|format(ver.total) }}</td><td></td></tr>
+                    <tr class="totals-row"><td colspan="3">Balance Due</td><td class="num">${{ '%.2f'|format(balance) if balance is not none else '—' }}</td><td></td></tr>
+                    {% endif %}
+                </tfoot>
+            </table>
+            {% else %}
+            <p class="muted">No line items yet.</p>
+            {% endif %}
+        </div>
+
+        <div class="card">
+            <div class="section-title">Revision History</div>
+            {% for v in versions %}
+            <div class="version-row {% if v.state == 'Superseded' %}superseded{% endif %}" style="padding:.5rem 0; border-bottom:1px solid #f5f5f5;">
+                <strong>Rev {{ v.revision_number }}</strong> — {{ v.state }}
+                {% if v.total is not none %}— ${{ '%.2f'|format(v.total) }}{% endif %}
+                {% if v.revision_reason %}<div class="muted" style="font-size:.82rem;">{{ v.revision_reason }}</div>{% endif %}
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="card">
+            <div class="section-title">Payments &amp; Adjustments</div>
+            <p class="muted">Payment recording arrives in a later increment.</p>
+        </div>
+
+        <div class="card">
+            <div class="section-title">Status Timeline</div>
+            {% for h in history %}
+            <div class="history-row">
+                <strong>{{ h.to_state or h.state }}</strong>
+                <span class="meta">— {{ h.changed_by }}, {{ h.changed_at_display }}</span>
+                {% if h.notes %}<div>{{ h.notes }}</div>{% endif %}
+            </div>
+            {% else %}
+            <p class="muted">No history yet.</p>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div>
+        <div class="card sidebar-card">
+            <div class="section-title">Details</div>
+            <div class="side-field"><div class="label">Customer</div><a href="/{{ company_key }}/customers/{{ inv.customer_id }}">{{ inv.customer_name }}</a></div>
+            {% if inv.work_order_number %}
+            <div class="side-field"><div class="label">Work Order</div><a href="/{{ company_key }}/workorders/{{ inv.work_order_id }}">{{ inv.work_order_number }}</a></div>
+            {% endif %}
+            {% if inv.location_name %}
+            <div class="side-field"><div class="label">Location</div>{{ inv.location_name }}</div>
+            {% endif %}
+            <div class="side-field"><div class="label">Invoice Date</div>{{ inv.invoice_date }}</div>
+            <div class="side-field"><div class="label">Source</div>{{ inv.source }}</div>
+        </div>
+
+        <div class="card sidebar-card">
+            <div class="section-title">Actions</div>
+
+            {% if ver and ver.state == 'Live' %}
+            <a href="/{{ company_key }}/invoices/{{ inv.id }}/edit" class="btn btn-outline">Edit</a>
+            <form class="action-form" method="POST" action="/{{ company_key }}/invoices/{{ inv.id }}/harden"
+                  onsubmit="return confirm('Harden this invoice? Freezes the totals and equipment ordinals.');">
+                <button type="submit" class="btn btn-primary">Harden</button>
+            </form>
+            {% endif %}
+
+            {% if ver and ver.state in ('Hardened', 'Sent') %}
+            <form class="action-form" method="POST" action="/{{ company_key }}/invoices/{{ inv.id }}/reopen"
+                  onsubmit="return confirm('Reopen this invoice back to Live? Clears the frozen totals.');">
+                <textarea name="notes" placeholder="Reason (optional)" rows="2"></textarea>
+                <button type="submit" class="btn btn-outline">Reopen</button>
+            </form>
+            {% endif %}
+
+            {% if ver and ver.state == 'Hardened' %}
+            <form class="action-form" method="POST" action="/{{ company_key }}/invoices/{{ inv.id }}/send"
+                  onsubmit="return confirm('Mark this invoice Sent?');">
+                <input type="text" name="sent_to_emails" placeholder="Recipient email(s), optional">
+                <button type="submit" class="btn btn-primary">Send</button>
+            </form>
+            {% endif %}
+
+            {% if ver and ver.state == 'Sent' %}
+            <form class="action-form" method="POST" action="/{{ company_key }}/invoices/{{ inv.id }}/revise"
+                  onsubmit="return confirm('Start a revision? The current version will be marked Superseded.');">
+                <textarea name="revision_reason" placeholder="Revision reason (required)" rows="2" required></textarea>
+                <button type="submit" class="btn btn-outline">Revise</button>
+            </form>
+            {% endif %}
+
+            {% if inv.receivable_state == 'open' %}
+            <form class="action-form" method="POST" action="/{{ company_key }}/invoices/{{ inv.id }}/void"
+                  onsubmit="return confirm('Void this invoice? This cannot be undone directly — you would need to Reissue.');">
+                <textarea name="void_reason" placeholder="Void reason (required)" rows="2" required></textarea>
+                <button type="submit" class="btn btn-danger">Void</button>
+            </form>
+            {% endif %}
+
+            {% if inv.receivable_state == 'void' and not inv.reissued_as_invoice_id %}
+            <form class="action-form" method="POST" action="/{{ company_key }}/invoices/{{ inv.id }}/reissue"
+                  onsubmit="return confirm('Reissue this voided invoice under a new number?');">
+                <button type="submit" class="btn btn-primary">Reissue</button>
+            </form>
+            {% endif %}
+            {% if inv.reissued_as_invoice_id %}
+            <a href="/{{ company_key }}/invoices/{{ inv.reissued_as_invoice_id }}" class="btn btn-outline">View Reissue →</a>
+            {% endif %}
+            {% if inv.reissue_of_invoice_id %}
+            <a href="/{{ company_key }}/invoices/{{ inv.reissue_of_invoice_id }}" class="btn btn-outline">View Original (Voided) →</a>
+            {% endif %}
+
+            <p class="muted" style="font-size:.78rem; margin-top:.75rem;">
+                Record Payment, PDF download, and the Portal panel arrive in later increments.
+            </p>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -24,7 +24,7 @@ reporting until FieldKit's billing is complete.
 | Billing page | Minimal v1 only — customer list + billing-contact readiness + CSV export. No balances/aging/statements. |
 | `tax_rates` | Built, effective-dated (migration 009), `/settings/tax` UI live. 101 rows (NC) in GAG/KC/CTS, 0 in Kleanit SF. |
 | `company_settings` | Built (migration 009), `/settings/company` UI live. One seeded row per DB (`company_name` only; everything else NULL pending Chris/Michele). |
-| Invoice engine | Receivable/version schema (migration 010): `invoices`/`invoice_versions`/`invoice_version_line_items`/`invoice_status_history`. `transition_invoice()` implements all 6 edges (Hardened/Live-reopen/Sent/Revise/Void/Reissue). Zero rows in production, no routes/UI yet. |
+| Invoice engine | Receivable/version schema (migration 010) + full UI (Increment 1.3): create-from-work-order, list/detail/edit, all 6 transitions wired to routes. Work order detail has the invoice prompt/link; customer detail has Jobs/Invoices sections. No payments/PDF/portal yet (1.4/1.5/1.8). Zero real invoice rows in production yet (only test fixtures, created and cleaned up by the smoke test). |
 | `customer_compliance_portals` | Table exists, 0 rows, no UI. |
 | Dispatch, extraction queue, reports, estimates, sales CRM, company settings, payment methods, tax settings UI, tags, dashboard stats | Not built |
 
@@ -34,9 +34,10 @@ production databases directly, not taken on faith from either doc.
 
 ## Current build
 Following `docs/FIELDKIT_BUILD_DIRECTIVE_2026-09.md` stage by stage. Stage 0 complete.
-**Stage 1 — Finish invoicing & billing**: Increment 1.1 (tax rates + company settings)
-and Increment 1.2 (receivable/version invoice refactor) complete. Next: Increment 1.3
-(create invoice from work order + invoice UI/routes).
+**Stage 1 — Finish invoicing & billing**: Increments 1.1 (tax rates + company
+settings), 1.2 (receivable/version invoice refactor), and 1.3 (create invoice from
+work order + invoice UI) complete. Next: Increment 1.4 (payments, applications,
+adjustments, credits).
 
 Decisions Chris has already made for this build (delinquent threshold = 90 days past
 invoice date, FL tax left empty/exempt for Kleanit SF, SF-import receivables excluded

@@ -121,6 +121,55 @@ increment, so the receivable-level backward pointer only ever means "reissued fr
 making the rename the honest choice over leaving a now-single-purpose column with its
 old dual-purpose name. See migration 010's header comment for the full reasoning.
 
+D-012 — [DEFAULTED] Increment 1.3: invoice routes (and the new "Invoices" nav link)
+are gated `admin`/`manager`/`office`, matching the existing Work Orders and Billing
+routes' role check — even though Appendix A's permissions matrix only lists
+admin/manager/salesperson/technician columns and doesn't mention `office` at all.
+Given the directive's own framing ("Michele can run the entire customer → work order →
+dispatch → invoice → payment → statement/tax-report cycle in FieldKit") and that
+Michele's role is `office`, excluding `office` from invoices would contradict the
+build's stated goal. Flagging in case the matrix's omission of `office` was
+intentional rather than an oversight — easy one-line change either way.
+
+D-013 — [MODEL] Added minimal flash-message infrastructure (Flask's built-in
+`flash()`/`get_flashed_messages()`, rendered as plain colored banners in `base.html`)
+since nothing like it existed yet and this increment's own spec requires it ("a second
+request redirects to the existing one with a flash"). Deliberately NOT the "toast"
+mentioned in directive §1.2 — that implies auto-dismissing overlay notifications, a
+bigger piece of shared UI infrastructure than one increment's redirect messages
+justify building un-asked. Revisit if/when a real toast system gets built; the flash
+category strings (`success`/`error`/`info`) were chosen to make that swap easy later.
+
+D-014 — [DEFAULTED] The invoice edit page's line-item editor does NOT reuse the work
+order form's two-row-type editor verbatim — that brick is JS embedded in
+`workorder_form.html`'s own `<script>` block and, per
+`docs/FIELDKIT_REUSABLE_BRICKS.md`, is explicitly listed as a "candidate brick...not
+yet extracted" into `base.html`, so there's no shared module to import from a
+single-file-monolith Flask app without either duplicating ~300 lines of JS or
+undertaking a real extraction (out of scope for this increment). Built a smaller,
+purpose-fit editor instead: existing lines get inline-editable description/qty/price/
+taxable + remove; new lines can only be added via Brick #2 (the restricted combobox,
+which IS already shared in `base.html`) against standard catalog items only —
+equipment lines only ever arrive via WO snapshot or "Regenerate from Work Order,"
+never manual entry, since they need `deployed_at`/`retrieved_at` tracking that only
+makes sense sourced from the work order. This satisfies "no adding lines that aren't
+from the catalog" while keeping today's scope sane. Extracting the two-row-type
+editor into a real shared brick is still open (tagged in the bricks doc since July).
+
+D-015 — [UX] Customer detail's "Invoices tab" and "Jobs tab" requirement (§2.3) is
+rendered as two more stacked cards matching every other section on that page (Property
+Details, Service Locations, Contacts, ...), not literal tab-switching UI — no tab
+pattern exists anywhere else in the app, and the directive's own phrasing ("if not
+already present in that shape") allows this. Consistent with "keep the existing visual
+language" (§1.2).
+
+D-016 — [DEFAULTED] The invoices list page and customer-detail invoices section filter
+on display status and balance in Python after computing them per row
+(`invoice_display_status`/`invoice_balance`), not in SQL — `v_invoice_balances`
+doesn't exist until migration 011 (Increment 1.4). Fine at today's invoice volumes;
+switch the list query to the view once it exists rather than duplicating its math in a
+raw `WHERE`.
+
 ---
 
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:

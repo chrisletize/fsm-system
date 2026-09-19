@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% from "_macros.html" import restricted_combo_field, autocomplete_field %}
+{% block title %}Edit {{ inv.invoice_number }} — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { margin-bottom:1.5rem; display:flex; justify-content:space-between; align-items:flex-end; flex-wrap:wrap; gap:1rem; }
+    .page-header h1 { font-size:1.6rem; color:{{ branding.color_primary }}; }
+    .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:1.1rem 1.5rem; margin-bottom:1.5rem; }
+    .form-group { display:flex; flex-direction:column; gap:.35rem; }
+    .form-group.full { grid-column:1 / -1; }
+    .form-group label { font-size:.85rem; font-weight:600; color:#555; }
+    .form-group input[type=text], .form-group input[type=date], .form-group textarea {
+        padding:.6rem .75rem; border:1px solid #ddd; border-radius:4px; font-size:.92rem; font-family:inherit;
+    }
+    table { width:100%; border-collapse:collapse; font-size:.88rem; }
+    th { text-align:left; padding:.5rem .6rem; border-bottom:2px solid #eee; font-size:.74rem; text-transform:uppercase; color:#888; }
+    td { padding:.5rem .6rem; border-bottom:1px solid #f0f0f0; vertical-align:middle; }
+    td input[type=text] { width:100%; box-sizing:border-box; padding:.4rem .5rem; border:1px solid #ddd; border-radius:4px; }
+    td input[type=number] { width:90px; padding:.4rem .5rem; border:1px solid #ddd; border-radius:4px; }
+    .num { text-align:right; }
+    .btn { display:inline-block; padding:.6rem 1.2rem; border-radius:4px; text-decoration:none;
+           font-weight:500; cursor:pointer; border:none; font-size:.9rem; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-secondary { background:#6c757d; color:white; }
+    .btn-outline { background:white; color:{{ branding.color_primary }}; border:1px solid {{ branding.color_primary }}; }
+    .btn-link-danger { background:none; border:none; color:#c0392b; cursor:pointer; font-size:.78rem; }
+    .form-actions { margin-top:1.5rem; display:flex; gap:.75rem; align-items:center; }
+    .flash.error { background:#fee; color:#c33; border:1px solid #fcc; padding:.8rem 1rem; border-radius:4px; margin-bottom:1.25rem; }
+    .add-line-row { display:flex; gap:.6rem; align-items:flex-end; margin-top:1rem; }
+    .add-line-row .ac-wrap { flex:1; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Edit {{ inv.invoice_number }}</h1>
+    <form method="POST" action="/{{ company_key }}/invoices/{{ inv.id }}/regenerate"
+          onsubmit="return confirm('Regenerate lines from the work order? This replaces every current line with a fresh snapshot.');">
+        <button type="submit" class="btn btn-outline" {% if not inv.work_order_id %}disabled{% endif %}>Regenerate from Work Order</button>
+    </form>
+</div>
+
+{% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+
+<form method="POST" action="/{{ company_key }}/invoices/{{ inv.id }}/edit">
+    <div class="card">
+        <div class="form-grid">
+            <div class="form-group">
+                <label>Invoice Date</label>
+                <input type="date" name="invoice_date" value="{{ inv.invoice_date }}">
+            </div>
+            <div class="form-group">
+                <label>Tax County</label>
+                <input type="text" name="tax_county" value="{{ ver.tax_county or '' }}">
+            </div>
+            <div class="form-group full">
+                <label>Notes to Customer</label>
+                <textarea name="notes_to_customer" rows="2">{{ ver.notes_to_customer or '' }}</textarea>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <table>
+            <thead>
+                <tr><th>Description</th><th class="num">Qty</th><th class="num">Price</th><th>Taxable</th><th></th></tr>
+            </thead>
+            <tbody>
+                {% for li in line_items %}
+                <tr>
+                    <td>
+                        <input type="hidden" name="line_id" value="{{ li.id }}">
+                        <input type="text" name="description" value="{{ li.description or li.catalog_name }}">
+                    </td>
+                    <td class="num"><input type="number" name="quantity" step="0.01" min="0.01" value="{{ li.quantity if li.quantity is not none else '' }}"></td>
+                    <td class="num"><input type="number" name="unit_price" step="0.01" min="0" value="{{ '%.2f'|format(li.unit_price) }}"></td>
+                    <td><input type="checkbox" name="taxable_{{ li.id }}" {% if li.is_taxable %}checked{% endif %}></td>
+                    <td>
+                        <label style="font-size:.8rem; color:#c0392b;">
+                            <input type="checkbox" name="removed_line_id" value="{{ li.id }}"> Remove
+                        </label>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="5" style="text-align:center; color:#aaa;">No lines yet.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <div class="add-line-row">
+{{ restricted_combo_field('new_catalog_item_id', catalog_options, none, '', 'Add a line from the catalog...') }}
+        </div>
+        <p style="font-size:.78rem; color:#aaa; margin-top:.4rem;">
+            Only standard catalog items can be added here — equipment lines come from the work order (use Regenerate).
+        </p>
+    </div>
+
+    <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Save Changes</button>
+        <a href="/{{ company_key }}/invoices/{{ inv.id }}" class="btn btn-secondary">Cancel</a>
+    </div>
+</form>
+{% endblock %}

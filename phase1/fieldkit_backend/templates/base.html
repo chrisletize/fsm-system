@@ -347,6 +347,15 @@
             box-shadow: 0 1px 3px rgba(0,0,0,0.1);
             margin-bottom: 1.5rem;
         }
+
+        .flash-messages { margin: 1.25rem 0 0; }
+        .flash-msg {
+            padding: .8rem 1.1rem; border-radius: 6px; margin-bottom: .6rem;
+            font-size: .92rem; font-weight: 500;
+        }
+        .flash-msg.flash-success { background: #e8f5e9; color: #2e7d32; border: 1px solid #c8e6c9; }
+        .flash-msg.flash-error   { background: #fee; color: #c33; border: 1px solid #fcc; }
+        .flash-msg.flash-info    { background: #eef2ff; color: #3949ab; border: 1px solid #d6dcfb; }
         
         .card h2 {
             margin-bottom: 1rem;
@@ -457,6 +466,10 @@
             {% endif %}
 
             {% if session.user_role in ('admin', 'manager', 'office') %}
+            <a href="/{{ company_key }}/invoices"
+               class="subnav-link {% if '/invoices' in current_path %}active{% endif %}">
+                Invoices
+            </a>
             <a href="/{{ company_key }}/billing"
                class="subnav-link {% if '/billing' in current_path %}active{% endif %}">
                 Billing
@@ -515,6 +528,15 @@
     {% endif %}
     
     <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        <div class="flash-messages">
+            {% for category, message in messages %}
+            <div class="flash-msg flash-{{ category }}">{{ message }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% endwith %}
         {% block content %}{% endblock %}
     </div>
     

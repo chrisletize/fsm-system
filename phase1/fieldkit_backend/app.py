@@ -3,7 +3,7 @@ FieldKit Flask Application
 Phase 1: Authentication & Company-in-URL Architecture
 """
 
-from flask import Flask, request, session, jsonify, render_template, redirect, url_for, abort
+from flask import Flask, request, session, jsonify, render_template, redirect, url_for, abort, flash
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import bcrypt
@@ -493,6 +493,36 @@ def customer_detail(company_key, customer_id, branding, all_companies, company_a
         locations.append(loc_dict)
 
     custom_fields = get_custom_fields(conn, customer_id)
+
+    cur.execute("""
+        SELECT id, work_order_number, status, start_date::text AS start_date, work_site_label
+        FROM work_orders
+        WHERE customer_id = %s AND deleted_at IS NULL
+        ORDER BY start_date DESC NULLS LAST, id DESC LIMIT 50
+    """, (customer_id,))
+    jobs = cur.fetchall()
+
+    cur.execute("""
+        SELECT i.id, i.invoice_number, i.invoice_date, i.receivable_state,
+               iv.state AS version_state, iv.total, iv.subtotal
+        FROM invoices i
+        LEFT JOIN invoice_versions iv ON iv.id = i.current_version_id
+        WHERE i.customer_id = %s AND i.deleted_at IS NULL
+        ORDER BY i.invoice_date DESC, i.id DESC LIMIT 50
+    """, (customer_id,))
+    customer_invoices = []
+    for r in cur.fetchall():
+        bal = invoice_balance(cur, r['id'])
+        status = invoice_display_status(
+            {'receivable_state': r['receivable_state']},
+            {'state': r['version_state'], 'total': r['total']} if r['version_state'] else None,
+            bal)
+        customer_invoices.append({
+            'id': r['id'], 'invoice_number': r['invoice_number'], 'invoice_date': r['invoice_date'],
+            'display_status': status, 'total': r['total'] if r['total'] is not None else r['subtotal'],
+            'balance': bal,
+        })
+
     cur.close(); conn.close()
 
     return render_template('customer_detail.html',
@@ -500,7 +530,7 @@ def customer_detail(company_key, customer_id, branding, all_companies, company_a
         company_access=company_access, all_companies=all_companies,
         customer=customer, contacts=contacts, notes=notes,
         locations=locations, custom_fields=custom_fields,
-        nc_counties=NC_COUNTIES,
+        nc_counties=NC_COUNTIES, jobs=jobs, customer_invoices=customer_invoices,
     )
 
 # ============================================================================
@@ -2709,12 +2739,32 @@ def workorder_detail(company_key, wo_id, branding, all_companies, company_access
         ORDER BY changed_at DESC, id DESC
     """, (wo_id,))
     history = cur.fetchall()
+
+    # Drive the "Generate invoice now?" / "not invoiced yet" / "View Invoice"
+    # banner. Follows any reissue chain so a voided-and-reissued invoice
+    # still links to the LIVE one, not the dead end.
+    cur.execute("""
+        SELECT id, reissued_as_invoice_id FROM invoices
+        WHERE work_order_id = %s AND deleted_at IS NULL ORDER BY id LIMIT 1
+    """, (wo_id,))
+    inv_row = cur.fetchone()
+    invoice_id = None
+    if inv_row:
+        invoice_id, seen = inv_row['id'], {inv_row['id']}
+        nxt = inv_row['reissued_as_invoice_id']
+        while nxt and nxt not in seen:
+            invoice_id = nxt
+            seen.add(nxt)
+            cur.execute("SELECT reissued_as_invoice_id FROM invoices WHERE id = %s", (invoice_id,))
+            row = cur.fetchone()
+            nxt = row['reissued_as_invoice_id'] if row else None
+
     cur.close(); conn.close()
     return render_template('workorder_detail.html',
         branding=branding, company_key=company_key,
         company_access=company_access, all_companies=all_companies,
         wo=wo, site_label=label, line_items=line_items, subtotal=subtotal,
-        accruing=accruing, techs=techs, history=history,
+        accruing=accruing, techs=techs, history=history, invoice_id=invoice_id,
     )
 
 @app.route('/<company_key>/workorders/new', methods=['GET', 'POST'])
@@ -2751,8 +2801,13 @@ def workorder_edit(company_key, wo_id, branding, all_companies, company_access):
         abort(403)
     error = None
     if request.method == 'POST':
+        new_status = request.form.get('status', 'Scheduled')
         _, error = _save_work_order(company_key, wo_id=wo_id)
         if not error:
+            # Completed is the moment a WO becomes invoiceable — land on the
+            # detail page so the "Generate invoice now?" banner is right there.
+            if new_status == 'Completed':
+                return redirect(f'/{company_key}/workorders/{wo_id}')
             return redirect(f'/{company_key}/workorders')
     conn = get_db_connection(company_key)
     cur  = conn.cursor()
@@ -3065,6 +3120,538 @@ def contact_delete(company_key, customer_id, contact_id):
 
     cur.close(); conn.close()
     return redirect(f'/{company_key}/customers/{customer_id}')
+
+# ============================================================================
+# Invoices  (admin + manager + office)
+#   Create-from-work-order + the receivable/version UI on top of Increment
+#   1.2's schema and transition_invoice(). Single-WO invoices only — multi-WO
+#   batch invoicing is deferred (migration 007's own note, restated in the
+#   build directive).
+# ============================================================================
+
+def _resolve_invoice_tax_context(cur, customer_id, service_location_id):
+    """(tax_county, customer_taxable, location_taxable) for a new invoice, per
+    the directive's fallback chain: service location county -> customer
+    tax_county -> company_settings.default_tax_county."""
+    cur.execute("SELECT is_taxable, tax_county FROM customers WHERE id = %s", (customer_id,))
+    cust = cur.fetchone() or {}
+    loc = None
+    if service_location_id:
+        cur.execute("SELECT is_taxable, county FROM service_locations WHERE id = %s", (service_location_id,))
+        loc = cur.fetchone()
+
+    tax_county = (loc['county'] if loc and loc.get('county') else None) or cust.get('tax_county')
+    if not tax_county:
+        cur.execute("SELECT default_tax_county FROM company_settings WHERE deleted_at IS NULL LIMIT 1")
+        cs = cur.fetchone()
+        tax_county = cs['default_tax_county'] if cs else None
+
+    customer_taxable = cust.get('is_taxable') if cust.get('is_taxable') is not None else True
+    location_taxable = loc['is_taxable'] if loc and loc.get('is_taxable') is not None else True
+    return tax_county, customer_taxable, location_taxable
+
+
+def _snapshot_wo_lines_to_version(cur, wo_id, version_id, customer_taxable, location_taxable, username):
+    """Copy work_order_line_items onto an invoice version, applying the
+    three-layer exemption (catalog item -> customer -> location: any one
+    False makes the line non-taxable). quantity/total for per-day equipment
+    lines are already the billable-days figures _save_work_order computed
+    (max(days, 1) once retrieved, NULL/still-accruing otherwise) — copied
+    as-is, not recomputed, so an invoice created before retrieval correctly
+    starts as still-accruing and Hardened's guard catches it."""
+    cur.execute("""
+        SELECT catalog_item_id, equipment_unit_id, description, quantity, unit_price,
+               total, is_taxable, deployed_at, retrieved_at, sort_order
+        FROM work_order_line_items
+        WHERE work_order_id = %s AND deleted_at IS NULL
+        ORDER BY sort_order, id
+    """, (wo_id,))
+    for li in cur.fetchall():
+        is_taxable = bool(li['is_taxable']) and customer_taxable and location_taxable
+        cur.execute("""
+            INSERT INTO invoice_version_line_items
+                (version_id, catalog_item_id, equipment_unit_id, description,
+                 quantity, unit_price, total, is_taxable, deployed_at, retrieved_at,
+                 sort_order, created_by, updated_by)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (version_id, li['catalog_item_id'], li['equipment_unit_id'], li['description'],
+              li['quantity'], li['unit_price'], li['total'], is_taxable,
+              li['deployed_at'], li['retrieved_at'], li['sort_order'], username, username))
+
+
+def _recompute_version_subtotal(cur, version_id, username):
+    cur.execute("""
+        SELECT COALESCE(SUM(total), 0) AS subtotal FROM invoice_version_line_items
+        WHERE version_id = %s AND deleted_at IS NULL
+    """, (version_id,))
+    subtotal = cur.fetchone()['subtotal']
+    cur.execute("""
+        UPDATE invoice_versions SET subtotal = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s
+    """, (subtotal, username, version_id))
+    return subtotal
+
+
+def _create_invoice_from_wo(cur, company_key, wo, username):
+    """Creates the receivable + Live rev-0 version + snapshotted lines for a
+    Completed work order. `wo` needs id/customer_id/service_location_id.
+    Returns the new invoice id. Caller owns the transaction/commit and the
+    WO status flip."""
+    tax_county, cust_taxable, loc_taxable = _resolve_invoice_tax_context(
+        cur, wo['customer_id'], wo['service_location_id'])
+
+    new_number = _next_invoice_number(cur, company_key)
+    cur.execute("""
+        INSERT INTO invoices
+            (invoice_number, work_order_id, customer_id, service_location_id,
+             invoice_date, source, created_by, updated_by)
+        VALUES (%s, %s, %s, %s, CURRENT_DATE, 'fieldkit', %s, %s)
+        RETURNING id
+    """, (new_number, wo['id'], wo['customer_id'], wo['service_location_id'], username, username))
+    invoice_id = cur.fetchone()['id']
+
+    cur.execute("""
+        INSERT INTO invoice_versions (invoice_id, revision_number, state, subtotal, tax_county, created_by, updated_by)
+        VALUES (%s, 0, 'Live', 0, %s, %s, %s)
+        RETURNING id
+    """, (invoice_id, tax_county, username, username))
+    version_id = cur.fetchone()['id']
+
+    cur.execute("UPDATE invoices SET current_version_id = %s WHERE id = %s", (version_id, invoice_id))
+    _snapshot_wo_lines_to_version(cur, wo['id'], version_id, cust_taxable, loc_taxable, username)
+    _recompute_version_subtotal(cur, version_id, username)
+
+    cur.execute("""
+        INSERT INTO invoice_status_history (invoice_id, state, version_id, to_state, changed_by, notes)
+        VALUES (%s, 'Live', %s, 'Live', %s, %s)
+    """, (invoice_id, version_id, username, f'Created from work order.'))
+
+    return invoice_id
+
+
+@app.route('/<company_key>/workorders/<int:wo_id>/invoice/new', methods=['POST'])
+@login_required
+@company_access_required
+def workorder_invoice_new(company_key, wo_id):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT id, status, customer_id, service_location_id FROM work_orders
+        WHERE id = %s AND deleted_at IS NULL
+    """, (wo_id,))
+    wo = cur.fetchone()
+    if not wo:
+        cur.close(); conn.close()
+        abort(404)
+
+    # One invoice per WO. If one already exists, follow any reissue chain to
+    # the latest and redirect there instead of creating a second.
+    cur.execute("""
+        SELECT id, reissued_as_invoice_id FROM invoices
+        WHERE work_order_id = %s AND deleted_at IS NULL ORDER BY id LIMIT 1
+    """, (wo_id,))
+    existing = cur.fetchone()
+    if existing:
+        target, seen = existing['id'], {existing['id']}
+        nxt = existing['reissued_as_invoice_id']
+        while nxt and nxt not in seen:
+            target = nxt
+            seen.add(nxt)
+            cur.execute("SELECT reissued_as_invoice_id FROM invoices WHERE id = %s", (target,))
+            row = cur.fetchone()
+            nxt = row['reissued_as_invoice_id'] if row else None
+        cur.close(); conn.close()
+        flash('This work order already has an invoice.', 'info')
+        return redirect(f'/{company_key}/invoices/{target}')
+
+    if wo['status'] == 'No Charge':
+        cur.close(); conn.close()
+        flash('No-charge work orders are not invoiced.', 'error')
+        return redirect(f'/{company_key}/workorders/{wo_id}')
+    if wo['status'] != 'Completed':
+        cur.close(); conn.close()
+        flash('Work order must be Completed before it can be invoiced.', 'error')
+        return redirect(f'/{company_key}/workorders/{wo_id}')
+
+    username = session.get('username')
+    invoice_id = _create_invoice_from_wo(cur, company_key, wo, username)
+
+    cur.execute("""
+        UPDATE work_orders SET status = 'Invoiced', updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s
+    """, (username, wo_id))
+    cur.execute("""
+        INSERT INTO work_order_status_history (work_order_id, status, changed_by, notes)
+        VALUES (%s, 'Invoiced', %s, 'Invoice created.')
+    """, (wo_id, username))
+
+    conn.commit()
+    cur.close(); conn.close()
+    return redirect(f'/{company_key}/invoices/{invoice_id}')
+
+
+@app.route('/<company_key>/invoices')
+@login_required
+@company_access_required
+@with_branding
+def invoices_list(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    search        = request.args.get('search', '').strip()
+    status_filter = request.args.get('status', '').strip()
+    date_from     = request.args.get('date_from', '').strip()
+    date_to       = request.args.get('date_to', '').strip()
+    balance_only  = request.args.get('with_balance') == '1'
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    conditions = ["i.deleted_at IS NULL"]
+    params = []
+    if search:
+        conditions.append("(i.invoice_number ILIKE %s OR c.property_name ILIKE %s)")
+        params += [f'%{search}%', f'%{search}%']
+    if date_from:
+        conditions.append("i.invoice_date >= %s"); params.append(date_from)
+    if date_to:
+        conditions.append("i.invoice_date <= %s"); params.append(date_to)
+    where = " AND ".join(conditions)
+
+    # Status/balance filters are applied in Python below — display status and
+    # balance are derived (invoice_display_status/invoice_balance), not
+    # stored, and until Increment 1.4's v_invoice_balances view exists this
+    # is the honest way to filter on them without duplicating that logic in
+    # raw SQL. Fine at today's invoice volumes; revisit once that view lands.
+    cur.execute(f"""
+        SELECT i.id, i.invoice_number, i.invoice_date, i.receivable_state, i.portal_status,
+               c.property_name AS customer_name,
+               iv.state AS version_state, iv.total, iv.subtotal
+        FROM invoices i
+        JOIN customers c ON c.id = i.customer_id
+        LEFT JOIN invoice_versions iv ON iv.id = i.current_version_id
+        WHERE {where}
+        ORDER BY i.invoice_date DESC, i.id DESC
+    """, params)
+    rows = cur.fetchall()
+
+    invoices = []
+    for r in rows:
+        bal = invoice_balance(cur, r['id'])
+        status = invoice_display_status(
+            {'receivable_state': r['receivable_state']},
+            {'state': r['version_state'], 'total': r['total']} if r['version_state'] else None,
+            bal)
+        if status_filter and status != status_filter:
+            continue
+        if balance_only and not (bal is not None and bal > 0):
+            continue
+        invoices.append({
+            'id': r['id'], 'invoice_number': r['invoice_number'], 'invoice_date': r['invoice_date'],
+            'customer_name': r['customer_name'], 'display_status': status,
+            'total': r['total'] if r['total'] is not None else r['subtotal'],
+            'balance': bal, 'portal_status': r['portal_status'],
+        })
+    cur.close(); conn.close()
+    return render_template('invoices_list.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        invoices=invoices, search=search, status_filter=status_filter,
+        date_from=date_from, date_to=date_to, balance_only=balance_only,
+        statuses=['Draft', 'Hardened', 'Sent', 'Partially Paid', 'Paid', 'Void'],
+    )
+
+
+@app.route('/<company_key>/invoices/<int:invoice_id>')
+@login_required
+@company_access_required
+@with_branding
+def invoice_detail(company_key, invoice_id, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT i.*, c.property_name AS customer_name,
+               sl.location_name, wo.work_order_number
+        FROM invoices i
+        JOIN customers c ON c.id = i.customer_id
+        LEFT JOIN service_locations sl ON sl.id = i.service_location_id
+        LEFT JOIN work_orders wo ON wo.id = i.work_order_id
+        WHERE i.id = %s AND i.deleted_at IS NULL
+    """, (invoice_id,))
+    inv = cur.fetchone()
+    if not inv:
+        cur.close(); conn.close()
+        abort(404)
+
+    ver = None
+    if inv['current_version_id']:
+        cur.execute("SELECT * FROM invoice_versions WHERE id = %s", (inv['current_version_id'],))
+        ver = cur.fetchone()
+
+    line_items = []
+    if ver:
+        cur.execute("""
+            SELECT ivli.*, ci.name AS catalog_name, ci.billing_behavior
+            FROM invoice_version_line_items ivli
+            JOIN catalog_items ci ON ci.id = ivli.catalog_item_id
+            WHERE ivli.version_id = %s AND ivli.deleted_at IS NULL
+            ORDER BY ivli.sort_order, ivli.id
+        """, (ver['id'],))
+        line_items = [dict(r) for r in cur.fetchall()]
+        if ver['state'] == 'Live':
+            # Live ordinals are derived, not stored yet — render the SAME
+            # resolver harden will bake in, so the preview never disagrees
+            # with the eventual print.
+            live_labels = _resolve_equipment_labels(cur, ver['id'])
+            for li in line_items:
+                if li['id'] in live_labels:
+                    li['resolved_label'] = live_labels[li['id']]
+
+    cur.execute("SELECT * FROM invoice_versions WHERE invoice_id = %s ORDER BY revision_number", (invoice_id,))
+    versions = cur.fetchall()
+
+    cur.execute("""
+        SELECT *, to_char(changed_at, 'Mon DD, YYYY HH12:MI AM') AS changed_at_display
+        FROM invoice_status_history WHERE invoice_id = %s ORDER BY changed_at DESC, id DESC
+    """, (invoice_id,))
+    history = cur.fetchall()
+
+    balance = invoice_balance(cur, invoice_id)
+    display_status = invoice_display_status(inv, ver, balance)
+
+    cur.close(); conn.close()
+    return render_template('invoice_detail.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        inv=inv, ver=ver, line_items=line_items, versions=versions,
+        history=history, balance=balance, display_status=display_status,
+    )
+
+
+@app.route('/<company_key>/invoices/<int:invoice_id>/edit', methods=['GET', 'POST'])
+@login_required
+@company_access_required
+@with_branding
+def invoice_edit(company_key, invoice_id, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("SELECT * FROM invoices WHERE id = %s AND deleted_at IS NULL", (invoice_id,))
+    inv = cur.fetchone()
+    if not inv:
+        cur.close(); conn.close()
+        abort(404)
+    ver = None
+    if inv['current_version_id']:
+        cur.execute("SELECT * FROM invoice_versions WHERE id = %s", (inv['current_version_id'],))
+        ver = cur.fetchone()
+    if not ver or ver['state'] != 'Live':
+        cur.close(); conn.close()
+        flash('Only a Live invoice can be edited.', 'error')
+        return redirect(f'/{company_key}/invoices/{invoice_id}')
+
+    error = None
+    if request.method == 'POST':
+        username = session.get('username')
+        invoice_date      = request.form.get('invoice_date', '').strip() or None
+        tax_county        = request.form.get('tax_county', '').strip() or None
+        notes_to_customer = request.form.get('notes_to_customer', '').strip() or None
+
+        line_ids     = request.form.getlist('line_id')
+        descriptions = request.form.getlist('description')
+        quantities   = request.form.getlist('quantity')
+        prices       = request.form.getlist('unit_price')
+        removed      = request.form.getlist('removed_line_id')
+
+        try:
+            for i, lid in enumerate(line_ids):
+                qty   = float(quantities[i])
+                price = float(prices[i])
+                if qty <= 0 or price < 0:
+                    error = 'Quantity must be positive and price cannot be negative.'
+                    break
+                is_tax = request.form.get(f'taxable_{lid}') == 'on'
+                total = round(qty * price, 2)
+                cur.execute("""
+                    UPDATE invoice_version_line_items
+                    SET description = %s, quantity = %s, unit_price = %s, total = %s,
+                        is_taxable = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+                    WHERE id = %s AND version_id = %s
+                """, (descriptions[i].strip(), qty, price, total, is_tax, username, int(lid), ver['id']))
+        except (ValueError, IndexError):
+            error = 'Could not read the line items.'
+
+        if not error and removed:
+            cur.execute("""
+                UPDATE invoice_version_line_items
+                SET deleted_at = CURRENT_TIMESTAMP, deleted_by = %s
+                WHERE id = ANY(%s) AND version_id = %s
+            """, (username, [int(x) for x in removed], ver['id']))
+
+        new_catalog_id = _opt_num(request.form.get('new_catalog_item_id'))
+        if not error and new_catalog_id:
+            cur.execute("""
+                SELECT id, name, invoice_label, unit_price, is_taxable FROM catalog_items
+                WHERE id = %s AND deleted_at IS NULL AND billing_behavior = 'standard'
+            """, (new_catalog_id,))
+            cat = cur.fetchone()
+            if not cat:
+                error = 'Choose a catalog item from the list.'
+            else:
+                cur.execute("""
+                    SELECT COALESCE(MAX(sort_order), 0) + 1 AS n FROM invoice_version_line_items
+                    WHERE version_id = %s
+                """, (ver['id'],))
+                next_sort = cur.fetchone()['n']
+                cur.execute("""
+                    INSERT INTO invoice_version_line_items
+                        (version_id, catalog_item_id, description, quantity, unit_price, total,
+                         is_taxable, sort_order, created_by, updated_by)
+                    VALUES (%s, %s, %s, 1, %s, %s, %s, %s, %s, %s)
+                """, (ver['id'], cat['id'], cat['invoice_label'] or cat['name'],
+                      cat['unit_price'], cat['unit_price'], cat['is_taxable'],
+                      next_sort, username, username))
+
+        if not error:
+            _recompute_version_subtotal(cur, ver['id'], username)
+            cur.execute("""
+                UPDATE invoice_versions
+                SET tax_county = %s, notes_to_customer = %s,
+                    updated_at = CURRENT_TIMESTAMP, updated_by = %s
+                WHERE id = %s
+            """, (tax_county, notes_to_customer, username, ver['id']))
+            if invoice_date:
+                cur.execute("""
+                    UPDATE invoices SET invoice_date = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+                    WHERE id = %s
+                """, (invoice_date, username, invoice_id))
+            conn.commit()
+            cur.close(); conn.close()
+            flash('Invoice saved.', 'success')
+            return redirect(f'/{company_key}/invoices/{invoice_id}')
+
+    cur.execute("""
+        SELECT ivli.*, ci.name AS catalog_name FROM invoice_version_line_items ivli
+        JOIN catalog_items ci ON ci.id = ivli.catalog_item_id
+        WHERE ivli.version_id = %s AND ivli.deleted_at IS NULL
+        ORDER BY ivli.sort_order, ivli.id
+    """, (ver['id'],))
+    line_items = cur.fetchall()
+    cur.execute("""
+        SELECT id, name, invoice_label, unit_price, is_taxable FROM catalog_items
+        WHERE billing_behavior = 'standard' AND is_active = TRUE AND deleted_at IS NULL
+        ORDER BY name
+    """)
+    catalog_options = [{'id': r['id'], 'name': r['invoice_label'] or r['name']} for r in cur.fetchall()]
+    cur.close(); conn.close()
+    return render_template('invoice_form.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        inv=inv, ver=ver, line_items=line_items, error=error,
+        catalog_options=catalog_options,
+    )
+
+
+@app.route('/<company_key>/invoices/<int:invoice_id>/regenerate', methods=['POST'])
+@login_required
+@company_access_required
+def invoice_regenerate(company_key, invoice_id):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT current_version_id, work_order_id, customer_id, service_location_id
+        FROM invoices WHERE id = %s AND deleted_at IS NULL
+    """, (invoice_id,))
+    inv = cur.fetchone()
+    if not inv or not inv['work_order_id']:
+        cur.close(); conn.close()
+        abort(404)
+    cur.execute("SELECT state FROM invoice_versions WHERE id = %s", (inv['current_version_id'],))
+    ver = cur.fetchone()
+    if not ver or ver['state'] != 'Live':
+        cur.close(); conn.close()
+        flash('Only a Live invoice can be regenerated.', 'error')
+        return redirect(f'/{company_key}/invoices/{invoice_id}')
+
+    username = session.get('username')
+    cur.execute("""
+        UPDATE invoice_version_line_items SET deleted_at = CURRENT_TIMESTAMP, deleted_by = %s
+        WHERE version_id = %s AND deleted_at IS NULL
+    """, (username, inv['current_version_id']))
+
+    _, cust_taxable, loc_taxable = _resolve_invoice_tax_context(cur, inv['customer_id'], inv['service_location_id'])
+    _snapshot_wo_lines_to_version(cur, inv['work_order_id'], inv['current_version_id'], cust_taxable, loc_taxable, username)
+    _recompute_version_subtotal(cur, inv['current_version_id'], username)
+
+    conn.commit()
+    cur.close(); conn.close()
+    flash('Lines regenerated from the work order.', 'success')
+    return redirect(f'/{company_key}/invoices/{invoice_id}/edit')
+
+
+def _do_invoice_transition(company_key, invoice_id, to_state, notes):
+    """Shared thin dispatcher for every invoice transition route below —
+    routes stay dumb, all the logic is transition_invoice()'s."""
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    ok, reason, extra = transition_invoice(cur, company_key, invoice_id, to_state, session.get('username'), notes=notes)
+    if ok:
+        conn.commit()
+    else:
+        conn.rollback()
+    cur.close(); conn.close()
+    if not ok:
+        flash(reason or 'That action could not be completed.', 'error')
+        return redirect(f'/{company_key}/invoices/{invoice_id}')
+    if extra and extra.get('new_invoice_id'):
+        flash('Invoice reissued.', 'success')
+        return redirect(f'/{company_key}/invoices/{extra["new_invoice_id"]}')
+    flash(f'Invoice moved to {to_state}.', 'success')
+    return redirect(f'/{company_key}/invoices/{invoice_id}')
+
+
+@app.route('/<company_key>/invoices/<int:invoice_id>/harden', methods=['POST'])
+@login_required
+@company_access_required
+def invoice_harden(company_key, invoice_id):
+    return _do_invoice_transition(company_key, invoice_id, 'Hardened', request.form.get('notes'))
+
+@app.route('/<company_key>/invoices/<int:invoice_id>/reopen', methods=['POST'])
+@login_required
+@company_access_required
+def invoice_reopen(company_key, invoice_id):
+    return _do_invoice_transition(company_key, invoice_id, 'Live', request.form.get('notes'))
+
+@app.route('/<company_key>/invoices/<int:invoice_id>/send', methods=['POST'])
+@login_required
+@company_access_required
+def invoice_send(company_key, invoice_id):
+    return _do_invoice_transition(company_key, invoice_id, 'Sent', request.form.get('sent_to_emails'))
+
+@app.route('/<company_key>/invoices/<int:invoice_id>/void', methods=['POST'])
+@login_required
+@company_access_required
+def invoice_void(company_key, invoice_id):
+    return _do_invoice_transition(company_key, invoice_id, 'Void', request.form.get('void_reason'))
+
+@app.route('/<company_key>/invoices/<int:invoice_id>/reissue', methods=['POST'])
+@login_required
+@company_access_required
+def invoice_reissue(company_key, invoice_id):
+    return _do_invoice_transition(company_key, invoice_id, 'Reissue', None)
+
+@app.route('/<company_key>/invoices/<int:invoice_id>/revise', methods=['POST'])
+@login_required
+@company_access_required
+def invoice_revise(company_key, invoice_id):
+    return _do_invoice_transition(company_key, invoice_id, 'Revise', request.form.get('revision_reason'))
 
 # ============================================================================
 # Billing — Michele's batch billing page
