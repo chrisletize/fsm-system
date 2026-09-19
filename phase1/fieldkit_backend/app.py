@@ -1489,39 +1489,24 @@ WORK_SITE_LABELS = {
 }
 
 # Invoices reuse the same per-company prefixes as work orders (GAG/KC/CTS/KSF).
-# The number is shared across revisions of one invoice; a void+reissue gets a
-# brand-new number. See _next_invoice_number.
+# One number per RECEIVABLE, forever — a revision stays under the same number
+# (it's a new invoice_versions row); only a void+reissue consumes a new one.
 INVOICE_NUMBER_PREFIXES = WO_NUMBER_PREFIXES  # same mapping, one source of truth
 
-# The lifecycle states. The DB CHECK constraint on invoices.state is the real
-# guarantee; this tuple is for readable membership tests in Python.
-INVOICE_STATES = ('Live', 'Hardened', 'Sent', 'Paid', 'Void', 'Revision')
+# invoice_versions.state values. The DB CHECK constraint is the real guarantee;
+# this tuple is for readable membership tests in Python. 'Paid' and 'Revision'
+# are intentionally gone — Paid is derived (see invoice_display_status), and a
+# revision is just a new version, not a state a version sits in.
+INVOICE_VERSION_STATES = ('Live', 'Hardened', 'Sent', 'Superseded')
 
-# Legal transitions: from_state -> set of allowed to_states. Single source of
-# truth for "what moves are possible." The transition function consults it;
-# routes never hardcode their own edges. Void/Revision targets are listed so
-# the map is complete, but their handlers arrive in steps 4 & 5.
-INVOICE_TRANSITIONS = {
-    'Live':     {'Hardened'},
-    'Hardened': {'Live', 'Sent'},                       # Hardened->Live = reopen
-    'Sent':     {'Live', 'Paid', 'Void', 'Revision'},   # Sent->Live = reopen
-    'Paid':     {'Void', 'Revision'},                   # no reopen once paid
-    'Void':     {'Live'},                               # reissue (step 4)
-    'Revision': {'Live'},                               # new version (step 5)
-}
-
-# Transitions implemented in THIS step. Anything legal-but-not-here returns a
-# clear "not yet implemented" so we never silently do nothing.
-INVOICE_TRANSITIONS_IMPLEMENTED = {
-    ('Live', 'Hardened'),
-    ('Hardened', 'Live'),
-    ('Hardened', 'Sent'),
-    ('Sent', 'Live'),
-    ('Sent', 'Paid'),
-    ('Sent', 'Void'),      # step 4
-    ('Paid', 'Void'),      # step 4 — opens a credit (paid money stranded)
-    ('Void', 'Live'),      # step 4 — reissue: mints a NEW-numbered Live invoice
-}
+# The six operations transition_invoice() supports. Not a from_state->to_state
+# adjacency map like the old single-table engine — the receivable/version split
+# means the guards are heterogeneous per operation (see the directive's table:
+# some check the receivable, some the current version, one needs a payment
+# check), so each is its own branch in transition_invoice() below. 'Reissue'
+# and 'Revise' are operation names, not states a row is ever literally set to —
+# they each mint a NEW row rather than flipping the current one.
+INVOICE_TRANSITIONS_IMPLEMENTED = {'Hardened', 'Live', 'Sent', 'Void', 'Reissue', 'Revise'}
 
 
 def _next_wo_number(cur, company_key):
@@ -1546,15 +1531,19 @@ def _next_wo_number(cur, company_key):
 
 def _next_invoice_number(cur, company_key):
     """Next per-company invoice number, e.g. GAG-2026-0007.
-    Sequence resets each year; the UNIQUE(invoice_number, revision_number)
-    constraint is the real guarantee. Only original rows (revision_number = 1)
-    advance the sequence — revisions reuse their parent's number."""
+    Sequence resets each year; the UNIQUE(invoice_number) constraint on the
+    receivable is the real guarantee. Every receivable consumes one — a
+    revision does NOT (it's a new invoice_versions row under the same
+    invoice_number); only a fresh Void->Reissue calls this again.
+    NOTE: Increment 1.9's cutover import will relax the LIKE/ORDER-BY-id
+    assumption here so imported ServiceFusion numbers can't collide with or
+    advance this sequence — not needed yet since nothing is imported."""
     prefix = INVOICE_NUMBER_PREFIXES.get(company_key, company_key.upper()[:3])
     year   = datetime.now().year
     like   = f'{prefix}-{year}-%'
     cur.execute("""
         SELECT invoice_number FROM invoices
-        WHERE invoice_number LIKE %s AND revision_number = 1
+        WHERE invoice_number LIKE %s
         ORDER BY id DESC LIMIT 1
     """, (like,))
     row = cur.fetchone()
@@ -1584,35 +1573,38 @@ def _tax_rate_as_of(cur, county, as_of):
     """, (county, as_of, as_of))
     return cur.fetchone()
 
-def _compute_invoice_tax(cur, invoice_id):
-    """Resolve and total the tax for an invoice from the county rate that was
-    effective on the invoice's own invoice_date. Returns
+def _compute_invoice_tax(cur, invoice_id, version_id):
+    """Resolve and total the tax for one invoice VERSION from the county rate
+    that was effective on the receivable's invoice_date. Returns
     (tax_rate_pct, subtotal, tax_total, total).
 
     Anchoring on invoice_date (not "today") is what makes a later correction
-    to tax_rates (e.g. NC changing a county's rate) never change an invoice
+    to tax_rates (e.g. NC changing a county's rate) never change a version
     that was hardened under the old rate — the freeze happens because the
-    caller writes these resolved numbers onto the invoice at harden time, not
+    caller writes these resolved numbers onto the version at harden time, not
     because this function is only ever called once. A county with no row
     effective on that date resolves to 0% (a valid un-taxed invoice, e.g.
     Florida before its rate table is filled in) rather than failing; the
     absence shows as tax_rate_pct = None for optional flagging."""
     cur.execute("""
-        SELECT tax_county, invoice_date FROM invoices WHERE id = %s AND deleted_at IS NULL
+        SELECT invoice_date FROM invoices WHERE id = %s AND deleted_at IS NULL
     """, (invoice_id,))
     inv = cur.fetchone()
     if not inv:
         return None, None, None, None
-    county = inv['tax_county']
-    as_of  = inv['invoice_date']
+    as_of = inv['invoice_date']
+
+    cur.execute("SELECT tax_county FROM invoice_versions WHERE id = %s", (version_id,))
+    ver = cur.fetchone()
+    county = ver['tax_county'] if ver else None
 
     cur.execute("""
         SELECT
             COALESCE(SUM(total), 0)                            AS subtotal,
             COALESCE(SUM(total) FILTER (WHERE is_taxable), 0)  AS taxable_base
-        FROM invoice_line_items
-        WHERE invoice_id = %s AND deleted_at IS NULL
-    """, (invoice_id,))
+        FROM invoice_version_line_items
+        WHERE version_id = %s AND deleted_at IS NULL
+    """, (version_id,))
     sums = cur.fetchone()
     subtotal     = sums['subtotal']
     taxable_base = sums['taxable_base']
@@ -1629,15 +1621,16 @@ def _compute_invoice_tax(cur, invoice_id):
     return rate_pct, subtotal, tax_total, total
 
 
-def _resolve_equipment_labels(cur, invoice_id):
-    """Single source of truth for per_day_equipment line labels on an invoice.
+def _resolve_equipment_labels(cur, version_id):
+    """Single source of truth for per_day_equipment line labels on one
+    invoice VERSION.
 
-    Groups the invoice's per_day_equipment lines by billing type
+    Groups the version's per_day_equipment lines by billing type
     (catalog_item_id), orders each group by (deployed_at ASC, line id ASC),
     and applies the ordinal rule:
       * group of 1  -> bare customer label ("Set Dehu", no number)
       * group of N  -> "Set Dehu 1" .. "Set Dehu N"
-    The ordinal is the Nth machine of that TYPE on THIS invoice — never the
+    The ordinal is the Nth machine of that TYPE on THIS version — never the
     registry unit identity (equipment_unit.name stays internal and unshown).
 
     Customer-facing base text is catalog_items.invoice_label, falling back to
@@ -1652,19 +1645,19 @@ def _resolve_equipment_labels(cur, invoice_id):
     those from their own description as usual.
     """
     cur.execute("""
-        SELECT ili.id,
-               ili.catalog_item_id,
-               ili.deployed_at,
+        SELECT ivli.id,
+               ivli.catalog_item_id,
+               ivli.deployed_at,
                COALESCE(ci.invoice_label, ci.name) AS base_label
-        FROM invoice_line_items ili
-        JOIN catalog_items ci ON ci.id = ili.catalog_item_id
-        WHERE ili.invoice_id = %s
-          AND ili.deleted_at IS NULL
+        FROM invoice_version_line_items ivli
+        JOIN catalog_items ci ON ci.id = ivli.catalog_item_id
+        WHERE ivli.version_id = %s
+          AND ivli.deleted_at IS NULL
           AND ci.billing_behavior = 'per_day_equipment'
-        ORDER BY ili.catalog_item_id,
-                 ili.deployed_at ASC NULLS LAST,
-                 ili.id ASC
-    """, (invoice_id,))
+        ORDER BY ivli.catalog_item_id,
+                 ivli.deployed_at ASC NULLS LAST,
+                 ivli.id ASC
+    """, (version_id,))
     rows = cur.fetchall()
 
     # Bucket by billing type, preserving the ORDER BY sequence within each type.
@@ -1681,256 +1674,409 @@ def _resolve_equipment_labels(cur, invoice_id):
     return labels
 
 
-def _reissue_invoice(cur, company_key, old_invoice_id, username):
-    """Void -> Live reissue. Mints a NEW-numbered Live invoice that supersedes
-    the voided one and CLONES its line items as the editable starting point.
-    The voided invoice is retained untouched as Void; only its forward link is
-    set. Links are wired BOTH directions and history rows are written on BOTH
-    rows. Returns the new invoice id. Caller owns the transaction/commit.
+def _payments_tables_exist(cur):
+    """True once migration 011 (Increment 1.4) has created payment_applications
+    and invoice_adjustments. Guards the reopen/void payment checks and
+    invoice_balance() below so they work correctly BOTH before 1.4 ships
+    (vacuously: no payments can exist yet, so nothing to guard against) AND
+    after (real check, no code change needed) — see
+    docs/DECISIONS-MADE-DURING-BUILD.md for why this is guarded rather than
+    just written against tables that don't exist yet."""
+    cur.execute("""
+        SELECT to_regclass('payment_applications') IS NOT NULL
+           AND to_regclass('invoice_adjustments') IS NOT NULL AS both_exist
+    """)
+    return cur.fetchone()['both_exist']
 
-    Body policy = CLONE (see the reissue design discussion): the new invoice
-    begins as a faithful copy of the void's lines, then lives as Live where the
-    office edits freely before re-hardening. Deliberate resets on the copy:
-      * invoice_number -> a fresh _next_invoice_number (revision_number = 1);
-      * state -> 'Live'; frozen figures (tax_rate_pct/tax_total/total) stay NULL
-        until the new harden re-resolves them;
-      * resolved_label -> NULL on every cloned line (Live derives ordinals
-        fresh; they re-bake at the next harden);
-      * amount_paid -> 0 and NO credit_* fields carry over — any credit belongs
-        to the void, not to the clean reissue.
+
+def invoice_balance(cur, invoice_id):
+    """The single source of truth for an invoice's balance due, used
+    everywhere a balance is shown: current version's total (or subtotal if
+    not yet hardened) minus non-reversed payment applications minus
+    adjustments. Returns None if the invoice or its current version can't be
+    found."""
+    cur.execute("""
+        SELECT iv.total, iv.subtotal
+        FROM invoices i JOIN invoice_versions iv ON iv.id = i.current_version_id
+        WHERE i.id = %s AND i.deleted_at IS NULL
+    """, (invoice_id,))
+    row = cur.fetchone()
+    if not row:
+        return None
+    base = row['total'] if row['total'] is not None else row['subtotal']
+
+    applied = 0
+    adjusted = 0
+    if _payments_tables_exist(cur):
+        cur.execute("""
+            SELECT COALESCE(SUM(amount), 0) AS n FROM payment_applications
+            WHERE invoice_id = %s AND reverses_application_id IS NULL
+        """, (invoice_id,))
+        applied = cur.fetchone()['n'] or 0
+        cur.execute("""
+            SELECT COALESCE(SUM(amount), 0) AS n FROM invoice_adjustments
+            WHERE invoice_id = %s AND deleted_at IS NULL
+        """, (invoice_id,))
+        adjusted = cur.fetchone()['n'] or 0
+
+    return base - applied - adjusted
+
+
+def invoice_display_status(receivable, version, balance):
+    """Derived display status — Draft / Hardened / Sent / Partially Paid /
+    Paid / Void. Nothing above stores a status string; this is the only
+    place that computes one, so list pages and detail pages can never
+    disagree. `receivable` is an invoices row, `version` is its current
+    invoice_versions row (or None), `balance` is invoice_balance()'s result."""
+    if receivable['receivable_state'] == 'void':
+        return 'Void'
+    if version is None or version['state'] == 'Live':
+        return 'Draft'
+    if version['state'] == 'Hardened':
+        return 'Hardened'
+    # Sent (Superseded should never be the CURRENT version, but falls through
+    # safely to 'Sent' rather than raising if it somehow is).
+    if version['total'] is not None and balance is not None:
+        if balance <= 0:
+            return 'Paid'
+        if balance < version['total']:
+            return 'Partially Paid'
+    return 'Sent'
+
+
+def _reissue_invoice(cur, company_key, old_invoice_id, username):
+    """Void -> Reissue. Mints a brand-new RECEIVABLE (new invoice_number) with
+    a fresh Live rev-0 version, CLONING the void receivable's current
+    version's line items as the editable starting point. The void receivable
+    is retained untouched (receivable_state stays 'void'; its current
+    version's state is NOT changed — it stays as evidence). Links are wired
+    both directions (reissue_of_invoice_id / reissued_as_invoice_id) and
+    history rows are written on both invoices. Returns the new invoice id.
+    Caller owns the transaction/commit.
+
+    Body policy = CLONE: the new receivable begins as a faithful copy of the
+    void's lines, editable while Live until the office re-hardens it.
+    Deliberate resets on the copy: fresh invoice_number; revision_number = 0;
+    frozen figures (tax_rate_pct/tax_total/total) stay NULL until the new
+    harden re-resolves them; resolved_label -> NULL on every cloned line
+    (Live derives ordinals fresh; they re-bake at the next harden). No
+    payment/adjustment data carries over — nothing was ever applied to a
+    receivable that was void before any payment could attach to it (Void
+    itself requires zero non-reversed applications).
     invoice_date is preserved from the source (the work's effective date,
     Pattern 4) and remains editable while Live."""
     cur.execute("""
-        SELECT work_order_id, customer_id, service_location_id, invoice_date,
-               subtotal, tax_county, notes
-        FROM invoices
-        WHERE id = %s AND deleted_at IS NULL
+        SELECT work_order_id, customer_id, service_location_id, invoice_date, notes
+        FROM invoices WHERE id = %s AND deleted_at IS NULL
     """, (old_invoice_id,))
     src = cur.fetchone()
+
+    cur.execute("""
+        SELECT iv.* FROM invoices i JOIN invoice_versions iv ON iv.id = i.current_version_id
+        WHERE i.id = %s
+    """, (old_invoice_id,))
+    old_ver = cur.fetchone()
 
     new_number = _next_invoice_number(cur, company_key)
 
     cur.execute("""
         INSERT INTO invoices
-            (invoice_number, revision_number, state,
-             work_order_id, customer_id, service_location_id, invoice_date,
-             subtotal, tax_county,
-             supersedes_invoice_id, notes, created_by, updated_by)
-        VALUES (%s, 1, 'Live',
-                %s, %s, %s, %s,
-                %s, %s,
-                %s, %s, %s, %s)
+            (invoice_number, work_order_id, customer_id, service_location_id,
+             invoice_date, notes, reissue_of_invoice_id, source, created_by, updated_by)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, 'fieldkit', %s, %s)
         RETURNING id
-    """, (new_number,
-          src['work_order_id'], src['customer_id'], src['service_location_id'],
-          src['invoice_date'], src['subtotal'], src['tax_county'],
-          old_invoice_id, src['notes'], username, username))
-    new_id = cur.fetchone()['id']
+    """, (new_number, src['work_order_id'], src['customer_id'], src['service_location_id'],
+          src['invoice_date'], src['notes'], old_invoice_id, username, username))
+    new_invoice_id = cur.fetchone()['id']
 
-    # Clone the line items (resolved_label cleared; audit stamped to the actor).
     cur.execute("""
-        INSERT INTO invoice_line_items
-            (invoice_id, catalog_item_id, equipment_unit_id, description,
-             resolved_label, quantity, unit_price, total, is_taxable,
-             deployed_at, retrieved_at, sort_order, created_by, updated_by)
-        SELECT %s, catalog_item_id, equipment_unit_id, description,
-               NULL, quantity, unit_price, total, is_taxable,
-               deployed_at, retrieved_at, sort_order, %s, %s
-        FROM invoice_line_items
-        WHERE invoice_id = %s AND deleted_at IS NULL
-    """, (new_id, username, username, old_invoice_id))
+        INSERT INTO invoice_versions
+            (invoice_id, revision_number, state, subtotal, tax_county, created_by, updated_by)
+        VALUES (%s, 0, 'Live', %s, %s, %s, %s)
+        RETURNING id
+    """, (new_invoice_id, old_ver['subtotal'] if old_ver else 0,
+          old_ver['tax_county'] if old_ver else None, username, username))
+    new_version_id = cur.fetchone()['id']
+
+    cur.execute("""
+        UPDATE invoices SET current_version_id = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s
+    """, (new_version_id, username, new_invoice_id))
+
+    if old_ver:
+        # Clone the line items (resolved_label cleared; audit stamped to the actor).
+        cur.execute("""
+            INSERT INTO invoice_version_line_items
+                (version_id, catalog_item_id, equipment_unit_id, description,
+                 resolved_label, quantity, unit_price, total, is_taxable,
+                 deployed_at, retrieved_at, sort_order, created_by, updated_by)
+            SELECT %s, catalog_item_id, equipment_unit_id, description,
+                   NULL, quantity, unit_price, total, is_taxable,
+                   deployed_at, retrieved_at, sort_order, %s, %s
+            FROM invoice_version_line_items
+            WHERE version_id = %s AND deleted_at IS NULL
+        """, (new_version_id, username, username, old_ver['id']))
 
     # Close the forward link on the retained void.
     cur.execute("""
         UPDATE invoices
-        SET superseded_by_invoice_id = %s,
-            updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        SET reissued_as_invoice_id = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
         WHERE id = %s
-    """, (new_id, username, old_invoice_id))
+    """, (new_invoice_id, username, old_invoice_id))
 
-    # History on BOTH rows: the void points forward, the new points back.
+    # History on BOTH invoices: the void points forward, the new points back.
     cur.execute("""
-        INSERT INTO invoice_status_history (invoice_id, state, changed_by, notes)
-        VALUES (%s, 'Void', %s, %s)
-    """, (old_invoice_id, username, f'Reissued as {new_number} (id {new_id}).'))
+        INSERT INTO invoice_status_history (invoice_id, state, from_state, to_state, changed_by, notes)
+        VALUES (%s, 'Void', 'void', 'void', %s, %s)
+    """, (old_invoice_id, username, f'Reissued as {new_number} (id {new_invoice_id}).'))
     cur.execute("""
-        INSERT INTO invoice_status_history (invoice_id, state, changed_by, notes)
-        VALUES (%s, 'Live', %s, %s)
-    """, (new_id, username, f'Created via reissue of voided invoice id {old_invoice_id}.'))
+        INSERT INTO invoice_status_history (invoice_id, state, version_id, to_state, changed_by, notes)
+        VALUES (%s, 'Live', %s, 'Live', %s, %s)
+    """, (new_invoice_id, new_version_id, username,
+          f'Created via reissue of voided invoice id {old_invoice_id}.'))
 
-    return new_id
+    return new_invoice_id
 
 
 def transition_invoice(cur, company_key, invoice_id, to_state, username, notes=None):
-    """Move one invoice to to_state: the single choke point for every invoice
-    state change. Validates legality + guards, runs the state's side effects,
-    and appends an invoice_status_history row. Does NOT commit — the calling
-    route owns the transaction (same convention as the work-order save path).
+    """Move one invoice via to_state: the single choke point for every
+    invoice lifecycle change, at either level. The receivable id is always
+    the handle; version-level operations act on its current_version_id.
+    Does NOT commit — the calling route owns the transaction (same
+    convention as the work-order save path).
+
+    `notes` is contextual per to_state: the void reason for Void, the
+    revision reason for Revise, an optional comma-separated recipient list
+    for Sent, an optional free note for Live (reopen).
 
     Returns a 3-tuple (ok, reason, extra):
       * ok     — True on success, False on rejection.
       * reason — human-readable rejection reason, or None on success.
-      * extra  — dict of side-effect outputs, or None. Reissue (Void->Live)
-                 returns {'new_invoice_id': <id>} because it spawns a SECOND
-                 invoice row the caller must redirect to; every other
-                 transition returns None here."""
-    if to_state not in INVOICE_STATES:
-        return False, f'Unknown target state "{to_state}".', None
+      * extra  — dict of side-effect outputs, or None. Reissue returns
+                 {'new_invoice_id': <id>}; Revise returns
+                 {'new_version_id': <id>}; every other operation returns None."""
+    if to_state not in INVOICE_TRANSITIONS_IMPLEMENTED:
+        return False, f'Unknown or unimplemented operation "{to_state}".', None
 
     cur.execute("""
-        SELECT id, state, amount_paid, invoice_number, revision_number
-        FROM invoices
-        WHERE id = %s AND deleted_at IS NULL
+        SELECT id, receivable_state, current_version_id, invoice_number, reissued_as_invoice_id
+        FROM invoices WHERE id = %s AND deleted_at IS NULL
     """, (invoice_id,))
     inv = cur.fetchone()
     if not inv:
         return False, 'Invoice not found.', None
 
-    from_state = inv['state']
-    if from_state == to_state:
-        return False, f'Invoice is already {to_state}.', None
+    # ---- Receivable-level operations (no current version required) ----
 
-    # (a) Legality: is this edge allowed at all?
-    if to_state not in INVOICE_TRANSITIONS.get(from_state, set()):
-        return False, f'Cannot move an invoice from {from_state} to {to_state}.', None
+    if to_state == 'Void':
+        if inv['receivable_state'] != 'open':
+            return False, f'Invoice is already {inv["receivable_state"]}.', None
+        void_reason = (notes or '').strip()
+        if not void_reason:
+            return False, 'A void reason is required.', None
+        if _payments_tables_exist(cur):
+            cur.execute("""
+                SELECT COALESCE(SUM(amount), 0) AS applied FROM payment_applications
+                WHERE invoice_id = %s AND reverses_application_id IS NULL
+            """, (invoice_id,))
+            if (cur.fetchone()['applied'] or 0) > 0:
+                return False, ('This invoice has a payment applied. Un-apply it '
+                               'before voiding.'), None
+        cur.execute("""
+            UPDATE invoices
+            SET receivable_state = 'void', voided_at = CURRENT_TIMESTAMP,
+                voided_by = %s, void_reason = %s,
+                updated_at = CURRENT_TIMESTAMP, updated_by = %s
+            WHERE id = %s
+        """, (username, void_reason, username, invoice_id))
+        cur.execute("""
+            INSERT INTO invoice_status_history (invoice_id, state, from_state, to_state, changed_by, notes)
+            VALUES (%s, 'Void', 'open', 'void', %s, %s)
+        """, (invoice_id, username, void_reason))
+        return True, None, None
 
-    # Implemented-in-this-step gate (honest partial build).
-    if (from_state, to_state) not in INVOICE_TRANSITIONS_IMPLEMENTED:
-        return False, (f'{from_state} -> {to_state} is a valid transition but '
-                       f'is not implemented yet.'), None
-
-    # --- Reissue (Void -> Live) is structurally special and handled up front,
-    #     BEFORE the reopen guard. It must NOT be treated as a reopen: a voided
-    #     PAID invoice has amount_paid > 0 and would trip the reopen guard. It
-    #     also must NOT flip the current row's state — the void is retained as
-    #     Void forever. It mints a NEW Live invoice that supersedes the void,
-    #     clones its lines, writes history on BOTH rows, and returns the new id.
-    if from_state == 'Void' and to_state == 'Live':
+    if to_state == 'Reissue':
+        if inv['receivable_state'] != 'void':
+            return False, 'Only a voided invoice can be reissued.', None
+        if inv['reissued_as_invoice_id']:
+            return False, 'This invoice has already been reissued.', None
         new_id = _reissue_invoice(cur, company_key, invoice_id, username)
         return True, None, {'new_invoice_id': new_id}
 
-    # (b) Guards.
-    is_reopen = (to_state == 'Live')
-    if is_reopen:
-        # THE governing guard: once any payment attaches, reopen is gone. This
-        # prevents a payment application from ever being orphaned by an in-place
-        # edit. amount_paid > 0 is the trip wire.
-        if inv['amount_paid'] and inv['amount_paid'] > 0:
-            return False, ('This invoice has a payment applied and can no longer '
-                           'be reopened. Use Void or Revision to correct it.'), None
+    # ---- Version-level operations: Hardened, Live (reopen), Sent, Revise ----
 
-    # (c) State-specific side effects.
-    history_note = notes
+    if not inv['current_version_id']:
+        return False, 'This invoice has no current version.', None
+    cur.execute("SELECT * FROM invoice_versions WHERE id = %s AND deleted_at IS NULL",
+                (inv['current_version_id'],))
+    ver = cur.fetchone()
+    if not ver:
+        return False, 'Current version not found.', None
+
+    if to_state == ver['state']:
+        return False, f'Invoice is already {to_state}.', None
 
     if to_state == 'Hardened':
-        # Freeze tax from the CURRENT county rate. After this write the invoice
-        # total is pinned regardless of later tax_rates edits.
-        rate_pct, subtotal, tax_total, total = _compute_invoice_tax(cur, invoice_id)
+        if ver['state'] != 'Live':
+            return False, f'Version must be Live to harden (currently {ver["state"]}).', None
         cur.execute("""
-            UPDATE invoices
+            SELECT count(*) AS n FROM invoice_version_line_items
+            WHERE version_id = %s AND deleted_at IS NULL
+              AND deployed_at IS NOT NULL AND retrieved_at IS NULL
+        """, (ver['id'],))
+        if cur.fetchone()['n'] > 0:
+            return False, ('Cannot harden: one or more equipment lines have '
+                           'not been retrieved yet.'), None
+
+        rate_pct, subtotal, tax_total, total = _compute_invoice_tax(cur, invoice_id, ver['id'])
+        cur.execute("""
+            UPDATE invoice_versions
             SET subtotal = %s, tax_rate_pct = %s, tax_total = %s, total = %s,
-                hardened_at = CURRENT_TIMESTAMP, hardened_by = %s,
+                state = 'Hardened', hardened_at = CURRENT_TIMESTAMP, hardened_by = %s,
                 updated_at = CURRENT_TIMESTAMP, updated_by = %s
             WHERE id = %s
-        """, (subtotal, rate_pct, tax_total, total, username, username, invoice_id))
+        """, (subtotal, rate_pct, tax_total, total, username, username, ver['id']))
         # Bake equipment-ordinal labels into the frozen snapshot so a reprint
         # years later is byte-identical (same freeze discipline as the tax rate).
-        # Derived from the SAME resolver used for live rendering, so preview and
-        # print never disagree.
-        for _li_id, _label in _resolve_equipment_labels(cur, invoice_id).items():
+        for _li_id, _label in _resolve_equipment_labels(cur, ver['id']).items():
             cur.execute("""
-                UPDATE invoice_line_items
+                UPDATE invoice_version_line_items
                 SET resolved_label = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
                 WHERE id = %s
             """, (_label, username, _li_id))
 
-    elif to_state == 'Sent':
+        # Revision deltas: if this version supersedes a prior one, this is
+        # where the accountant-friendly dated delta gets written (§2.2 Q4) —
+        # at THIS harden, on THIS version's history row, never retroactively
+        # on the old one.
+        subtotal_delta = tax_delta = None
+        if ver['revision_number'] > 0:
+            cur.execute("""
+                SELECT subtotal, tax_total FROM invoice_versions
+                WHERE invoice_id = %s AND revision_number = %s AND state = 'Superseded'
+            """, (invoice_id, ver['revision_number'] - 1))
+            prior = cur.fetchone()
+            if prior:
+                subtotal_delta = subtotal - (prior['subtotal'] or 0)
+                tax_delta = (tax_total or 0) - (prior['tax_total'] or 0)
+
         cur.execute("""
-            UPDATE invoices
-            SET sent_at = CURRENT_TIMESTAMP, sent_by = %s,
+            INSERT INTO invoice_status_history
+                (invoice_id, state, version_id, from_state, to_state,
+                 subtotal_delta, tax_delta, effective_date, changed_by, notes)
+            VALUES (%s, 'Hardened', %s, 'Live', 'Hardened', %s, %s, CURRENT_DATE, %s, %s)
+        """, (invoice_id, ver['id'], subtotal_delta, tax_delta, username, notes))
+        return True, None, None
+
+    if to_state == 'Sent':
+        if ver['state'] != 'Hardened':
+            return False, f'Version must be Hardened to send (currently {ver["state"]}).', None
+        sent_to_emails = (notes or '').strip() or None
+        cur.execute("""
+            UPDATE invoice_versions
+            SET state = 'Sent', sent_at = CURRENT_TIMESTAMP, sent_by = %s, sent_to_emails = %s,
                 updated_at = CURRENT_TIMESTAMP, updated_by = %s
             WHERE id = %s
-        """, (username, username, invoice_id))
-
-    elif to_state == 'Paid':
-        # This step marks the state only. Recording the actual payment amount
-        # (which sets amount_paid and thereby closes the reopen gate) is the
-        # payment-recording increment. Marking Paid here is the state flip.
+        """, (username, sent_to_emails, username, ver['id']))
         cur.execute("""
-            UPDATE invoices
-            SET updated_at = CURRENT_TIMESTAMP, updated_by = %s
-            WHERE id = %s
-        """, (username, invoice_id))
+            INSERT INTO invoice_status_history (invoice_id, state, version_id, from_state, to_state, changed_by, notes)
+            VALUES (%s, 'Sent', %s, 'Hardened', 'Sent', %s, %s)
+        """, (invoice_id, ver['id'], username,
+              f'Sent to {sent_to_emails}' if sent_to_emails else None))
+        return True, None, None
 
-    elif to_state == 'Void':
-        # Voiding a committed invoice is never silent — a reason is mandatory.
-        void_reason = (notes or '').strip()
-        if not void_reason:
-            return False, 'A void reason is required.', None
-        paid_amt = inv['amount_paid'] or 0
-        opens_credit = (from_state == 'Paid' and paid_amt > 0)
-        if opens_credit:
-            # Paid invoice voided => real money now sits against no valid
-            # invoice. Capture it as a STRUCTURED, queryable OPEN credit (not a
-            # buried note) and flag it LOUDLY in history. Reconciliation
-            # Pattern 3: an open gap forwarded to AR to RESOLVE (refund / apply
-            # / write-off) — never a balance left to linger. The credit
-            # resolution lifecycle is its own later step; here we open + shout.
+    if to_state == 'Live':  # reopen
+        if ver['state'] not in ('Hardened', 'Sent'):
+            return False, (f'Version must be Hardened or Sent to reopen '
+                           f'(currently {ver["state"]}).'), None
+        if _payments_tables_exist(cur):
             cur.execute("""
-                UPDATE invoices
-                SET voided_at = CURRENT_TIMESTAMP, voided_by = %s, void_reason = %s,
-                    credit_amount = %s, credit_status = 'open',
-                    credit_opened_at = CURRENT_TIMESTAMP,
-                    updated_at = CURRENT_TIMESTAMP, updated_by = %s
-                WHERE id = %s
-            """, (username, void_reason, paid_amt, username, invoice_id))
-            history_note = (f'[OPEN CREDIT ${paid_amt:.2f} - REQUIRES RESOLUTION] '
-                            f'Paid invoice voided. {void_reason}')
-        else:
-            cur.execute("""
-                UPDATE invoices
-                SET voided_at = CURRENT_TIMESTAMP, voided_by = %s, void_reason = %s,
-                    updated_at = CURRENT_TIMESTAMP, updated_by = %s
-                WHERE id = %s
-            """, (username, void_reason, username, invoice_id))
-            history_note = void_reason
+                SELECT COALESCE(SUM(amount), 0) AS applied FROM payment_applications
+                WHERE invoice_id = %s AND reverses_application_id IS NULL
+            """, (invoice_id,))
+            if (cur.fetchone()['applied'] or 0) > 0:
+                return False, ('This invoice has a payment applied and can no longer '
+                               'be reopened. Use Void or Revise instead.'), None
 
-    elif to_state == 'Live':  # reopen
-        # Read frozen figures BEFORE clearing, to preserve them in the audit
-        # trail (the "always keep it referenceable" decision).
+        history_note = notes or ''
+        if ver['total'] is not None:
+            prior_bit = (f'Prior frozen total: ${ver["total"]:.2f} '
+                         f'(tax ${ver["tax_total"] or 0:.2f} @ {ver["tax_rate_pct"] or 0}%).')
+            history_note = f'{history_note} {prior_bit}'.strip()
+
         cur.execute("""
-            SELECT tax_rate_pct, tax_total, total FROM invoices WHERE id = %s
-        """, (invoice_id,))
-        prior = cur.fetchone()
-        if prior and prior['total'] is not None:
-            prior_bit = (f'Prior frozen total: ${prior["total"]:.2f} '
-                         f'(tax ${prior["tax_total"] or 0:.2f} '
-                         f'@ {prior["tax_rate_pct"] or 0}%).')
-            history_note = f'{notes + " " if notes else ""}{prior_bit}'
-        # Clear frozen values — Live means not-yet-determined.
-        cur.execute("""
-            UPDATE invoices
-            SET tax_rate_pct = NULL, tax_total = NULL, total = NULL,
+            UPDATE invoice_versions
+            SET state = 'Live', tax_rate_pct = NULL, tax_total = NULL, total = NULL,
                 hardened_at = NULL, hardened_by = NULL,
-                sent_at = NULL, sent_by = NULL,
+                sent_at = NULL, sent_by = NULL, sent_to_emails = NULL,
                 updated_at = CURRENT_TIMESTAMP, updated_by = %s
             WHERE id = %s
-        """, (username, invoice_id))
+        """, (username, ver['id']))
+        cur.execute("""
+            UPDATE invoice_version_line_items
+            SET resolved_label = NULL, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+            WHERE version_id = %s AND deleted_at IS NULL
+        """, (username, ver['id']))
+        cur.execute("""
+            INSERT INTO invoice_status_history (invoice_id, state, version_id, from_state, to_state, changed_by, notes)
+            VALUES (%s, 'Live', %s, %s, 'Live', %s, %s)
+        """, (invoice_id, ver['id'], ver['state'], username, history_note or None))
+        return True, None, None
 
-    # Flip the state itself (all paths).
-    cur.execute("""
-        UPDATE invoices SET state = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
-        WHERE id = %s
-    """, (to_state, username, invoice_id))
+    if to_state == 'Revise':
+        if ver['state'] != 'Sent':
+            return False, f'Version must be Sent to revise (currently {ver["state"]}).', None
+        revision_reason = (notes or '').strip()
+        if not revision_reason:
+            return False, 'A revision reason is required.', None
 
-    # (d) Append history. Always, on every real transition.
-    cur.execute("""
-        INSERT INTO invoice_status_history (invoice_id, state, changed_by, notes)
-        VALUES (%s, %s, %s, %s)
-    """, (invoice_id, to_state, username,
-          history_note or f'Changed from {from_state}'))
+        new_rev_num = ver['revision_number'] + 1
+        cur.execute("""
+            INSERT INTO invoice_versions
+                (invoice_id, revision_number, state, subtotal, tax_county,
+                 notes_to_customer, revision_reason, created_by, updated_by)
+            VALUES (%s, %s, 'Live', %s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (invoice_id, new_rev_num, ver['subtotal'], ver['tax_county'],
+              ver['notes_to_customer'], revision_reason, username, username))
+        new_version_id = cur.fetchone()['id']
 
-    return True, None, None
+        cur.execute("""
+            INSERT INTO invoice_version_line_items
+                (version_id, catalog_item_id, equipment_unit_id, description,
+                 resolved_label, quantity, unit_price, total, is_taxable,
+                 deployed_at, retrieved_at, sort_order, created_by, updated_by)
+            SELECT %s, catalog_item_id, equipment_unit_id, description,
+                   NULL, quantity, unit_price, total, is_taxable,
+                   deployed_at, retrieved_at, sort_order, %s, %s
+            FROM invoice_version_line_items
+            WHERE version_id = %s AND deleted_at IS NULL
+        """, (new_version_id, username, username, ver['id']))
+
+        cur.execute("""
+            UPDATE invoice_versions
+            SET state = 'Superseded', superseded_at = CURRENT_TIMESTAMP,
+                superseded_by_version_id = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+            WHERE id = %s
+        """, (new_version_id, username, ver['id']))
+
+        cur.execute("""
+            UPDATE invoices SET current_version_id = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+            WHERE id = %s
+        """, (new_version_id, username, invoice_id))
+
+        # Receivable-level event, dated today. Subtotal/tax deltas aren't known
+        # yet — those are written on the NEW version's Hardened history row
+        # once it re-hardens (see the Hardened branch above).
+        cur.execute("""
+            INSERT INTO invoice_status_history
+                (invoice_id, state, version_id, from_state, to_state, effective_date, changed_by, notes)
+            VALUES (%s, 'Live', %s, 'Sent', 'Live', CURRENT_DATE, %s, %s)
+        """, (invoice_id, new_version_id, username, revision_reason))
+
+        return True, None, {'new_version_id': new_version_id}
+
+    return False, f'Unhandled operation "{to_state}".', None
 
 
 

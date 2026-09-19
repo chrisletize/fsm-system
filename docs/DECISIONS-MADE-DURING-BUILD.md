@@ -89,6 +89,38 @@ unknowns NULL). Nothing in the codebase records a "primary county" per company t
 work orders/customers carry their own `tax_county`-equivalent per job/location, not a
 company-wide default. Chris/Michele can set it via the new `/settings/company` page.
 
+D-009 — [DEFAULTED] Increment 1.2: the directive's `invoice_balance()` formula and
+`v_invoice_balances` view both need `payment_applications`/`invoice_adjustments`
+(migration 011, Increment 1.4 — not built yet). Rather than wait to build
+`transition_invoice()`'s reopen/void payment guards and `invoice_balance()` until 1.4,
+I guarded every reference to those two tables behind `to_regclass(...) IS NOT NULL`
+(`_payments_tables_exist()`): today it's vacuously "no payments possible yet" (correct,
+since there's no way to record one), and once migration 011 lands the exact same code
+starts enforcing the real guard with no code change needed. Verified this actually
+works, not just compiles, by creating temporary tables matching the future
+`payment_applications`/`invoice_adjustments` shape inside the smoke test's own
+transaction (dropped on rollback) and confirming the reopen-rejected-with-a-payment
+and balance-subtracts-the-payment cases both behave correctly against them.
+`v_invoice_balances` itself is a static view and can't reference tables that don't
+exist yet at CREATE time, so it's deferred to migration 011 outright (same query, just
+trivial once the tables are real).
+
+D-010 — [DEFAULTED] `invoice_status_history.state` (the pre-existing NOT NULL column)
+is kept populated on every new row rather than dropped, since the directive only
+specified *adding* columns to this table. New code sets it to a receivable-level
+value (`'Void'`, `'Live'`) or the resulting version-level value (`'Hardened'`,
+`'Sent'`, `'Live'`) — real reads going forward should prefer `from_state`/`to_state`/
+`version_id`, which are unambiguous about which level and direction the event was.
+
+D-011 — [MODEL] `invoices.supersedes_invoice_id` was renamed to
+`reissue_of_invoice_id` (not just `superseded_by_invoice_id` -> `reissued_as_invoice_id`,
+which the directive names explicitly). Under the old single-table model
+`supersedes_invoice_id` did double duty (revision predecessor OR reissue source);
+revision linkage moved down to `invoice_versions.superseded_by_version_id` in this
+increment, so the receivable-level backward pointer only ever means "reissued from,"
+making the rename the honest choice over leaving a now-single-purpose column with its
+old dual-purpose name. See migration 010's header comment for the full reasoning.
+
 ---
 
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:
