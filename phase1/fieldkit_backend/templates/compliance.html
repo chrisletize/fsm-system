@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}Compliance — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header h1 { font-size:1.75rem; color:{{ branding.color_primary }}; margin-bottom:1.5rem; }
+    .filter-bar { display:flex; gap:.75rem; flex-wrap:wrap; align-items:center; margin-bottom:1.25rem; }
+    .filter-bar select, .filter-bar input[type=date] { padding:.5rem .7rem; border:1px solid #ddd; border-radius:4px; font-size:.88rem; }
+    .section-title { font-size:.75rem; font-weight:700; text-transform:uppercase; letter-spacing:.6px;
+                      color:#888; margin-bottom:.75rem; padding-bottom:.5rem; border-bottom:1px solid #eee; }
+    table { width:100%; border-collapse:collapse; font-size:.88rem; }
+    th { text-align:left; padding:.5rem .7rem; border-bottom:2px solid #eee; font-size:.72rem; text-transform:uppercase; color:#888; }
+    td { padding:.6rem .7rem; border-bottom:1px solid #f0f0f0; }
+    .badge { display:inline-block; padding:.15rem .55rem; border-radius:8px; font-size:.76rem; font-weight:500; }
+    .badge-pending { background:#fff8e1; color:#8a6d00; }
+    .badge-submitted { background:#eef2ff; color:#3949ab; }
+    .badge-accepted { background:#e8f5e9; color:#2e7d32; }
+    .badge-rejected { background:#fdecea; color:#c0392b; }
+    .generic-note { background:#fff8e1; border:1px solid #ffe082; border-radius:6px; padding:.7rem 1rem; font-size:.82rem; color:#6d5300; margin-bottom:1.25rem; }
+    .btn { display:inline-block; padding:.5rem 1rem; border-radius:4px; text-decoration:none; font-weight:500; cursor:pointer; border:none; font-size:.85rem; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-outline { background:white; color:{{ branding.color_primary }}; border:1px solid {{ branding.color_primary }}; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header"><h1>Compliance Portals</h1></div>
+
+<div class="generic-note">
+    Generic layout — portal template not yet confirmed. All three exporters currently emit the same column set
+    (invoice number, date, due date, property/client ID, vendor account, WTN/PO, work-site label, description,
+    subtotal, tax, total) until Chris/Michele supply the real OPS import template and VendorCafe field list.
+</div>
+
+<form method="POST" action="/{{ company_key }}/compliance/export">
+<div class="card">
+    <div class="section-title">Pending Submission ({{ pending|length }})</div>
+    <div class="filter-bar">
+        <a href="?" class="btn btn-outline" style="text-decoration:none;">Clear Filters</a>
+    </div>
+    {% if pending %}
+    <table>
+        <thead>
+            <tr>
+                <th><input type="checkbox" id="selectAllPending" onclick="document.querySelectorAll('.pend-check').forEach(c=>c.checked=this.checked)"></th>
+                <th>Invoice</th><th>Customer</th><th>Portal</th><th>Date</th><th style="text-align:right;">Total</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in pending %}
+            <tr>
+                <td><input type="checkbox" class="pend-check" name="invoice_ids" value="{{ p.id }}"></td>
+                <td><a href="/{{ company_key }}/invoices/{{ p.id }}" style="color:{{ branding.color_primary }};">{{ p.invoice_number }}</a></td>
+                <td>{{ p.customer_name }}</td>
+                <td>{{ p.portal_type or '—' }}</td>
+                <td>{{ p.invoice_date }}</td>
+                <td style="text-align:right;">${{ '%.2f'|format(p.total if p.total is not none else p.subtotal) }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <div style="margin-top:1rem; display:flex; gap:.75rem; align-items:center;">
+        <select name="portal_type" required style="padding:.5rem .7rem; border:1px solid #ddd; border-radius:4px;">
+            <option value="">Choose portal type to export as...</option>
+            {% for t in portal_types %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
+        </select>
+        <button type="submit" class="btn btn-primary">Generate Export</button>
+    </div>
+    {% else %}
+    <p style="color:#aaa; text-align:center; padding:1.5rem 0;">No invoices pending portal submission.</p>
+    {% endif %}
+</div>
+</form>
+
+<div class="card">
+    <div class="section-title">Recent Submissions ({{ recent|length }})</div>
+    {% if recent %}
+    <table>
+        <thead><tr><th>Invoice</th><th>Customer</th><th>Portal</th><th>Status</th><th>Submitted</th><th></th></tr></thead>
+        <tbody>
+            {% for r in recent %}
+            <tr>
+                <td><a href="/{{ company_key }}/invoices/{{ r.id }}" style="color:{{ branding.color_primary }};">{{ r.invoice_number }}</a></td>
+                <td>{{ r.customer_name }}</td>
+                <td>{{ r.portal_type or '—' }}</td>
+                <td><span class="badge badge-{{ r.portal_status }}">{{ r.portal_status }}</span>
+                    {% if r.portal_submission_notes %}<div style="font-size:.78rem; color:#aaa;">{{ r.portal_submission_notes }}</div>{% endif %}
+                </td>
+                <td style="font-size:.82rem; color:#999;">{{ r.portal_submitted_at.strftime('%b %d, %Y') if r.portal_submitted_at else '—' }}</td>
+                <td style="white-space:nowrap;">
+                    {% if r.portal_status == 'submitted' %}
+                    <form method="POST" action="/{{ company_key }}/compliance/{{ r.id }}/accept" style="display:inline;">
+                        <button type="submit" style="font-size:.78rem; color:#2e7d32; background:none; border:none; cursor:pointer;">Accept</button>
+                    </form>
+                    <button type="button" onclick="openRejectModal({{ r.id }})" style="font-size:.78rem; color:#c0392b; background:none; border:none; cursor:pointer;">Reject</button>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color:#aaa; text-align:center; padding:1.5rem 0;">No submissions yet.</p>
+    {% endif %}
+</div>
+
+<div class="modal-overlay" id="rejectModal">
+    <div class="modal-box">
+        <button type="button" class="modal-close" onclick="closeModal('rejectModal')">✕</button>
+        <h3>Reject Submission</h3>
+        <form method="POST" id="rejectForm">
+            <label style="font-size:.85rem; font-weight:600;">Reason
+                <textarea name="notes" rows="3" required style="width:100%; padding:.5rem .6rem; border:1px solid #ddd; border-radius:4px; margin-top:.3rem;"></textarea>
+            </label>
+            <div style="margin-top:1.25rem;">
+                <button type="submit" class="btn btn-primary">Reject</button>
+            </div>
+        </form>
+    </div>
+</div>
+<script>
+function openRejectModal(invoiceId) {
+    document.getElementById('rejectForm').action = '/{{ company_key }}/compliance/' + invoiceId + '/reject';
+    openModal('rejectModal');
+}
+</script>
+{% endblock %}

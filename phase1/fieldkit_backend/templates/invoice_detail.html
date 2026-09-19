@@ -206,7 +206,23 @@
             {% endif %}
             <div class="side-field"><div class="label">Invoice Date</div>{{ inv.invoice_date }}</div>
             <div class="side-field"><div class="label">Source</div>{{ inv.source }}</div>
+            {% if inv.wtn_po_number %}
+            <div class="side-field"><div class="label">WTN / PO</div>{{ inv.wtn_po_number }}</div>
+            {% endif %}
         </div>
+
+        {% if inv.portal_id or inv.portal_status %}
+        <div class="card sidebar-card">
+            <div class="section-title">Compliance Portal</div>
+            <div class="side-field"><div class="label">Status</div>
+                <span class="badge badge-{{ inv.portal_status or 'draft' }}" style="background:#eef2ff; color:#3949ab;">{{ inv.portal_status or 'not submitted' }}</span>
+            </div>
+            {% if inv.portal_submitted_at %}
+            <div class="side-field"><div class="label">Submitted</div>{{ inv.portal_submitted_at.strftime('%b %d, %Y') }}</div>
+            {% endif %}
+            <a href="/{{ company_key }}/compliance" class="side-field" style="display:block; color:{{ branding.color_primary }};">View in Compliance →</a>
+        </div>
+        {% endif %}
 
         <div class="card sidebar-card">
             <div class="section-title">Actions</div>

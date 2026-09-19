@@ -3,278 +3,239 @@
 
 {% block extra_css %}
 <style>
-    .page-header {
-        display: flex; justify-content: space-between;
-        align-items: flex-start; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;
-    }
-    .page-header h1 { font-size: 1.75rem; color: {{ branding.color_primary }}; }
-    .page-header .sub { font-size: 0.9rem; color: #888; margin-top: 0.25rem; }
+    .page-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:1.5rem; flex-wrap:wrap; gap:1rem; }
+    .page-header h1 { font-size:1.75rem; color:{{ branding.color_primary }}; }
 
-    .summary-bar {
-        display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap;
-    }
-    .summary-card {
-        background: white; border-radius: 8px; padding: 1rem 1.5rem;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.08); flex: 1; min-width: 140px;
-        border-left: 4px solid {{ branding.color_primary }};
-    }
-    .summary-card.warning { border-left-color: #f57f17; }
-    .summary-card .num {
-        font-size: 2rem; font-weight: 700; color: {{ branding.color_primary }};
-        line-height: 1;
-    }
-    .summary-card.warning .num { color: #f57f17; }
-    .summary-card .label { font-size: 0.82rem; color: #888; margin-top: 0.25rem; }
+    .summary-bar { display:flex; gap:1rem; margin-bottom:1rem; flex-wrap:wrap; }
+    .summary-card { background:white; border-radius:8px; padding:1rem 1.5rem; box-shadow:0 1px 3px rgba(0,0,0,0.08);
+                     flex:1; min-width:150px; border-left:4px solid {{ branding.color_primary }}; }
+    .summary-card.warning { border-left-color:#c0392b; }
+    .summary-card .num { font-size:1.9rem; font-weight:700; color:{{ branding.color_primary }}; line-height:1; }
+    .summary-card.warning .num { color:#c0392b; }
+    .summary-card .label { font-size:.8rem; color:#888; margin-top:.25rem; }
 
-    .card { background: white; border-radius: 8px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 1.5rem; }
-    .card-header {
-        padding: 1rem 1.5rem; border-bottom: 1px solid #f0f0f0;
-        display: flex; justify-content: space-between; align-items: center;
-        flex-wrap: wrap; gap: 0.75rem;
-    }
-    .card-header h2 { font-size: 1rem; font-weight: 700; color: #333; margin: 0; }
-    .card-header .actions { display: flex; gap: 0.75rem; align-items: center; }
+    .aging-strip { display:flex; gap:1rem; margin-bottom:1.25rem; }
+    .aging-cell { flex:1; background:white; border-radius:8px; padding:.75rem 1rem; text-align:center; box-shadow:0 1px 3px rgba(0,0,0,0.06); }
+    .aging-cell .amt { font-size:1.2rem; font-weight:700; color:#333; }
+    .aging-cell .lbl { font-size:.72rem; color:#999; text-transform:uppercase; letter-spacing:.4px; margin-top:.2rem; }
 
-    .section-title {
-        font-size: 0.75rem; font-weight: 700; text-transform: uppercase;
-        letter-spacing: 0.6px; color: #888;
-    }
+    .credits-panel { background:#fdecea; border:1px solid #f5c6cb; border-radius:8px; padding:1rem 1.25rem; margin-bottom:1.25rem; }
+    .credits-panel h3 { color:#c0392b; font-size:.95rem; margin-bottom:.5rem; }
+    .credits-panel .row { display:flex; justify-content:space-between; padding:.3rem 0; font-size:.88rem; }
 
-    /* Table */
-    .billing-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
-    .billing-table th {
-        padding: 0.6rem 1rem; text-align: left; font-size: 0.75rem;
-        font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
-        color: #888; border-bottom: 2px solid #f0f0f0; background: #fafafa;
-        white-space: nowrap;
-    }
-    .billing-table th.center { text-align: center; }
-    .billing-table td {
-        padding: 0.75rem 1rem; border-bottom: 1px solid #f5f5f5;
-        vertical-align: middle;
-    }
-    .billing-table tr:last-child td { border-bottom: none; }
-    .billing-table tr:hover td { background: #fafafa; }
-    .billing-table tr.selected td { background: {{ branding.color_primary }}08; }
+    .filter-bar { display:flex; gap:.6rem; margin-bottom:1rem; flex-wrap:wrap; align-items:center; }
+    .filter-bar a { padding:.4rem .9rem; border-radius:20px; font-size:.82rem; text-decoration:none; color:#666; background:#f0f0f0; }
+    .filter-bar a.active { background:{{ branding.color_primary }}; color:white; }
+    .filter-bar input[type=text] { padding:.45rem .7rem; border:1px solid #ddd; border-radius:20px; font-size:.85rem; margin-left:auto; }
 
-    .customer-name { font-weight: 600; color: #222; }
-    .customer-name a { color: {{ branding.color_primary }}; text-decoration: none; }
-    .customer-name a:hover { text-decoration: underline; }
-    .customer-meta { font-size: 0.8rem; color: #aaa; margin-top: 0.1rem; }
+    .card { background:white; border-radius:8px; box-shadow:0 1px 3px rgba(0,0,0,0.08); margin-bottom:1.5rem; }
+    .card-header { padding:1rem 1.5rem; border-bottom:1px solid #f0f0f0; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:.75rem; }
+    .card-header .actions { display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; }
 
-    .billing-email { color: #555; }
-    .billing-email a { color: {{ branding.color_primary }}; text-decoration: none; font-size: 0.85rem; }
-    .multi-email { font-size: 0.8rem; color: #888; margin-top: 0.2rem; }
+    .billing-table { width:100%; border-collapse:collapse; font-size:.85rem; }
+    .billing-table th { padding:.55rem .7rem; text-align:left; font-size:.7rem; font-weight:700; text-transform:uppercase;
+                         letter-spacing:.4px; color:#888; border-bottom:2px solid #f0f0f0; background:#fafafa; white-space:nowrap; }
+    .billing-table th.num, .billing-table td.num { text-align:right; }
+    .billing-table td { padding:.65rem .7rem; border-bottom:1px solid #f5f5f5; vertical-align:middle; }
+    .billing-table tr:hover td { background:#fafafa; }
+    .row-checkbox { width:15px; height:15px; accent-color:{{ branding.color_primary }}; cursor:pointer; }
+    .customer-name { font-weight:600; color:#222; }
+    .customer-name a { color:{{ branding.color_primary }}; text-decoration:none; }
+    .delinquent-flag { color:#c0392b; font-weight:700; margin-right:.3rem; cursor:help; }
+    .portal-badge { display:inline-block; background:#eef2ff; color:#3949ab; border-radius:8px; padding:.1rem .5rem; font-size:.72rem; margin-left:.4rem; }
+    .row-actions a, .row-actions button { font-size:.78rem; margin-right:.4rem; color:{{ branding.color_primary }}; background:none; border:none; cursor:pointer; text-decoration:none; }
+    .credit-amt { color:#c0392b; font-weight:600; }
 
-    .no-billing-cell {
-        color: #f57f17; font-size: 0.82rem; font-weight: 600;
-    }
-    .no-billing-cell a { color: #e65100; }
-
-    /* Checkbox */
-    .row-checkbox { width: 16px; height: 16px; accent-color: {{ branding.color_primary }}; cursor: pointer; }
-    .check-cell { text-align: center; width: 40px; }
-
-    /* Select all row */
-    .select-all-row { background: #f9f9f9; }
-    .select-all-row td { padding: 0.5rem 1rem; font-size: 0.82rem; color: #666; }
-
-    /* Warning section */
-    .warning-banner {
-        padding: 0.75rem 1rem; background: #fff8e1; border: 1px solid #ffe082;
-        border-radius: 4px; font-size: 0.85rem; color: #f57f17; margin-bottom: 1rem;
-    }
-    .no-billing-list { padding: 0.75rem 1.5rem; }
-    .no-billing-item {
-        display: flex; justify-content: space-between; align-items: center;
-        padding: 0.5rem 0; border-bottom: 1px solid #f5f5f5; font-size: 0.88rem;
-    }
-    .no-billing-item:last-child { border-bottom: none; }
-
-    /* Buttons */
-    .btn { display: inline-block; padding: 0.6rem 1.25rem; border-radius: 4px;
-           text-decoration: none; font-weight: 500; cursor: pointer;
-           border: none; font-size: 0.9rem; }
-    .btn-primary { background: {{ branding.color_primary }}; color: white; }
-    .btn-primary:hover { opacity: 0.9; }
-    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
-    .btn-outline {
-        background: white; color: {{ branding.color_primary }};
-        border: 1px solid {{ branding.color_primary }};
-    }
-    .btn-outline:hover { background: {{ branding.color_primary }}11; }
-    .btn-sm { padding: 0.3rem 0.75rem; font-size: 0.8rem; }
-
-    .selected-count {
-        font-size: 0.85rem; color: #888;
-        padding: 0.4rem 0.75rem; background: #f5f5f5; border-radius: 4px;
-    }
-    .selected-count span { font-weight: 700; color: {{ branding.color_primary }}; }
+    .btn { display:inline-block; padding:.55rem 1.1rem; border-radius:4px; text-decoration:none; font-weight:500; cursor:pointer; border:none; font-size:.85rem; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-primary:disabled { opacity:.4; cursor:not-allowed; }
+    .btn-outline { background:white; color:{{ branding.color_primary }}; border:1px solid {{ branding.color_primary }}; }
+    .btn-outline:disabled { opacity:.4; cursor:not-allowed; }
+    .selected-count { font-size:.82rem; color:#888; padding:.35rem .7rem; background:#f5f5f5; border-radius:4px; }
 </style>
 {% endblock %}
 
 {% block content %}
-
 <div class="page-header">
+    <h1>Billing</h1>
     <div>
-        <h1>Billing</h1>
-        <div class="sub">Select customers to include in the next billing batch</div>
+        <a href="/{{ company_key }}/reports/aging" class="btn btn-outline">A/R Aging Report</a>
+        <a href="/{{ company_key }}/compliance" class="btn btn-outline">Compliance</a>
     </div>
 </div>
 
-<!-- Summary cards -->
 <div class="summary-bar">
     <div class="summary-card">
-        <div class="num">{{ ready_count }}</div>
-        <div class="label">Ready for billing</div>
-    </div>
-    <div class="summary-card warning">
-        <div class="num">{{ no_billing_count }}</div>
-        <div class="label">Missing billing contact</div>
+        <div class="num">${{ '{:,.2f}'.format(total_outstanding) }}</div>
+        <div class="label">Total outstanding</div>
     </div>
     <div class="summary-card">
-        <div class="num">{{ ready_count + no_billing_count }}</div>
-        <div class="label">Active customers total</div>
+        <div class="num">{{ customers_with_balance }}</div>
+        <div class="label">Customers with balances</div>
+    </div>
+    <div class="summary-card warning">
+        <div class="num">{{ count_90_plus }}</div>
+        <div class="label">90+ days past due</div>
     </div>
 </div>
 
-{% if ready %}
-<form method="POST" action="/{{ company_key }}/billing/export" id="billingForm">
+<div class="aging-strip">
+    <div class="aging-cell"><div class="amt">${{ '{:,.2f}'.format(rows|sum(attribute='current')) }}</div><div class="lbl">Current</div></div>
+    <div class="aging-cell"><div class="amt">${{ '{:,.2f}'.format(rows|sum(attribute='b31_60')) }}</div><div class="lbl">31&ndash;60</div></div>
+    <div class="aging-cell"><div class="amt">${{ '{:,.2f}'.format(rows|sum(attribute='b61_90')) }}</div><div class="lbl">61&ndash;90</div></div>
+    <div class="aging-cell"><div class="amt">${{ '{:,.2f}'.format(rows|sum(attribute='b90_plus')) }}</div><div class="lbl">90+</div></div>
+</div>
 
+{% if open_credits %}
+<div class="credits-panel">
+    <h3>Open Credits — {{ open_credits|length }} customer{{ 's' if open_credits|length != 1 }}</h3>
+    {% for c in open_credits %}
+    <div class="row">
+        <a href="/{{ company_key }}/customers/{{ c.id }}" style="color:#c0392b;">{{ c.property_name }}</a>
+        <span>${{ '%.2f'|format(c.unapplied_credit) }} unapplied</span>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<div class="filter-bar">
+    <a href="?filter=all{% if search %}&search={{ search }}{% endif %}" class="{% if filter_type == 'all' %}active{% endif %}">All</a>
+    <a href="?filter=balance{% if search %}&search={{ search }}{% endif %}" class="{% if filter_type == 'balance' %}active{% endif %}">With Balance</a>
+    <a href="?filter=delinquent{% if search %}&search={{ search }}{% endif %}" class="{% if filter_type == 'delinquent' %}active{% endif %}">Delinquent</a>
+    <a href="?filter=no_contact{% if search %}&search={{ search }}{% endif %}" class="{% if filter_type == 'no_contact' %}active{% endif %}">No Billing Contact</a>
+    <a href="?filter=portal{% if search %}&search={{ search }}{% endif %}" class="{% if filter_type == 'portal' %}active{% endif %}">Portal-Billed</a>
+    <form method="GET" style="margin-left:auto;">
+        <input type="hidden" name="filter" value="{{ filter_type }}">
+        <input type="text" name="search" value="{{ search }}" placeholder="Search customer...">
+    </form>
+</div>
+
+<form method="POST" action="/{{ company_key }}/billing/export" id="billingForm">
     <div class="card">
         <div class="card-header">
-            <div>
-                <h2>Ready for Billing</h2>
-                <div class="section-title" style="margin-top:0.25rem;">
-                    Customers with billing contacts configured
-                </div>
-            </div>
+            <div><span class="selected-count"><span id="selectedCount">0</span> selected</span></div>
             <div class="actions">
-                <span class="selected-count">
-                    <span id="selectedCount">0</span> selected
-                </span>
                 <button type="submit" formaction="/{{ company_key }}/billing/statements" formtarget="_blank"
-                        class="btn btn-outline" id="statementsBtn" disabled>
-                    Generate Statements
-                </button>
+                        class="btn btn-outline" id="statementsBtn" disabled>Generate Statements</button>
                 {% if resend_configured %}
                 <button type="submit" formaction="/{{ company_key }}/billing/send-statements"
                         class="btn btn-outline" id="sendStatementsBtn" disabled
-                        onclick="return confirm('Email statements to every selected customer with a statement contact on file?');">
-                    Send Statements
-                </button>
+                        onclick="return confirm('Email statements to every selected customer with a statement contact on file?');">Send Statements</button>
                 {% endif %}
-                <button type="submit" class="btn btn-primary" id="exportBtn" disabled>
-                    Export CSV
-                </button>
+                <button type="submit" class="btn btn-primary" id="exportBtn" disabled>Export CSV</button>
             </div>
         </div>
 
         <table class="billing-table">
             <thead>
-                <tr class="select-all-row">
-                    <td class="check-cell">
-                        <input type="checkbox" class="row-checkbox" id="selectAll"
-                               title="Select all">
-                    </td>
-                    <td colspan="3">
-                        <label for="selectAll" style="cursor:pointer; font-weight:600;">
-                            Select all {{ ready_count }} customers
-                        </label>
-                    </td>
-                </tr>
                 <tr>
-                    <th class="center">✓</th>
+                    <th><input type="checkbox" class="row-checkbox" id="selectAll"></th>
                     <th>Customer</th>
-                    <th>Billing Contact(s)</th>
-                    <th>Billing Email(s)</th>
+                    <th>Billing Contact</th>
+                    <th class="num">Current</th>
+                    <th class="num">31&ndash;60</th>
+                    <th class="num">61&ndash;90</th>
+                    <th class="num">90+</th>
+                    <th class="num">Total Due</th>
+                    <th>Last Statement</th>
+                    <th class="num">Credit</th>
+                    <th></th>
                 </tr>
             </thead>
             <tbody>
-                {% for customer in ready %}
-                <tr class="customer-row" data-id="{{ customer.id }}">
-                    <td class="check-cell">
-                        <input type="checkbox" class="row-checkbox customer-check"
-                               name="customer_ids" value="{{ customer.id }}">
-                    </td>
+                {% for r in rows %}
+                <tr>
+                    <td><input type="checkbox" class="row-checkbox customer-check" name="customer_ids" value="{{ r.id }}"></td>
                     <td>
                         <div class="customer-name">
-                            <a href="/{{ company_key }}/customers/{{ customer.id }}">
-                                {{ customer.property_name }}
-                            </a>
+                            {% if r.delinquent %}<span class="delinquent-flag" title="Oldest open invoice: {{ r.oldest }}">&#9679;</span>{% endif %}
+                            <a href="/{{ company_key }}/customers/{{ r.id }}">{{ r.property_name }}</a>
+                            {% if r.portal_billed %}<span class="portal-badge">Portal billing — no direct email</span>{% endif %}
                         </div>
-                        <div class="customer-meta">
-                            {{ customer.customer_type }}
-                            {% if customer.management_company_name %}
-                             · {{ customer.management_company_name }}
-                            {% endif %}
-                        </div>
+                        <div style="font-size:.78rem; color:#aaa;">{{ r.customer_type }}{% if r.management_company_name %} · {{ r.management_company_name }}{% endif %}</div>
                     </td>
                     <td>
-                        {{ customer.primary_billing_name or '—' }}
-                        {% if customer.billing_contact_count > 1 %}
-                        <div class="multi-email">+{{ customer.billing_contact_count - 1 }} more</div>
-                        {% endif %}
+                        {{ r.primary_billing_name or '—' }}
+                        {% if not r.billing_contact_count %}<div style="color:#c0392b; font-size:.78rem;">No billing contact</div>{% endif %}
                     </td>
-                    <td class="billing-email">
-                        {% if customer.billing_emails %}
-                            {% set emails = customer.billing_emails.split(', ') %}
-                            <a href="mailto:{{ emails[0] }}">{{ emails[0] }}</a>
-                            {% if emails|length > 1 %}
-                            <div class="multi-email">+{{ emails|length - 1 }} more</div>
-                            {% endif %}
-                        {% else %}
-                        <span style="color:#aaa;">No email on file</span>
+                    <td class="num">{% if r.current > 0.005 %}${{ '%.2f'|format(r.current) }}{% else %}—{% endif %}</td>
+                    <td class="num">{% if r.b31_60 > 0.005 %}${{ '%.2f'|format(r.b31_60) }}{% else %}—{% endif %}</td>
+                    <td class="num">{% if r.b61_90 > 0.005 %}${{ '%.2f'|format(r.b61_90) }}{% else %}—{% endif %}</td>
+                    <td class="num">{% if r.b90_plus > 0.005 %}${{ '%.2f'|format(r.b90_plus) }}{% else %}—{% endif %}</td>
+                    <td class="num" style="font-weight:700;">${{ '%.2f'|format(r.total_due) }}</td>
+                    <td style="font-size:.8rem; color:#999;">{{ r.last_statement_at.strftime('%b %d, %Y') if r.last_statement_at else 'Never' }}</td>
+                    <td class="num {% if r.unapplied_credit > 0.005 %}credit-amt{% endif %}">{% if r.unapplied_credit > 0.005 %}${{ '%.2f'|format(r.unapplied_credit) }}{% else %}—{% endif %}</td>
+                    <td class="row-actions">
+                        <a href="/{{ company_key }}/customers/{{ r.id }}">View</a>
+                        <a href="/{{ company_key }}/customers/{{ r.id }}/statement" target="_blank">Statement</a>
+                        {% if r.total_due > 0.005 %}
+                        <button type="button" onclick="openPaymentModal({{ r.id }}, {{ r.property_name|tojson }}, {{ r.open_invoices|tojson }})">Pay</button>
                         {% endif %}
                     </td>
                 </tr>
+                {% else %}
+                <tr><td colspan="11" style="text-align:center; color:#aaa; padding:2rem;">No customers match this filter.</td></tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
-
 </form>
-{% endif %}
 
-<!-- Customers missing billing contacts -->
-{% if no_billing %}
-<div class="card">
-    <div class="card-header">
-        <div>
-            <h2>⚠️ Missing Billing Contact</h2>
-            <div class="section-title" style="margin-top:0.25rem;">
-                These customers will not appear in billing batches until a billing contact is added
+<!-- Shared Record Payment modal, pre-filtered per customer via JS -->
+<div class="modal-overlay" id="billingPaymentModal">
+    <div class="modal-box">
+        <button type="button" class="modal-close" onclick="closeModal('billingPaymentModal')">✕</button>
+        <h3 id="billingPaymentModalTitle">Record Payment</h3>
+        <form method="POST" action="/{{ company_key }}/payments/new">
+            <input type="hidden" name="customer_id" id="billingPaymentCustomerId">
+            <input type="hidden" name="redirect_to" value="/{{ company_key }}/billing">
+            <div style="display:flex; flex-direction:column; gap:.7rem;">
+                <label style="font-size:.85rem; font-weight:600;">Amount
+                    <input type="number" name="amount" id="billingPaymentAmount" step="0.01" min="0.01" required
+                           style="width:100%; padding:.5rem .6rem; border:1px solid #ddd; border-radius:4px; margin-top:.3rem;">
+                </label>
+                <label style="font-size:.85rem; font-weight:600;">Payment Date
+                    <input type="date" name="payment_date" value="{{ today }}"
+                           style="width:100%; padding:.5rem .6rem; border:1px solid #ddd; border-radius:4px; margin-top:.3rem;">
+                </label>
+                <label style="font-size:.85rem; font-weight:600;">Apply to Invoice
+                    <select name="apply_to_invoice_id" id="billingPaymentInvoiceSelect"
+                            style="width:100%; padding:.5rem .6rem; border:1px solid #ddd; border-radius:4px; margin-top:.3rem;">
+                    </select>
+                </label>
+                <label style="font-size:.85rem; font-weight:600;">Reference #
+                    <input type="text" name="reference_number" style="width:100%; padding:.5rem .6rem; border:1px solid #ddd; border-radius:4px; margin-top:.3rem;">
+                </label>
             </div>
-        </div>
-    </div>
-    <div class="no-billing-list">
-        {% for customer in no_billing %}
-        <div class="no-billing-item">
-            <div>
-                <a href="/{{ company_key }}/customers/{{ customer.id }}"
-                   style="font-weight:600; color:{{ branding.color_primary }}; text-decoration:none;">
-                    {{ customer.property_name }}
-                </a>
-                <span style="font-size:0.8rem; color:#aaa; margin-left:0.5rem;">
-                    {{ customer.customer_type }}
-                </span>
+            <div style="margin-top:1.25rem;">
+                <button type="submit" class="btn btn-primary">Record Payment</button>
             </div>
-            <a href="/{{ company_key }}/customers/{{ customer.id }}/contacts/new"
-               class="btn btn-outline btn-sm">Add Contact</a>
-        </div>
-        {% endfor %}
+        </form>
     </div>
 </div>
-{% endif %}
-
-{% if not ready and not no_billing %}
-<div class="card" style="padding:3rem; text-align:center; color:#aaa;">
-    No active customers found.
-</div>
-{% endif %}
 
 <script>
+function openPaymentModal(customerId, customerName, openInvoices) {
+    document.getElementById('billingPaymentModalTitle').textContent = 'Record Payment — ' + customerName;
+    document.getElementById('billingPaymentCustomerId').value = customerId;
+
+    const select = document.getElementById('billingPaymentInvoiceSelect');
+    select.innerHTML = '<option value="">Leave unapplied (credit)</option>' +
+        openInvoices.map(inv => `<option value="${inv.id}" data-balance="${inv.balance}">${inv.number} — $${inv.balance.toFixed(2)} due</option>`).join('');
+
+    const amountInput = document.getElementById('billingPaymentAmount');
+    function syncAmount() {
+        const opt = select.options[select.selectedIndex];
+        amountInput.value = opt && opt.dataset.balance ? parseFloat(opt.dataset.balance).toFixed(2) : '';
+    }
+    select.onchange = syncAmount;
+    if (openInvoices.length === 1) {
+        select.value = openInvoices[0].id;
+    }
+    syncAmount();
+    openModal('billingPaymentModal');
+}
+
 const selectAll     = document.getElementById('selectAll');
 const checks        = document.querySelectorAll('.customer-check');
 const countDisplay  = document.getElementById('selectedCount');
@@ -288,36 +249,18 @@ function updateCount() {
     exportBtn.disabled = n === 0;
     statementsBtn.disabled = n === 0;
     if (sendStatementsBtn) sendStatementsBtn.disabled = n === 0;
-    // Highlight selected rows
-    checks.forEach(cb => {
-        cb.closest('tr').classList.toggle('selected', cb.checked);
-    });
-    // Sync select-all state
     if (selectAll) {
         selectAll.checked = n === checks.length && checks.length > 0;
         selectAll.indeterminate = n > 0 && n < checks.length;
     }
 }
-
 if (selectAll) {
     selectAll.addEventListener('change', () => {
         checks.forEach(cb => cb.checked = selectAll.checked);
         updateCount();
     });
 }
-
 checks.forEach(cb => cb.addEventListener('change', updateCount));
-
-// Allow clicking anywhere on the row to toggle
-document.querySelectorAll('.customer-row').forEach(row => {
-    row.addEventListener('click', e => {
-        if (e.target.tagName === 'A' || e.target.tagName === 'INPUT') return;
-        const cb = row.querySelector('.customer-check');
-        cb.checked = !cb.checked;
-        updateCount();
-    });
-    row.style.cursor = 'pointer';
-});
+updateCount();
 </script>
-
 {% endblock %}

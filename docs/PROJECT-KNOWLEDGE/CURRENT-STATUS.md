@@ -21,12 +21,13 @@ reporting until FieldKit's billing is complete.
 | Users: list/new/edit/reset-password/toggle-active/email reset via Resend | Built |
 | Catalog CRUD, equipment registry CRUD | Built |
 | Work orders: list/search/new/edit/detail/delete, two-row-type line items, per-day equipment accrual, `work_site_label`, auto-description, double-booking banner, status history, tech assignment (username-keyed) | Built |
-| Billing page | Minimal v1 only — customer list + billing-contact readiness + CSV export. No balances/aging/statements. |
+| Billing page | Full rebuild (1.8): summary cards, aging strip, filter bar (delinquent/no_contact/portal/all), per-customer Record Payment pre-filtered to real open invoices. |
+| A/R Aging report | Built (1.8, `/reports/aging`), 4-bucket (0-30/31-60/61-90/90+), sortable, print-friendly drill-down. |
 | `tax_rates` | Built, effective-dated (migration 009), `/settings/tax` UI live. 101 rows (NC) in GAG/KC/CTS, 0 in Kleanit SF. |
 | `company_settings` | Built (migration 009), `/settings/company` UI live. One seeded row per DB (`company_name` only; everything else NULL pending Chris/Michele). |
-| Invoice engine | Receivable/version schema + full UI (1.2–1.6) + email delivery (1.7, migration 014): real Resend sends for invoices/statements with `email_log`, send dialogs, batch send-statements summary. No portal/full billing page yet (1.8). Zero real invoice/payment/email rows in production yet (only test fixtures, created and cleaned up by each smoke test — email tests use a monkey-patched Resend + `.invalid`-address fixtures, confirmed zero real sends). |
-| `customer_compliance_portals` | Table exists, 0 rows, no UI. |
-| Dispatch, extraction queue, reports, estimates, sales CRM, company settings, payment methods, tax settings UI, tags, dashboard stats | Not built |
+| Invoice engine | Receivable/version schema + full UI (1.2–1.6) + email delivery (1.7, migration 014) + WTN/PO + compliance portal fields (1.8, migration 015). Zero real invoice/payment/email rows in production yet (only test fixtures, created and cleaned up by each smoke test — email tests use a monkey-patched Resend + `.invalid`-address fixtures, confirmed zero real sends). |
+| Compliance portals | Built (1.8, migration 015): `customer_compliance_portals` table, enrollment/edit/toggle UI, auto-assign-on-harden, `/compliance` review page with accept/reject + generic `.xlsx` export (real per-portal templates still pending from Chris/Michele). |
+| Dispatch, extraction queue, other reports, estimates, sales CRM, payment methods, tags, dashboard stats | Not built |
 
 This table matches `FIELDKIT_BUILD_DIRECTIVE_2026-09.md` §0.2 — confirmed by grepping
 the full route list out of `app.py` (3,248 lines) and querying row counts in all four
@@ -34,10 +35,12 @@ production databases directly, not taken on faith from either doc.
 
 ## Current build
 Following `docs/FIELDKIT_BUILD_DIRECTIVE_2026-09.md` stage by stage. Stage 0 complete.
-**Stage 1 — Finish invoicing & billing**: Increments 1.1 through 1.7 complete (tax
+**Stage 1 — Finish invoicing & billing**: Increments 1.1 through 1.8 complete (tax
 rates/company settings, receivable/version invoice refactor, invoice UI, payments,
-invoice PDF, statements, email delivery). Next: Increment 1.8 (billing page full
-rebuild, A/R aging report, compliance).
+invoice PDF, statements, email delivery, billing page rebuild + A/R aging + compliance
+portals). Next: Increment 1.9 (cutover data import from Phase 0) — flagged in the
+directive as requiring Chris's explicit go-ahead before the real, non-dry-run import
+runs.
 
 Decisions Chris has already made for this build (delinquent threshold = 90 days past
 invoice date, FL tax left empty/exempt for Kleanit SF, SF-import receivables excluded

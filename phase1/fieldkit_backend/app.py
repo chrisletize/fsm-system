@@ -17,6 +17,7 @@ import re
 import io
 import zipfile
 import base64
+from openpyxl import Workbook
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -558,6 +559,11 @@ def customer_detail(company_key, customer_id, branding, all_companies, company_a
         default_statement_body = _render_email_template(
             settings_row.get('statement_email_template'), customer['property_name'], '', None, None)
 
+    cur.execute("""
+        SELECT * FROM customer_compliance_portals WHERE customer_id = %s ORDER BY is_active DESC, portal_type
+    """, (customer_id,))
+    compliance_portals = cur.fetchall()
+
     cur.close(); conn.close()
 
     return render_template('customer_detail.html',
@@ -569,6 +575,7 @@ def customer_detail(company_key, customer_id, branding, all_companies, company_a
         customer_payments=customer_payments, unapplied_credit=unapplied_credit,
         payment_methods=payment_methods, today=date.today().isoformat(),
         statement_recipients=statement_recipients, resend_configured=bool(RESEND_API_KEY),
+        compliance_portals=compliance_portals, portal_types=PORTAL_TYPES,
         default_statement_subject=default_statement_subject, default_statement_body=default_statement_body,
     )
 
@@ -2030,6 +2037,29 @@ def transition_invoice(cur, company_key, invoice_id, to_state, username, notes=N
                 SET resolved_label = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
                 WHERE id = %s
             """, (_label, username, _li_id))
+
+        # Compliance portal: hardening is "ready to submit" for an enrolled
+        # customer. Auto-assign the portal if the customer has exactly one
+        # active enrollment and none was already picked on the invoice form;
+        # with 0 or 2+ enrollments, leave portal_id for the office to choose
+        # (via invoice edit) rather than guessing.
+        cur.execute("SELECT customer_id, portal_id FROM invoices WHERE id = %s", (invoice_id,))
+        inv_row = cur.fetchone()
+        portal_id = inv_row['portal_id']
+        if not portal_id:
+            cur.execute("""
+                SELECT id FROM customer_compliance_portals
+                WHERE customer_id = %s AND is_active = TRUE
+            """, (inv_row['customer_id'],))
+            enrollments = cur.fetchall()
+            if len(enrollments) == 1:
+                portal_id = enrollments[0]['id']
+                cur.execute("UPDATE invoices SET portal_id = %s WHERE id = %s", (portal_id, invoice_id))
+        if portal_id:
+            cur.execute("""
+                UPDATE invoices SET portal_status = 'pending', updated_at = CURRENT_TIMESTAMP, updated_by = %s
+                WHERE id = %s
+            """, (username, invoice_id))
 
         # Revision deltas: if this version supersedes a prior one, this is
         # where the accountant-friendly dated delta gets written (§2.2 Q4) —
@@ -3578,6 +3608,8 @@ def invoice_edit(company_key, invoice_id, branding, all_companies, company_acces
         invoice_date      = request.form.get('invoice_date', '').strip() or None
         tax_county        = request.form.get('tax_county', '').strip() or None
         notes_to_customer = request.form.get('notes_to_customer', '').strip() or None
+        wtn_po_number     = request.form.get('wtn_po_number', '').strip() or None
+        portal_id         = _opt_num(request.form.get('portal_id'))
 
         line_ids     = request.form.getlist('line_id')
         descriptions = request.form.getlist('description')
@@ -3642,11 +3674,12 @@ def invoice_edit(company_key, invoice_id, branding, all_companies, company_acces
                     updated_at = CURRENT_TIMESTAMP, updated_by = %s
                 WHERE id = %s
             """, (tax_county, notes_to_customer, username, ver['id']))
-            if invoice_date:
-                cur.execute("""
-                    UPDATE invoices SET invoice_date = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
-                    WHERE id = %s
-                """, (invoice_date, username, invoice_id))
+            cur.execute("""
+                UPDATE invoices
+                SET invoice_date = COALESCE(%s, invoice_date), wtn_po_number = %s, portal_id = %s,
+                    updated_at = CURRENT_TIMESTAMP, updated_by = %s
+                WHERE id = %s
+            """, (invoice_date, wtn_po_number, portal_id, username, invoice_id))
             conn.commit()
             cur.close(); conn.close()
             flash('Invoice saved.', 'success')
@@ -3665,12 +3698,17 @@ def invoice_edit(company_key, invoice_id, branding, all_companies, company_acces
         ORDER BY name
     """)
     catalog_options = [{'id': r['id'], 'name': r['invoice_label'] or r['name']} for r in cur.fetchall()]
+    cur.execute("""
+        SELECT id, portal_type, portal_label FROM customer_compliance_portals
+        WHERE customer_id = %s AND is_active = TRUE ORDER BY portal_type
+    """, (inv['customer_id'],))
+    portal_options = cur.fetchall()
     cur.close(); conn.close()
     return render_template('invoice_form.html',
         branding=branding, company_key=company_key,
         company_access=company_access, all_companies=all_companies,
         inv=inv, ver=ver, line_items=line_items, error=error,
-        catalog_options=catalog_options,
+        catalog_options=catalog_options, portal_options=portal_options,
     )
 
 
@@ -4872,62 +4910,137 @@ def billing_statements_batch(company_key):
 # Billing — Michele's batch billing page
 # ============================================================================
 
+def _customer_aging_summary(cur, customer_id):
+    """One customer's open receivables with balance > 0, bucketed the same
+    way generate_statement_pdf ages a statement (_aging_bucket_label).
+    Returns (buckets_dict, total_due, oldest_invoice_date_or_None). Shared by
+    the billing page and the A/R aging report so the two can never disagree."""
+    cur.execute("""
+        SELECT id, invoice_date FROM invoices
+        WHERE customer_id = %s AND deleted_at IS NULL AND receivable_state = 'open'
+        ORDER BY invoice_date
+    """, (customer_id,))
+    buckets = {'CURRENT': 0.0, '31-60 DAYS': 0.0, '61-90 DAYS': 0.0, '90+ DAYS': 0.0}
+    total = 0.0
+    oldest = None
+    today = date.today()
+    for inv in cur.fetchall():
+        bal = invoice_balance(cur, inv['id'])
+        if bal is None or bal <= 0.005:
+            continue
+        days = (today - inv['invoice_date']).days
+        bucket = _aging_bucket_label(days)
+        buckets[bucket if bucket != 'FUTURE' else 'CURRENT'] += bal
+        total += bal
+        if oldest is None or inv['invoice_date'] < oldest:
+            oldest = inv['invoice_date']
+    return buckets, total, oldest
+
+
+# Delinquent threshold: 90 days past invoice date, per Chris's 2026-09-18 answer
+# (directive's own default was 60 — see docs/DECISIONS-MADE-DURING-BUILD.md D-001).
+DELINQUENT_DAYS_PAST_INVOICE = 90
+
+
 @app.route('/<company_key>/billing')
 @login_required
 @company_access_required
 @with_branding
 def billing(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    filter_type = request.args.get('filter', 'all')
+    search = request.args.get('search', '').strip()
+
     conn = get_db_connection(company_key)
     cur  = conn.cursor()
-
-    # Get all active customers with their billing contacts
-    cur.execute("""
+    conditions = ["c.deleted_at IS NULL", "c.status = 'Active'"]
+    params = []
+    if search:
+        conditions.append("c.property_name ILIKE %s")
+        params.append(f'%{search}%')
+    where = " AND ".join(conditions)
+    cur.execute(f"""
         SELECT
-            c.id,
-            c.property_name,
-            c.customer_type,
-            c.status,
-            c.payment_terms,
+            c.id, c.property_name, c.customer_type, c.last_statement_at,
             mc.name as management_company_name,
-            -- Count of billing contacts
             COUNT(cc.id) FILTER (
                 WHERE cc.accepts_billing = TRUE AND cc.deleted_at IS NULL
             ) as billing_contact_count,
-            -- Aggregate billing emails into a comma-separated string
             STRING_AGG(
-                cc.office_email,
-                ', '
-                ORDER BY cc.is_primary DESC, cc.last_name ASC
+                cc.office_email, ', ' ORDER BY cc.is_primary DESC, cc.last_name ASC
             ) FILTER (
-                WHERE cc.accepts_billing = TRUE
-                  AND cc.deleted_at IS NULL
-                  AND cc.office_email IS NOT NULL
+                WHERE cc.accepts_billing = TRUE AND cc.deleted_at IS NULL AND cc.office_email IS NOT NULL
             ) as billing_emails,
-            -- Primary billing contact name
             MAX(cc.first_name || ' ' || cc.last_name)
                 FILTER (WHERE cc.accepts_billing = TRUE AND cc.is_primary = TRUE AND cc.deleted_at IS NULL)
                 as primary_billing_name
         FROM customers c
         LEFT JOIN management_companies mc ON c.management_company_id = mc.id
         LEFT JOIN customer_contacts cc ON cc.customer_id = c.id
-        WHERE c.deleted_at IS NULL
-          AND c.status = 'Active'
-        GROUP BY c.id, c.property_name, c.customer_type, c.status,
-                 c.payment_terms, mc.name
+        WHERE {where}
+        GROUP BY c.id, c.property_name, c.customer_type, c.last_statement_at, mc.name
         ORDER BY c.property_name ASC
-    """)
-    customers = cur.fetchall()
+    """, params)
+    raw_customers = cur.fetchall()
+
+    today = date.today()
+    rows = []
+    for c in raw_customers:
+        buckets, total_due, oldest = _customer_aging_summary(cur, c['id'])
+        unapplied = customer_unapplied_credit(cur, c['id'])
+        delinquent = oldest is not None and (today - oldest).days > DELINQUENT_DAYS_PAST_INVOICE
+        cur.execute("""
+            SELECT 1 FROM customer_compliance_portals
+            WHERE customer_id = %s AND is_active = TRUE AND portal_is_primary_billing = TRUE
+            LIMIT 1
+        """, (c['id'],))
+        portal_billed = cur.fetchone() is not None
+
+        if filter_type == 'balance' and total_due <= 0.005:
+            continue
+        if filter_type == 'delinquent' and not delinquent:
+            continue
+        if filter_type == 'no_contact' and c['billing_contact_count'] > 0:
+            continue
+        if filter_type == 'portal' and not portal_billed:
+            continue
+
+        open_invoices = []
+        if total_due > 0.005:
+            cur.execute("""
+                SELECT id, invoice_number FROM invoices
+                WHERE customer_id = %s AND deleted_at IS NULL AND receivable_state = 'open'
+                ORDER BY invoice_date
+            """, (c['id'],))
+            for inv in cur.fetchall():
+                bal = invoice_balance(cur, inv['id'])
+                if bal and bal > 0.005:
+                    open_invoices.append({'id': inv['id'], 'number': inv['invoice_number'], 'balance': round(bal, 2)})
+
+        rows.append({
+            'id': c['id'], 'property_name': c['property_name'], 'customer_type': c['customer_type'],
+            'management_company_name': c['management_company_name'],
+            'billing_contact_count': c['billing_contact_count'], 'billing_emails': c['billing_emails'],
+            'primary_billing_name': c['primary_billing_name'], 'last_statement_at': c['last_statement_at'],
+            'current': buckets['CURRENT'], 'b31_60': buckets['31-60 DAYS'], 'b61_90': buckets['61-90 DAYS'],
+            'b90_plus': buckets['90+ DAYS'], 'total_due': total_due, 'oldest': oldest,
+            'unapplied_credit': unapplied, 'delinquent': delinquent, 'portal_billed': portal_billed,
+            'open_invoices': open_invoices,
+        })
+
+    total_outstanding = sum(r['total_due'] for r in rows)
+    customers_with_balance = sum(1 for r in rows if r['total_due'] > 0.005)
+    count_90_plus = sum(1 for r in rows if r['b90_plus'] > 0.005)
+    open_credits = [r for r in rows if r['unapplied_credit'] > 0.005]
+
     cur.close(); conn.close()
-
-    # Split into has-billing and missing-billing for the warning section
-    ready     = [c for c in customers if c['billing_contact_count'] > 0]
-    no_billing = [c for c in customers if c['billing_contact_count'] == 0]
-
     return render_template('billing.html',
         branding=branding, company_key=company_key,
         company_access=company_access, all_companies=all_companies,
-        ready=ready, no_billing=no_billing,
-        ready_count=len(ready), no_billing_count=len(no_billing),
+        rows=rows, filter_type=filter_type, search=search,
+        total_outstanding=total_outstanding, customers_with_balance=customers_with_balance,
+        count_90_plus=count_90_plus, open_credits=open_credits,
         resend_configured=bool(RESEND_API_KEY),
     )
 
@@ -5014,6 +5127,387 @@ def billing_export(company_key):
         mimetype='text/csv',
         headers={'Content-Disposition': f'attachment; filename={filename}'}
     )
+
+# ============================================================================
+# A/R Aging report  (admin + manager + office)
+#   Ports docs/../FIELDKIT_SONNET_TASK_ar-aging-report.md (a Phase 0 spec) onto
+#   live FieldKit data: same bucket definitions, column order, drill-down, and
+#   print-detail approach, but no staleness banner — that spec's whole reason
+#   for one was an imported snapshot; FieldKit's balances are always live.
+# ============================================================================
+
+def _customer_receivables_detail(cur, customer_id):
+    """Every open receivable with balance > 0 for one customer, WITH per-
+    invoice aging detail (unlike the lighter _customer_aging_summary the
+    billing page uses, which only needs the totals). Returns
+    (detail_rows, buckets, total_due, oldest_invoice_date_or_None)."""
+    cur.execute("""
+        SELECT i.id, i.invoice_number, i.invoice_date, i.current_version_id
+        FROM invoices i
+        WHERE i.customer_id = %s AND i.deleted_at IS NULL AND i.receivable_state = 'open'
+        ORDER BY i.invoice_date
+    """, (customer_id,))
+    today = date.today()
+    buckets = {'CURRENT': 0.0, '31-60 DAYS': 0.0, '61-90 DAYS': 0.0, '90+ DAYS': 0.0}
+    detail, total, oldest = [], 0.0, None
+    for inv in cur.fetchall():
+        bal = invoice_balance(cur, inv['id'])
+        if bal is None or bal <= 0.005:
+            continue
+        gross = None
+        if inv['current_version_id']:
+            cur.execute("SELECT total, subtotal FROM invoice_versions WHERE id = %s", (inv['current_version_id'],))
+            v = cur.fetchone()
+            if v:
+                gross = float(v['total']) if v['total'] is not None else float(v['subtotal'])
+        days = (today - inv['invoice_date']).days
+        bucket = _aging_bucket_label(days)
+        bucket_key = bucket if bucket != 'FUTURE' else 'CURRENT'
+        buckets[bucket_key] += bal
+        total += bal
+        if oldest is None or inv['invoice_date'] < oldest:
+            oldest = inv['invoice_date']
+        detail.append({
+            'id': inv['id'], 'number': inv['invoice_number'], 'date': inv['invoice_date'],
+            'days': days, 'bucket': bucket_key, 'gross': gross, 'due': bal,
+        })
+    return detail, buckets, total, oldest
+
+
+@app.route('/<company_key>/reports/aging')
+@login_required
+@company_access_required
+@with_branding
+def report_aging(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    sort = request.args.get('sort', 'total')  # 'total' (default) or '90plus'
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("SELECT id, property_name FROM customers WHERE deleted_at IS NULL ORDER BY property_name")
+    customers = cur.fetchall()
+
+    rows = []
+    for c in customers:
+        detail, buckets, total, oldest = _customer_receivables_detail(cur, c['id'])
+        if total <= 0.005:
+            continue
+        rows.append({
+            'id': c['id'], 'name': c['property_name'], 'total_due': total,
+            'not_due': buckets['CURRENT'], 'b30': buckets['31-60 DAYS'],
+            'b60': buckets['61-90 DAYS'], 'b90_plus': buckets['90+ DAYS'],
+            'oldest': oldest, 'detail': detail,
+        })
+
+    rows.sort(key=lambda r: (r['b90_plus'] if sort == '90plus' else r['total_due']), reverse=True)
+
+    totals = {
+        'total_due': sum(r['total_due'] for r in rows),
+        'not_due': sum(r['not_due'] for r in rows),
+        'b30': sum(r['b30'] for r in rows),
+        'b60': sum(r['b60'] for r in rows),
+        'b90_plus': sum(r['b90_plus'] for r in rows),
+    }
+
+    cur.close(); conn.close()
+    return render_template('aging_report.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        rows=rows, totals=totals, sort=sort, run_date=date.today(),
+    )
+
+# ============================================================================
+# Compliance portals  (admin + manager + office)
+#   CRUD on customer_compliance_portals + the /compliance export workbench.
+#   Exporters all emit the same generic column set until Chris/Michele supply
+#   the real OPS import template and VendorCafe field list — see D-033.
+# ============================================================================
+
+PORTAL_TYPES = ['OPS', 'VendorCafe', 'Paymode-X']
+
+GENERIC_PORTAL_COLUMNS = [
+    'Invoice Number', 'Invoice Date', 'Due Date', 'Property/Client ID',
+    'Vendor Account Number', 'WTN/PO', 'Work Site Label', 'Description',
+    'Subtotal', 'Tax', 'Total',
+]
+
+
+def _save_compliance_portal(cur, customer_id, portal_id, username):
+    """Insert (portal_id is None) or update a compliance portal enrollment
+    from request.form. Returns an error string, or None on success."""
+    portal_type = request.form.get('portal_type', '').strip()
+    if portal_type not in PORTAL_TYPES:
+        return 'Choose a valid portal type.'
+    portal_label          = request.form.get('portal_label', '').strip() or None
+    vendor_account_number = request.form.get('vendor_account_number', '').strip() or None
+    property_client_id    = request.form.get('property_client_id', '').strip() or None
+    wtn_required          = request.form.get('wtn_required') == 'on'
+    portal_is_primary_billing = request.form.get('portal_is_primary_billing') == 'on'
+    notes                 = request.form.get('notes', '').strip() or None
+
+    if portal_id is None:
+        cur.execute("""
+            INSERT INTO customer_compliance_portals
+                (customer_id, portal_type, portal_label, vendor_account_number, property_client_id,
+                 wtn_required, portal_is_primary_billing, notes, created_by, updated_by)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (customer_id, portal_type, portal_label, vendor_account_number, property_client_id,
+              wtn_required, portal_is_primary_billing, notes, username, username))
+    else:
+        cur.execute("""
+            UPDATE customer_compliance_portals
+            SET portal_type=%s, portal_label=%s, vendor_account_number=%s, property_client_id=%s,
+                wtn_required=%s, portal_is_primary_billing=%s, notes=%s,
+                updated_at=CURRENT_TIMESTAMP, updated_by=%s
+            WHERE id=%s AND customer_id=%s
+        """, (portal_type, portal_label, vendor_account_number, property_client_id,
+              wtn_required, portal_is_primary_billing, notes, username, portal_id, customer_id))
+    return None
+
+
+@app.route('/<company_key>/customers/<int:customer_id>/compliance-portals/new', methods=['POST'])
+@login_required
+@company_access_required
+def compliance_portal_new(company_key, customer_id):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    err = _save_compliance_portal(cur, customer_id, None, session.get('username'))
+    if err:
+        conn.rollback()
+        flash(err, 'error')
+    else:
+        conn.commit()
+        flash('Portal enrollment added.', 'success')
+    cur.close(); conn.close()
+    return redirect(f'/{company_key}/customers/{customer_id}')
+
+
+@app.route('/<company_key>/customers/<int:customer_id>/compliance-portals/<int:portal_id>/edit', methods=['POST'])
+@login_required
+@company_access_required
+def compliance_portal_edit(company_key, customer_id, portal_id):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    err = _save_compliance_portal(cur, customer_id, portal_id, session.get('username'))
+    if err:
+        conn.rollback()
+        flash(err, 'error')
+    else:
+        conn.commit()
+        flash('Portal enrollment updated.', 'success')
+    cur.close(); conn.close()
+    return redirect(f'/{company_key}/customers/{customer_id}')
+
+
+@app.route('/<company_key>/customers/<int:customer_id>/compliance-portals/<int:portal_id>/toggle', methods=['POST'])
+@login_required
+@company_access_required
+def compliance_portal_toggle(company_key, customer_id, portal_id):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        UPDATE customer_compliance_portals
+        SET is_active = NOT is_active, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s AND customer_id = %s
+    """, (session.get('username'), portal_id, customer_id))
+    conn.commit()
+    cur.close(); conn.close()
+    return redirect(f'/{company_key}/customers/{customer_id}')
+
+
+def _portal_export_rows(cur, invoice_ids):
+    """Shared row-gathering for all three exporters — same generic columns
+    for every portal type until Chris/Michele supply the real templates."""
+    rows = []
+    for iid in invoice_ids:
+        cur.execute("""
+            SELECT i.invoice_number, i.invoice_date, i.work_site_label, i.wtn_po_number,
+                   i.customer_id, i.portal_id, iv.total, iv.subtotal, iv.tax_total
+            FROM invoices i LEFT JOIN invoice_versions iv ON iv.id = i.current_version_id
+            WHERE i.id = %s AND i.deleted_at IS NULL
+        """, (iid,))
+        inv = cur.fetchone()
+        if not inv:
+            continue
+        cur.execute("SELECT payment_terms FROM customers WHERE id = %s", (inv['customer_id'],))
+        cust = cur.fetchone()
+        due_days = _parse_payment_terms_days(cust['payment_terms'] if cust else None)
+        due_date = inv['invoice_date'] + timedelta(days=due_days)
+
+        property_client_id = vendor_account = ''
+        if inv['portal_id']:
+            cur.execute("""
+                SELECT property_client_id, vendor_account_number FROM customer_compliance_portals WHERE id = %s
+            """, (inv['portal_id'],))
+            p = cur.fetchone()
+            if p:
+                property_client_id = p['property_client_id'] or ''
+                vendor_account = p['vendor_account_number'] or ''
+
+        rows.append([
+            inv['invoice_number'], inv['invoice_date'].isoformat(), due_date.isoformat(),
+            property_client_id, vendor_account, inv['wtn_po_number'] or '',
+            inv['work_site_label'] or '', '',
+            float(inv['subtotal'] or 0), float(inv['tax_total'] or 0),
+            float(inv['total'] if inv['total'] is not None else (inv['subtotal'] or 0)),
+        ])
+    return rows
+
+
+def _build_portal_xlsx(cur, invoice_ids, sheet_title):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = sheet_title[:31]
+    ws.append(GENERIC_PORTAL_COLUMNS)
+    for row in _portal_export_rows(cur, invoice_ids):
+        ws.append(row)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _export_ops(cur, invoice_ids):
+    return _build_portal_xlsx(cur, invoice_ids, 'OPS Export')
+
+def _export_vendorcafe(cur, invoice_ids):
+    return _build_portal_xlsx(cur, invoice_ids, 'VendorCafe Export')
+
+def _export_paymode(cur, invoice_ids):
+    return _build_portal_xlsx(cur, invoice_ids, 'Paymode Export')
+
+PORTAL_EXPORTERS = {'OPS': _export_ops, 'VendorCafe': _export_vendorcafe, 'Paymode-X': _export_paymode}
+
+
+@app.route('/<company_key>/compliance')
+@login_required
+@company_access_required
+@with_branding
+def compliance_page(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    portal_type = request.args.get('portal_type', '')
+    date_from   = request.args.get('date_from', '').strip()
+    date_to     = request.args.get('date_to', '').strip()
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+
+    conditions = ["i.deleted_at IS NULL", "i.portal_status = 'pending'"]
+    params = []
+    if portal_type:
+        conditions.append("p.portal_type = %s")
+        params.append(portal_type)
+    if date_from:
+        conditions.append("i.invoice_date >= %s"); params.append(date_from)
+    if date_to:
+        conditions.append("i.invoice_date <= %s"); params.append(date_to)
+    where = " AND ".join(conditions)
+    cur.execute(f"""
+        SELECT i.id, i.invoice_number, i.invoice_date, c.property_name AS customer_name,
+               p.portal_type, iv.total, iv.subtotal
+        FROM invoices i
+        JOIN customers c ON c.id = i.customer_id
+        LEFT JOIN customer_compliance_portals p ON p.id = i.portal_id
+        LEFT JOIN invoice_versions iv ON iv.id = i.current_version_id
+        WHERE {where}
+        ORDER BY i.invoice_date
+    """, params)
+    pending = cur.fetchall()
+
+    cur.execute("""
+        SELECT i.id, i.invoice_number, c.property_name AS customer_name, p.portal_type,
+               i.portal_status, i.portal_submitted_at, i.portal_submission_notes
+        FROM invoices i
+        JOIN customers c ON c.id = i.customer_id
+        LEFT JOIN customer_compliance_portals p ON p.id = i.portal_id
+        WHERE i.deleted_at IS NULL AND i.portal_status IN ('submitted', 'accepted', 'rejected')
+        ORDER BY i.portal_submitted_at DESC NULLS LAST LIMIT 50
+    """)
+    recent = cur.fetchall()
+
+    cur.close(); conn.close()
+    return render_template('compliance.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        pending=pending, recent=recent, portal_types=PORTAL_TYPES,
+        portal_type=portal_type, date_from=date_from, date_to=date_to,
+    )
+
+
+@app.route('/<company_key>/compliance/export', methods=['POST'])
+@login_required
+@company_access_required
+def compliance_export(company_key):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    portal_type = request.form.get('portal_type', '')
+    invoice_ids = request.form.getlist('invoice_ids')
+    if not invoice_ids or portal_type not in PORTAL_EXPORTERS:
+        flash('Choose a portal type and at least one invoice.', 'error')
+        return redirect(f'/{company_key}/compliance')
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    xlsx_bytes = PORTAL_EXPORTERS[portal_type](cur, invoice_ids)
+    cur.execute("""
+        UPDATE invoices
+        SET portal_status = 'submitted', portal_submitted_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = ANY(%s) AND deleted_at IS NULL
+    """, (session.get('username'), [int(i) for i in invoice_ids]))
+    conn.commit()
+    cur.close(); conn.close()
+
+    filename = f"{portal_type}_export_{date.today().isoformat()}.xlsx"
+    return Response(xlsx_bytes,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'})
+
+
+@app.route('/<company_key>/compliance/<int:invoice_id>/accept', methods=['POST'])
+@login_required
+@company_access_required
+def compliance_accept(company_key, invoice_id):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        UPDATE invoices SET portal_status = 'accepted', updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s AND deleted_at IS NULL
+    """, (session.get('username'), invoice_id))
+    conn.commit()
+    cur.close(); conn.close()
+    flash('Marked accepted.', 'success')
+    return redirect(f'/{company_key}/compliance')
+
+
+@app.route('/<company_key>/compliance/<int:invoice_id>/reject', methods=['POST'])
+@login_required
+@company_access_required
+def compliance_reject(company_key, invoice_id):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    notes = request.form.get('notes', '').strip()
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        UPDATE invoices
+        SET portal_status = 'rejected', portal_submission_notes = %s,
+            updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s AND deleted_at IS NULL
+    """, (notes or None, session.get('username'), invoice_id))
+    conn.commit()
+    cur.close(); conn.close()
+    flash('Marked rejected.', 'success')
+    return redirect(f'/{company_key}/compliance')
 
 # ============================================================================
 # User Management — admin only

@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block title %}A/R Aging — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { margin-bottom:.5rem; }
+    .page-header h1 { font-size:1.75rem; color:{{ branding.color_primary }}; }
+    .run-date { color:#888; font-size:.9rem; margin-bottom:1.25rem; }
+    .controls { display:flex; gap:.75rem; margin-bottom:1rem; align-items:center; }
+    .controls a { padding:.4rem .9rem; border-radius:20px; font-size:.82rem; text-decoration:none; color:#666; background:#f0f0f0; }
+    .controls a.active { background:{{ branding.color_primary }}; color:white; }
+    table { width:100%; border-collapse:collapse; font-size:.88rem; }
+    th { text-align:left; padding:.6rem .8rem; border-bottom:2px solid #eee; font-size:.72rem; text-transform:uppercase;
+         letter-spacing:.4px; color:#888; background:#fafafa; }
+    th.num, td.num { text-align:right; }
+    td { padding:.65rem .8rem; border-bottom:1px solid #f5f5f5; }
+    tr.cust-row { cursor:pointer; }
+    tr.cust-row:hover td { background:#fafafa; }
+    tr.cust-row td.total { font-weight:700; }
+    tr.detail-row { display:none; background:#fafbfc; }
+    tr.detail-row.open { display:table-row; }
+    tr.detail-row td { padding:0; }
+    tr.detail-row .inner { padding:.75rem 1.5rem; }
+    tr.detail-row table { font-size:.82rem; }
+    tr.detail-row th { background:none; font-size:.68rem; }
+    .bucket-current { color:#2e7d32; }
+    .bucket-90 { color:#c0392b; font-weight:600; }
+    .totals-row td { border-top:2px solid #ddd; font-weight:700; background:#f9f9f9; }
+    .print-detail-btn { font-size:.76rem; color:{{ branding.color_primary }}; background:none; border:none; cursor:pointer; text-decoration:underline; }
+
+    @media print {
+        .controls, .subnav, nav { display:none !important; }
+        tr.detail-row { display:none; }
+        tr.detail-row.print-focus { display:table-row !important; }
+        tr.cust-row.print-hide { display:none; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header"><h1>A/R Aging Summary — {{ branding.name }}</h1></div>
+<div class="run-date">Report run: {{ run_date.strftime('%m/%d/%Y') }}</div>
+
+<div class="controls">
+    <a href="?sort=total" class="{% if sort == 'total' %}active{% endif %}">Sort: Total Due</a>
+    <a href="?sort=90plus" class="{% if sort == '90plus' %}active{% endif %}">Sort: 90+ Days</a>
+    <a href="javascript:window.print()" style="margin-left:auto;">Print Summary</a>
+</div>
+
+<div class="card">
+    <table>
+        <thead>
+            <tr>
+                <th>Customer</th>
+                <th class="num">Total Due</th>
+                <th class="num">Not Due (0&ndash;30)</th>
+                <th class="num">30 (31&ndash;60)</th>
+                <th class="num">60 (61&ndash;90)</th>
+                <th class="num">90+ (91+)</th>
+                <th>Oldest Invoice</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in rows %}
+            <tr class="cust-row" data-customer="{{ r.id }}" onclick="toggleDetail({{ r.id }})">
+                <td>{{ r.name }}</td>
+                <td class="num total">${{ '{:,.2f}'.format(r.total_due) }}</td>
+                <td class="num bucket-current">{% if r.not_due > 0.005 %}${{ '{:,.2f}'.format(r.not_due) }}{% else %}—{% endif %}</td>
+                <td class="num">{% if r.b30 > 0.005 %}${{ '{:,.2f}'.format(r.b30) }}{% else %}—{% endif %}</td>
+                <td class="num">{% if r.b60 > 0.005 %}${{ '{:,.2f}'.format(r.b60) }}{% else %}—{% endif %}</td>
+                <td class="num bucket-90">{% if r.b90_plus > 0.005 %}${{ '{:,.2f}'.format(r.b90_plus) }}{% else %}—{% endif %}</td>
+                <td>{{ r.oldest }}</td>
+            </tr>
+            <tr class="detail-row" id="detail-{{ r.id }}">
+                <td colspan="7">
+                    <div class="inner">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:.5rem;">
+                            <strong>Open Invoices — {{ r.name }}</strong>
+                            <button type="button" class="print-detail-btn" onclick="event.stopPropagation(); printCustomerDetail({{ r.id }})">Print Detail</button>
+                        </div>
+                        <table>
+                            <thead>
+                                <tr><th>Invoice #</th><th>Invoice Date</th><th class="num">Days Old</th><th>Bucket</th><th class="num">Original Total</th><th class="num">Balance Due</th></tr>
+                            </thead>
+                            <tbody>
+                                {% for d in r.detail %}
+                                <tr>
+                                    <td><a href="/{{ company_key }}/invoices/{{ d.id }}" onclick="event.stopPropagation();">{{ d.number }}</a></td>
+                                    <td>{{ d.date }}</td>
+                                    <td class="num">{{ d.days }}</td>
+                                    <td>{{ d.bucket|replace('-', ' ')|replace('DAYS', 'Days') }}</td>
+                                    <td class="num">{% if d.gross is not none %}${{ '%.2f'|format(d.gross) }}{% else %}—{% endif %}</td>
+                                    <td class="num">${{ '%.2f'|format(d.due) }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="7" style="text-align:center; color:#aaa; padding:2rem;">No open balances.</td></tr>
+            {% endfor %}
+        </tbody>
+        {% if rows %}
+        <tfoot>
+            <tr class="totals-row">
+                <td>TOTAL ({{ rows|length }} customers)</td>
+                <td class="num">${{ '{:,.2f}'.format(totals.total_due) }}</td>
+                <td class="num">${{ '{:,.2f}'.format(totals.not_due) }}</td>
+                <td class="num">${{ '{:,.2f}'.format(totals.b30) }}</td>
+                <td class="num">${{ '{:,.2f}'.format(totals.b60) }}</td>
+                <td class="num">${{ '{:,.2f}'.format(totals.b90_plus) }}</td>
+                <td></td>
+            </tr>
+        </tfoot>
+        {% endif %}
+    </table>
+</div>
+
+<script>
+function toggleDetail(customerId) {
+    document.getElementById('detail-' + customerId).classList.toggle('open');
+}
+
+function printCustomerDetail(customerId) {
+    // Same page, two renderings: hide every other customer's summary row
+    // and force just this one's detail row visible for print, then restore
+    // after printing (or if the user cancels — 'afterprint' fires either way).
+    document.querySelectorAll('.cust-row').forEach(row => {
+        if (row.dataset.customer !== String(customerId)) row.classList.add('print-hide');
+    });
+    const detail = document.getElementById('detail-' + customerId);
+    detail.classList.add('open', 'print-focus');
+
+    function restore() {
+        document.querySelectorAll('.cust-row').forEach(row => row.classList.remove('print-hide'));
+        detail.classList.remove('print-focus');
+        window.removeEventListener('afterprint', restore);
+    }
+    window.addEventListener('afterprint', restore);
+    window.print();
+}
+</script>
+{% endblock %}

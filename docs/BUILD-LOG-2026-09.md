@@ -436,3 +436,80 @@ skipped-no-contact. All six prior smoke tests re-run clean.
 requirements for Stage 1's core cycle.
 
 Proceeding to Increment 1.8 (billing page full rebuild, A/R aging report, compliance).
+
+---
+
+## 2026-09-19 — Stage 1, Increment 1.8 — Billing page rebuild, A/R aging report, compliance
+
+**What:**
+- **Billing page rewritten from scratch** (`/billing`): summary cards (total open,
+  90+ delinquent, open credit), aging strip, filter bar
+  (`?filter=delinquent|no_contact|portal|all`), per-customer rows with a real
+  per-customer open-invoice list embedded as JSON on the Pay button so the shared
+  Record Payment modal (the generic modal brick from base.html) opens pre-filtered to
+  that customer's actual open receivables — no AJAX round trip needed (D-037).
+  `_customer_aging_summary()` is the shared helper both this page and the aging
+  report call, using the same `_aging_bucket_label()` boundaries built for statements
+  in Increment 1.6 (0–30 / 31–60 / 61–90 / 90+) rather than reinventing bucket math.
+  Delinquent flag uses `DELINQUENT_DAYS_PAST_INVOICE = 90` per Chris's explicit
+  override of the directive's 60-day default.
+- **A/R Aging report** (`/reports/aging`, `?sort=total|90plus`), ported from the
+  Phase 0 spec doc: same 4-bucket layout, sortable, pre-rendered hidden per-customer
+  drill-down rows (no AJAX) toggled by JS, `_customer_receivables_detail()` for the
+  richer per-invoice drill-down data, print CSS (`print-hide`/`print-focus` +
+  `afterprint` listener) for a clean printed report.
+- **Compliance portal module** (new): `customer_compliance_portals` table (migration
+  015), enrollment/edit/toggle routes on customer detail, `PORTAL_TYPES` fixed to
+  `OPS`/`VendorCafe`/`Paymode-X` (D-033). `transition_invoice()`'s Hardened branch
+  extended to auto-assign a portal + `portal_status='pending'` only when the customer
+  has exactly one active enrollment (D-034) — verified this does NOT retroactively
+  touch invoices hardened before the enrollment existed. `/compliance` page lists
+  pending/submitted/accepted/rejected invoices per portal type, with accept/reject
+  actions and `.xlsx` export via one shared `_build_portal_xlsx()` helper feeding
+  three per-portal-type wrapper functions (`_export_ops`/`_export_vendorcafe`/
+  `_export_paymode`) — all currently emitting the same `GENERIC_PORTAL_COLUMNS` set
+  since the real portal templates haven't been supplied yet (explicitly flagged on
+  the compliance page itself, not silently guessed at).
+- `invoice_edit`/`invoice_form.html` extended with `wtn_po_number` and a Compliance
+  Portal dropdown; `customer_detail.html` gained a Compliance Portals section +
+  enrollment modal; `invoice_detail.html` gained a portal sidebar panel.
+- Gated `/reports/aging` and `/compliance` to admin/manager/office, consistent with
+  every other billing-adjacent route this build has touched, even though Appendix A's
+  matrix doesn't list an office column for Reports (D-036) — Michele (office) is the
+  primary user of this collections workflow.
+
+**Migration:** 015 (`015_portal_primary_billing.sql`: `customer_compliance_portals`
+table, `invoices.portal_id`/`portal_status`, `wtn_po_number`), applied to all four DBs.
+Pre-migration backups in `~/db-backups/2026-09-19f/`.
+
+**Performance note (D-035):** both new pages compute aging via a per-customer,
+per-invoice loop (N+1), same tradeoff made throughout this build. Measured against
+the real 1,330 active Get a Grip customers (zero real invoices yet): billing page
+0.82s, aging report 0.27s. Flagged to revisit via `v_invoice_balances` (built in
+Increment 1.4, still unused) once real invoice volume grows — not worth pre-optimizing
+against volume that doesn't exist yet.
+
+**Commit:** (pending — migration file, `app.py`, five templates, smoke test, this
+entry, decisions log, status doc).
+
+**Smoke test:** `tests/smoke_billing_aging_compliance.py` — 26/26 checks. Covers:
+aging bucket boundary math; billing page renders with correct customer total;
+delinquent filter (90+ days) includes/excludes correctly; no_contact filter; aging
+report renders with correct bucket placement and both sort orders; portal enrollment
+creation; auto-assign-on-harden fires for a NEW invoice but does NOT retroactively
+touch an already-hardened one; compliance page lists the pending invoice; export
+produces a real 11-column generic `.xlsx` and flips the invoice to submitted; accept
+flips it to accepted; portal-primary-billing toggle correctly includes/excludes the
+customer from `?filter=portal`. Cleanup verified zero residue. All 7 prior smoke tests
+(`smoke_tax_settings`, `smoke_invoice_versions`, `smoke_invoice_routes`,
+`smoke_payments`, `smoke_invoice_pdf`, `smoke_statements`, `smoke_email_delivery`)
+re-run clean as regressions. Final curl sweep: all 4 companies × 3 new/rebuilt routes
+(`billing`, `reports/aging`, `compliance`) → clean `302` redirect-to-login, confirming
+no import errors anywhere.
+
+**Deferred:** real per-portal export column templates (waiting on Chris/Michele —
+review-doc item #33, not blocking per directive's own fallback).
+
+This closes out Stage 1's billing/collections surface. Proceeding to Increment 1.9
+(cutover data import from Phase 0) pending Chris's go-ahead — the directive flags this
+one as requiring explicit sign-off before the real (non-dry-run) import runs.

@@ -329,6 +329,49 @@ non-deliverable), never a real customer's real contact. The test explicitly asse
 routes returned the expected status code — this is the pattern any future test
 touching `_send_email_via_resend` or the send routes must follow.
 
+D-033 — [SCOPE] Portal exporters (`_export_ops`/`_export_vendorcafe`/`_export_paymode`)
+all emit the identical `GENERIC_PORTAL_COLUMNS` set via one shared `_build_portal_xlsx`
+helper, exactly as directive §2.8 specifies, with the compliance page's own banner
+saying so ("Generic layout — portal template not yet confirmed"). `PORTAL_TYPES` is a
+fixed three-value list (`OPS`, `VendorCafe`, `Paymode-X`) rather than a free-text
+field, since the directive names exactly these three and a fixed dropdown is more
+useful than free text for a field that drives which exporter function runs. Still
+waiting on Chris/Michele for the real OPS import template and VendorCafe field list
+(review-doc item #33) — not blocking, per the directive's own explicit fallback.
+
+D-034 — [MODEL] Portal auto-assignment on Hardened only fires when the customer has
+EXACTLY ONE active compliance portal enrollment and the invoice doesn't already have
+one chosen. With zero enrollments there's nothing to assign; with two or more, guessing
+which one this invoice belongs to would silently misroute a submission — the office
+picks explicitly via invoice edit instead. Verified this doesn't retroactively touch
+invoices hardened before an enrollment existed (the smoke test hardens one invoice,
+THEN adds the enrollment, THEN hardens a second — only the second gets auto-assigned).
+
+D-035 — [SCOPE, performance] Both the billing page and the A/R aging report compute
+per-customer aging by looping every active customer and, for each one with any open
+receivable, calling `invoice_balance()` per invoice (N+1 query pattern) — the same
+"fine at today's volumes" tradeoff made throughout this build (D-016 et al.). Measured
+against the real 1,330 active Get a Grip customers (zero real invoices yet): billing
+page 0.82s, aging report 0.27s. This will need to move to a GROUP BY over
+`v_invoice_balances` (built in Increment 1.4, currently unused — see D-016) once real
+invoice volume makes the loop slow; flagging now rather than pre-optimizing against a
+volume that doesn't exist yet.
+
+D-036 — [DEFAULTED] `/reports/aging` and `/compliance` are gated
+`admin`/`manager`/`office`, same as every other billing-adjacent route this build has
+touched (D-012), even though Appendix A's Reports row only lists admin/manager and
+doesn't mention office at all. Michele (office) is the primary user of "who owes us
+money" collections work this report exists for — excluding her would contradict the
+report's own purpose.
+
+D-037 — [UX] The billing page's shared "Record Payment" modal pre-fills its "Apply to
+Invoice" dropdown from each row's REAL open-invoice list (embedded as JSON on that
+row's Pay button, parsed by a small JS function when the modal opens) — not a
+placeholder or a generic "enter an amount" fallback. This properly satisfies "Record
+Payment modal pre-filtered to that customer's open receivables" without needing a new
+AJAX endpoint, consistent with how every other pre-filled dropdown in this build works
+(e.g. the invoice edit line-item catalog picker).
+
 ---
 
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:

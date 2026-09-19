@@ -54,6 +54,19 @@
                 <label>Tax County</label>
                 <input type="text" name="tax_county" value="{{ ver.tax_county or '' }}">
             </div>
+            <div class="form-group">
+                <label>WTN / PO Number</label>
+                <input type="text" name="wtn_po_number" value="{{ inv.wtn_po_number or '' }}">
+            </div>
+            <div class="form-group">
+                <label>Compliance Portal</label>
+                <select name="portal_id">
+                    <option value="">— none —</option>
+                    {% for p in portal_options %}
+                    <option value="{{ p.id }}" {% if inv.portal_id == p.id %}selected{% endif %}>{{ p.portal_type }}{% if p.portal_label %} — {{ p.portal_label }}{% endif %}</option>
+                    {% endfor %}
+                </select>
+            </div>
             <div class="form-group full">
                 <label>Notes to Customer</label>
                 <textarea name="notes_to_customer" rows="2">{{ ver.notes_to_customer or '' }}</textarea>
