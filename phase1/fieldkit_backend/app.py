@@ -523,6 +523,22 @@ def customer_detail(company_key, customer_id, branding, all_companies, company_a
             'balance': bal,
         })
 
+    cur.execute("""
+        SELECT p.id, p.payment_date, p.amount, p.status, p.refunded_amount, pm.name AS method_name
+        FROM payments p
+        LEFT JOIN payment_methods pm ON pm.id = p.payment_method_id
+        WHERE p.customer_id = %s AND p.deleted_at IS NULL
+        ORDER BY p.payment_date DESC, p.id DESC LIMIT 50
+    """, (customer_id,))
+    customer_payments = []
+    for p in cur.fetchall():
+        rem = _remaining_unapplied(cur, p['id']) if p['status'] == 'received' else 0
+        customer_payments.append({**p, 'unapplied': rem})
+
+    unapplied_credit = customer_unapplied_credit(cur, customer_id)
+    cur.execute("SELECT id, name FROM payment_methods WHERE deleted_at IS NULL ORDER BY sort_order")
+    payment_methods = cur.fetchall()
+
     cur.close(); conn.close()
 
     return render_template('customer_detail.html',
@@ -531,6 +547,8 @@ def customer_detail(company_key, customer_id, branding, all_companies, company_a
         customer=customer, contacts=contacts, notes=notes,
         locations=locations, custom_fields=custom_fields,
         nc_counties=NC_COUNTIES, jobs=jobs, customer_invoices=customer_invoices,
+        customer_payments=customer_payments, unapplied_credit=unapplied_credit,
+        payment_methods=payment_methods, today=date.today().isoformat(),
     )
 
 # ============================================================================
@@ -1724,7 +1742,10 @@ def invoice_balance(cur, invoice_id):
     everywhere a balance is shown: current version's total (or subtotal if
     not yet hardened) minus non-reversed payment applications minus
     adjustments. Returns None if the invoice or its current version can't be
-    found."""
+    found, otherwise always a plain float — psycopg2 hands back NUMERIC
+    columns as Decimal, which raises TypeError when mixed with a float in
+    arithmetic (comparisons are fine, `+`/`-` are not); casting once here
+    means every caller can freely do arithmetic with the result."""
     cur.execute("""
         SELECT iv.total, iv.subtotal
         FROM invoices i JOIN invoice_versions iv ON iv.id = i.current_version_id
@@ -1738,9 +1759,13 @@ def invoice_balance(cur, invoice_id):
     applied = 0
     adjusted = 0
     if _payments_tables_exist(cur):
+        # SUM across ALL rows (originals + reversals) — a reversal's negative
+        # amount is what nets an original back out; filtering to
+        # reverses_application_id IS NULL would only ever count originals and
+        # never see that one was reversed.
         cur.execute("""
             SELECT COALESCE(SUM(amount), 0) AS n FROM payment_applications
-            WHERE invoice_id = %s AND reverses_application_id IS NULL
+            WHERE invoice_id = %s
         """, (invoice_id,))
         applied = cur.fetchone()['n'] or 0
         cur.execute("""
@@ -1749,7 +1774,7 @@ def invoice_balance(cur, invoice_id):
         """, (invoice_id,))
         adjusted = cur.fetchone()['n'] or 0
 
-    return base - applied - adjusted
+    return float(base) - float(applied) - float(adjusted)
 
 
 def invoice_display_status(receivable, version, balance):
@@ -1905,9 +1930,13 @@ def transition_invoice(cur, company_key, invoice_id, to_state, username, notes=N
         if not void_reason:
             return False, 'A void reason is required.', None
         if _payments_tables_exist(cur):
+            # SUM across ALL rows (originals + reversals), no reverses_application_id
+            # filter: a reversal's negative amount is what nets an original back to
+            # zero, so filtering to "reverses_application_id IS NULL" here would only
+            # ever count originals and never see that a reversal cancelled one out.
             cur.execute("""
                 SELECT COALESCE(SUM(amount), 0) AS applied FROM payment_applications
-                WHERE invoice_id = %s AND reverses_application_id IS NULL
+                WHERE invoice_id = %s
             """, (invoice_id,))
             if (cur.fetchone()['applied'] or 0) > 0:
                 return False, ('This invoice has a payment applied. Un-apply it '
@@ -2020,9 +2049,11 @@ def transition_invoice(cur, company_key, invoice_id, to_state, username, notes=N
             return False, (f'Version must be Hardened or Sent to reopen '
                            f'(currently {ver["state"]}).'), None
         if _payments_tables_exist(cur):
+            # See the Void branch above for why this sums ALL rows, not just
+            # reverses_application_id IS NULL ones.
             cur.execute("""
                 SELECT COALESCE(SUM(amount), 0) AS applied FROM payment_applications
-                WHERE invoice_id = %s AND reverses_application_id IS NULL
+                WHERE invoice_id = %s
             """, (invoice_id,))
             if (cur.fetchone()['applied'] or 0) > 0:
                 return False, ('This invoice has a payment applied and can no longer '
@@ -2621,6 +2652,7 @@ def workorder_customer_context(company_key, customer_id):
         ORDER BY last_name, first_name
     """, (customer_id,))
     contacts = [dict(r) for r in cur.fetchall()]
+    unapplied_credit = customer_unapplied_credit(cur, customer_id)
     cur.close(); conn.close()
     return jsonify({
         'customer_type': cust['customer_type'],
@@ -2628,6 +2660,7 @@ def workorder_customer_context(company_key, customer_id):
         'site_prefill_from_location': prefill,
         'locations': locations,
         'contacts': contacts,
+        'unapplied_credit': unapplied_credit,
     })
 
 @app.route('/<company_key>/workorders/dupe_check')
@@ -3421,12 +3454,50 @@ def invoice_detail(company_key, invoice_id, branding, all_companies, company_acc
     balance = invoice_balance(cur, invoice_id)
     display_status = invoice_display_status(inv, ver, balance)
 
+    cur.execute("""
+        SELECT pa.*, p.payment_date, p.reference_number, pm.name AS method_name
+        FROM payment_applications pa
+        JOIN payments p ON p.id = pa.payment_id
+        LEFT JOIN payment_methods pm ON pm.id = p.payment_method_id
+        WHERE pa.invoice_id = %s
+        ORDER BY pa.id
+    """, (invoice_id,))
+    applications = cur.fetchall()
+
+    cur.execute("""
+        SELECT * FROM invoice_adjustments WHERE invoice_id = %s AND deleted_at IS NULL ORDER BY id
+    """, (invoice_id,))
+    adjustments = cur.fetchall()
+
+    unapplied_credit = customer_unapplied_credit(cur, inv['customer_id'])
+    credit_payments = []
+    if unapplied_credit > 0.005:
+        cur.execute("""
+            SELECT p.id, p.payment_date, p.amount, p.reference_number
+            FROM payments p WHERE p.customer_id = %s AND p.status = 'received' AND p.deleted_at IS NULL
+            ORDER BY p.payment_date
+        """, (inv['customer_id'],))
+        for p in cur.fetchall():
+            rem = _remaining_unapplied(cur, p['id'])
+            if rem and rem > 0.005:
+                credit_payments.append({**p, 'unapplied': rem})
+
+    next_unpaid_id = None
+    if display_status == 'Paid':
+        next_unpaid_id = _next_unpaid_invoice(cur, invoice_id, customer_id=inv['customer_id'])
+
+    cur.execute("SELECT id, name FROM payment_methods WHERE deleted_at IS NULL ORDER BY sort_order")
+    payment_methods = cur.fetchall()
+
     cur.close(); conn.close()
     return render_template('invoice_detail.html',
         branding=branding, company_key=company_key,
         company_access=company_access, all_companies=all_companies,
         inv=inv, ver=ver, line_items=line_items, versions=versions,
         history=history, balance=balance, display_status=display_status,
+        applications=applications, adjustments=adjustments,
+        unapplied_credit=unapplied_credit, credit_payments=credit_payments,
+        next_unpaid_id=next_unpaid_id, payment_methods=payment_methods,
     )
 
 
@@ -3652,6 +3723,520 @@ def invoice_reissue(company_key, invoice_id):
 @company_access_required
 def invoice_revise(company_key, invoice_id):
     return _do_invoice_transition(company_key, invoice_id, 'Revise', request.form.get('revision_reason'))
+
+# ============================================================================
+# Payments, applications, adjustments  (admin + manager + office)
+#   "Unapplied amount on a payment IS the credit" — no separate credits table.
+#   payment_applications is append-only: un-apply inserts a reversal row,
+#   never mutates. See migration 011 and docs/DECISIONS-MADE-DURING-BUILD.md.
+# ============================================================================
+
+def _remaining_unapplied(cur, payment_id):
+    """A payment's unapplied balance = amount - refunded_amount - SUM(ALL
+    applications, originals + reversals). This number IS the credit —
+    nothing else stores it. Returns None if the payment doesn't exist.
+    Summing ALL rows (not just reverses_application_id IS NULL ones) is
+    deliberate: a reversal's negative amount is what nets an original back
+    out when un-applied — filtering it away would make an un-apply never
+    actually restore the unapplied balance."""
+    cur.execute("SELECT amount, refunded_amount FROM payments WHERE id = %s AND deleted_at IS NULL", (payment_id,))
+    p = cur.fetchone()
+    if not p:
+        return None
+    cur.execute("""
+        SELECT COALESCE(SUM(amount), 0) AS n FROM payment_applications
+        WHERE payment_id = %s
+    """, (payment_id,))
+    applied = float(cur.fetchone()['n'] or 0)
+    return float(p['amount']) - float(p['refunded_amount'] or 0) - applied
+
+
+def customer_unapplied_credit(cur, customer_id):
+    """Total unapplied credit across a customer's received payments — drives
+    the red "Unapplied credit $X — resolve" badge everywhere a customer
+    appears (directive §2.4: credits are never quiet)."""
+    cur.execute("""
+        SELECT p.id, p.amount, p.refunded_amount,
+               COALESCE((SELECT SUM(pa.amount) FROM payment_applications pa
+                         WHERE pa.payment_id = p.id), 0) AS applied
+        FROM payments p
+        WHERE p.customer_id = %s AND p.status = 'received' AND p.deleted_at IS NULL
+    """, (customer_id,))
+    total = 0.0
+    for p in cur.fetchall():
+        total += float(p['amount']) - float(p['refunded_amount'] or 0) - float(p['applied'])
+    return total
+
+
+def _apply_payment(cur, payment_id, invoice_id, amount, applied_date, username, reason=None):
+    """Apply `amount` of `payment_id` to `invoice_id`. Rejected if it would
+    exceed EITHER the invoice's remaining balance or the payment's remaining
+    unapplied amount (directive §2.4). Returns (ok, error)."""
+    amount = round(float(amount), 2)
+    if amount <= 0:
+        return False, 'Application amount must be positive.'
+    remaining = _remaining_unapplied(cur, payment_id)
+    if remaining is None:
+        return False, 'Payment not found.'
+    if amount > remaining + 0.005:
+        return False, f'Amount exceeds this payment\'s unapplied balance (${remaining:.2f}).'
+    bal = invoice_balance(cur, invoice_id)
+    if bal is None:
+        return False, 'Invoice not found.'
+    if amount > bal + 0.005:
+        return False, f'Amount exceeds the invoice balance (${bal:.2f}).'
+    cur.execute("""
+        INSERT INTO payment_applications (payment_id, invoice_id, amount, applied_date, reason, created_by)
+        VALUES (%s, %s, %s, %s, %s, %s)
+    """, (payment_id, invoice_id, amount, applied_date, reason, username))
+    return True, None
+
+
+def _record_payment(cur, customer_id, payment_date, amount, payment_method_id,
+                     reference_number, notes, username, apply_to_invoice_id=None):
+    """Insert a payment (against a customer) and, optionally, one initial
+    application. Returns (payment_id, error). Caller owns commit."""
+    amount = round(float(amount), 2)
+    if amount <= 0:
+        return None, 'Payment amount must be positive.'
+    cur.execute("""
+        INSERT INTO payments (customer_id, payment_date, amount, payment_method_id,
+                               reference_number, notes, created_by, updated_by)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id
+    """, (customer_id, payment_date, amount, payment_method_id, reference_number, notes, username, username))
+    payment_id = cur.fetchone()['id']
+    cur.execute("""
+        INSERT INTO payment_status_history (payment_id, event, changed_by, notes)
+        VALUES (%s, 'received', %s, %s)
+    """, (payment_id, username, f'${amount:.2f} recorded.'))
+
+    if apply_to_invoice_id:
+        ok, err = _apply_payment(cur, payment_id, apply_to_invoice_id, amount, payment_date, username)
+        if not ok:
+            return payment_id, err
+    return payment_id, None
+
+
+def _unapply_payment(cur, application_id, username, reason=None):
+    """Insert a reversal row for one application. Never mutates/deletes the
+    original — the append-only ledger is the point."""
+    cur.execute("""
+        SELECT id, payment_id, invoice_id, amount FROM payment_applications
+        WHERE id = %s AND reverses_application_id IS NULL
+    """, (application_id,))
+    app = cur.fetchone()
+    if not app:
+        return False, 'Application not found.'
+    cur.execute("SELECT id FROM payment_applications WHERE reverses_application_id = %s", (application_id,))
+    if cur.fetchone():
+        return False, 'This application has already been un-applied.'
+    cur.execute("""
+        INSERT INTO payment_applications
+            (payment_id, invoice_id, amount, applied_date, reverses_application_id, reason, created_by)
+        VALUES (%s, %s, %s, CURRENT_DATE, %s, %s, %s)
+    """, (app['payment_id'], app['invoice_id'], -app['amount'], application_id, reason, username))
+    return True, None
+
+
+def _void_payment(cur, payment_id, username, reason):
+    """status='voided' + a reversal row for every still-active application.
+    Reason required — voiding a payment is never silent."""
+    reason = (reason or '').strip()
+    if not reason:
+        return False, 'A void reason is required.'
+    cur.execute("SELECT status FROM payments WHERE id = %s AND deleted_at IS NULL", (payment_id,))
+    p = cur.fetchone()
+    if not p:
+        return False, 'Payment not found.'
+    if p['status'] == 'voided':
+        return False, 'Payment is already voided.'
+
+    cur.execute("""
+        SELECT pa.id FROM payment_applications pa
+        WHERE pa.payment_id = %s AND pa.reverses_application_id IS NULL
+          AND NOT EXISTS (SELECT 1 FROM payment_applications r WHERE r.reverses_application_id = pa.id)
+    """, (payment_id,))
+    for app in cur.fetchall():
+        _unapply_payment(cur, app['id'], username, reason=f'Voided: {reason}')
+
+    cur.execute("""
+        UPDATE payments
+        SET status = 'voided', voided_at = CURRENT_TIMESTAMP, voided_by = %s, void_reason = %s,
+            updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s
+    """, (username, reason, username, payment_id))
+    cur.execute("""
+        INSERT INTO payment_status_history (payment_id, event, changed_by, notes)
+        VALUES (%s, 'voided', %s, %s)
+    """, (payment_id, username, reason))
+    return True, None
+
+
+def _refund_payment(cur, payment_id, amount, reference, notes, username):
+    """A customer who is owed money is refunded, not written off — this is
+    the only disposition for a payment's unapplied balance besides applying
+    it elsewhere (directive §2.4)."""
+    amount = round(float(amount), 2) if amount else 0
+    if amount <= 0:
+        return False, 'Refund amount must be positive.'
+    remaining = _remaining_unapplied(cur, payment_id)
+    if remaining is None:
+        return False, 'Payment not found.'
+    if amount > remaining + 0.005:
+        return False, f'Amount exceeds the unapplied balance (${remaining:.2f}).'
+    cur.execute("""
+        UPDATE payments
+        SET refunded_amount = refunded_amount + %s, refunded_at = CURRENT_TIMESTAMP,
+            refund_reference = %s, refund_notes = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s
+    """, (amount, reference, notes, username, payment_id))
+    cur.execute("""
+        INSERT INTO payment_status_history (payment_id, event, changed_by, notes)
+        VALUES (%s, 'refunded', %s, %s)
+    """, (payment_id, username, f'${amount:.2f} refunded' + (f' ({reference})' if reference else '')))
+    return True, None
+
+
+def _next_unpaid_invoice(cur, exclude_invoice_id, customer_id=None):
+    """Next open receivable with balance > 0 — same customer first (oldest
+    invoice_date), else company-wide oldest. Powers the "Next Unpaid Invoice"
+    link after a payment pays one off in full."""
+    def scan(cust_filter):
+        where = "i.deleted_at IS NULL AND i.receivable_state = 'open' AND i.id != %s"
+        params = [exclude_invoice_id]
+        if cust_filter:
+            where += " AND i.customer_id = %s"
+            params.append(cust_filter)
+        cur.execute(f"SELECT i.id FROM invoices i WHERE {where} ORDER BY i.invoice_date ASC, i.id ASC", params)
+        for row in cur.fetchall():
+            bal = invoice_balance(cur, row['id'])
+            if bal is not None and bal > 0.005:
+                return row['id']
+        return None
+    if customer_id:
+        found = scan(customer_id)
+        if found:
+            return found
+    return scan(None)
+
+
+@app.route('/<company_key>/payments/new', methods=['POST'])
+@login_required
+@company_access_required
+def payment_new(company_key):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    customer_id       = _opt_num(request.form.get('customer_id'))
+    payment_date      = request.form.get('payment_date', '').strip() or datetime.now().date().isoformat()
+    amount            = _opt_num(request.form.get('amount'))
+    payment_method_id = _opt_num(request.form.get('payment_method_id'))
+    reference_number  = request.form.get('reference_number', '').strip() or None
+    notes             = request.form.get('notes', '').strip() or None
+    apply_to_invoice_id = _opt_num(request.form.get('apply_to_invoice_id'))
+    redirect_to       = request.form.get('redirect_to') or f'/{company_key}/payments'
+
+    if not customer_id or not amount:
+        flash('Customer and an amount are required.', 'error')
+        return redirect(redirect_to)
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    username = session.get('username')
+    payment_id, err = _record_payment(cur, customer_id, payment_date, amount, payment_method_id,
+                                       reference_number, notes, username,
+                                       apply_to_invoice_id=apply_to_invoice_id)
+    if err:
+        conn.rollback()
+        cur.close(); conn.close()
+        flash(err, 'error')
+        return redirect(redirect_to)
+    conn.commit()
+
+    if apply_to_invoice_id:
+        bal = invoice_balance(cur, apply_to_invoice_id)
+        cur.close(); conn.close()
+        if bal is not None and bal <= 0.005:
+            flash('Payment recorded — invoice paid in full! 🎉', 'success')
+        else:
+            flash('Payment recorded.', 'success')
+        return redirect(f'/{company_key}/invoices/{apply_to_invoice_id}')
+
+    cur.close(); conn.close()
+    flash('Payment recorded.', 'success')
+    return redirect(redirect_to)
+
+
+@app.route('/<company_key>/invoices/<int:invoice_id>/payments/apply', methods=['POST'])
+@login_required
+@company_access_required
+def invoice_payment_apply(company_key, invoice_id):
+    """Apply an EXISTING payment's unapplied balance to this invoice — the
+    route behind the invoice detail "Apply Existing Credit" action."""
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    payment_id = _opt_num(request.form.get('payment_id'))
+    amount     = _opt_num(request.form.get('amount'))
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    if not payment_id or not amount:
+        cur.close(); conn.close()
+        flash('Choose a payment and an amount.', 'error')
+        return redirect(f'/{company_key}/invoices/{invoice_id}')
+    ok, err = _apply_payment(cur, payment_id, invoice_id, amount, datetime.now().date().isoformat(), session.get('username'))
+    if ok:
+        conn.commit()
+        flash('Credit applied.', 'success')
+    else:
+        conn.rollback()
+        flash(err, 'error')
+    cur.close(); conn.close()
+    return redirect(f'/{company_key}/invoices/{invoice_id}')
+
+
+@app.route('/<company_key>/payments')
+@login_required
+@company_access_required
+@with_branding
+def payments_list(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    search        = request.args.get('search', '').strip()
+    method_filter = _opt_num(request.args.get('method'))
+    date_from     = request.args.get('date_from', '').strip()
+    date_to       = request.args.get('date_to', '').strip()
+    unapplied_only = request.args.get('unapplied') == '1'
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    conditions = ["p.deleted_at IS NULL"]
+    params = []
+    if search:
+        conditions.append("(c.property_name ILIKE %s OR p.reference_number ILIKE %s)")
+        params += [f'%{search}%', f'%{search}%']
+    if method_filter:
+        conditions.append("p.payment_method_id = %s"); params.append(method_filter)
+    if date_from:
+        conditions.append("p.payment_date >= %s"); params.append(date_from)
+    if date_to:
+        conditions.append("p.payment_date <= %s"); params.append(date_to)
+    where = " AND ".join(conditions)
+
+    cur.execute(f"""
+        SELECT p.id, p.payment_date, p.amount, p.status, p.refunded_amount,
+               c.property_name AS customer_name, pm.name AS method_name
+        FROM payments p
+        JOIN customers c ON c.id = p.customer_id
+        LEFT JOIN payment_methods pm ON pm.id = p.payment_method_id
+        WHERE {where}
+        ORDER BY p.payment_date DESC, p.id DESC
+    """, params)
+    rows = cur.fetchall()
+    payments = []
+    for r in rows:
+        remaining = _remaining_unapplied(cur, r['id']) if r['status'] == 'received' else 0
+        if unapplied_only and not (remaining and remaining > 0.005):
+            continue
+        payments.append({**r, 'unapplied': remaining})
+
+    cur.execute("SELECT id, name FROM payment_methods WHERE deleted_at IS NULL ORDER BY sort_order")
+    methods = cur.fetchall()
+    cur.close(); conn.close()
+    return render_template('payments_list.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        payments=payments, methods=methods, search=search, method_filter=method_filter,
+        date_from=date_from, date_to=date_to, unapplied_only=unapplied_only,
+    )
+
+
+@app.route('/<company_key>/payments/<int:payment_id>')
+@login_required
+@company_access_required
+@with_branding
+def payment_detail(company_key, payment_id, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT p.*, c.property_name AS customer_name, pm.name AS method_name
+        FROM payments p
+        JOIN customers c ON c.id = p.customer_id
+        LEFT JOIN payment_methods pm ON pm.id = p.payment_method_id
+        WHERE p.id = %s AND p.deleted_at IS NULL
+    """, (payment_id,))
+    payment = cur.fetchone()
+    if not payment:
+        cur.close(); conn.close()
+        abort(404)
+
+    cur.execute("""
+        SELECT pa.*, i.invoice_number
+        FROM payment_applications pa
+        JOIN invoices i ON i.id = pa.invoice_id
+        WHERE pa.payment_id = %s
+        ORDER BY pa.id
+    """, (payment_id,))
+    applications = cur.fetchall()
+    reversed_ids = {a['reverses_application_id'] for a in applications if a['reverses_application_id']}
+
+    cur.execute("""
+        SELECT *, to_char(changed_at, 'Mon DD, YYYY HH12:MI AM') AS changed_at_display
+        FROM payment_status_history WHERE payment_id = %s ORDER BY changed_at DESC, id DESC
+    """, (payment_id,))
+    history = cur.fetchall()
+
+    remaining = _remaining_unapplied(cur, payment_id)
+
+    # Open receivables for this customer, for the "apply elsewhere" picker.
+    cur.execute("""
+        SELECT i.id, i.invoice_number FROM invoices i
+        WHERE i.customer_id = %s AND i.deleted_at IS NULL AND i.receivable_state = 'open'
+        ORDER BY i.invoice_date
+    """, (payment['customer_id'],))
+    open_invoices = cur.fetchall()
+
+    cur.close(); conn.close()
+    return render_template('payment_detail.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        payment=payment, applications=applications, reversed_ids=reversed_ids,
+        history=history, remaining=remaining, open_invoices=open_invoices,
+    )
+
+
+@app.route('/<company_key>/payments/<int:payment_id>/unapply/<int:application_id>', methods=['POST'])
+@login_required
+@company_access_required
+def payment_unapply(company_key, payment_id, application_id):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    ok, err = _unapply_payment(cur, application_id, session.get('username'), reason=request.form.get('reason'))
+    if ok:
+        conn.commit()
+        flash('Application un-applied.', 'success')
+    else:
+        conn.rollback()
+        flash(err, 'error')
+    cur.close(); conn.close()
+    return redirect(f'/{company_key}/payments/{payment_id}')
+
+
+@app.route('/<company_key>/payments/<int:payment_id>/void', methods=['POST'])
+@login_required
+@company_access_required
+def payment_void(company_key, payment_id):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    ok, err = _void_payment(cur, payment_id, session.get('username'), request.form.get('void_reason'))
+    if ok:
+        conn.commit()
+        flash('Payment voided.', 'success')
+    else:
+        conn.rollback()
+        flash(err, 'error')
+    cur.close(); conn.close()
+    return redirect(f'/{company_key}/payments/{payment_id}')
+
+
+@app.route('/<company_key>/payments/<int:payment_id>/refund', methods=['POST'])
+@login_required
+@company_access_required
+def payment_refund(company_key, payment_id):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    ok, err = _refund_payment(cur, payment_id, request.form.get('amount'),
+                               request.form.get('reference', '').strip() or None,
+                               request.form.get('notes', '').strip() or None,
+                               session.get('username'))
+    if ok:
+        conn.commit()
+        flash('Refund recorded.', 'success')
+    else:
+        conn.rollback()
+        flash(err, 'error')
+    cur.close(); conn.close()
+    return redirect(f'/{company_key}/payments/{payment_id}')
+
+
+@app.route('/<company_key>/invoices/<int:invoice_id>/adjustments/new', methods=['POST'])
+@login_required
+@company_access_required
+def invoice_adjustment_new(company_key, invoice_id):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    amount          = _opt_num(request.form.get('amount'))
+    adjustment_type = request.form.get('adjustment_type', 'other')
+    reason          = request.form.get('reason', '').strip()
+
+    error = None
+    if not amount or float(amount) <= 0:
+        error = 'A positive amount is required.'
+    elif adjustment_type not in ('write_off', 'discount', 'late_fee', 'other'):
+        error = 'Invalid adjustment type.'
+    elif not reason:
+        error = 'A reason is required.'
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    if error:
+        cur.close(); conn.close()
+        flash(error, 'error')
+        return redirect(f'/{company_key}/invoices/{invoice_id}')
+
+    username = session.get('username')
+    cur.execute("""
+        INSERT INTO invoice_adjustments
+            (invoice_id, effective_date, amount, adjustment_type, reason, created_by, updated_by)
+        VALUES (%s, CURRENT_DATE, %s, %s, %s, %s, %s)
+    """, (invoice_id, amount, adjustment_type, reason, username, username))
+    conn.commit()
+    cur.close(); conn.close()
+    flash('Adjustment recorded.', 'success')
+    return redirect(f'/{company_key}/invoices/{invoice_id}')
+
+
+@app.route('/<company_key>/invoices/<int:invoice_id>/adjustments/<int:adjustment_id>/delete', methods=['POST'])
+@login_required
+@company_access_required
+def invoice_adjustment_delete(company_key, invoice_id, adjustment_id):
+    """Soft-delete only if created today by this same user; otherwise a
+    reversal row (directive §2.4's adjustment audit rule)."""
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    username = session.get('username')
+    cur.execute("""
+        SELECT id, effective_date, amount, adjustment_type, created_by, created_at::date AS created_date
+        FROM invoice_adjustments WHERE id = %s AND invoice_id = %s AND deleted_at IS NULL
+    """, (adjustment_id, invoice_id))
+    adj = cur.fetchone()
+    if not adj:
+        cur.close(); conn.close()
+        abort(404)
+    if adj['created_by'] == username and adj['created_date'] == datetime.now().date():
+        cur.execute("""
+            UPDATE invoice_adjustments SET deleted_at = CURRENT_TIMESTAMP, deleted_by = %s WHERE id = %s
+        """, (username, adjustment_id))
+        flash('Adjustment removed.', 'success')
+    else:
+        cur.execute("""
+            INSERT INTO invoice_adjustments
+                (invoice_id, effective_date, amount, adjustment_type, reason, created_by, updated_by)
+            VALUES (%s, CURRENT_DATE, %s, %s, %s, %s, %s)
+        """, (invoice_id, -adj['amount'], adj['adjustment_type'],
+              f'Reversal of adjustment #{adjustment_id}', username, username))
+        flash('Adjustment reversed (it was created on an earlier day).', 'success')
+    conn.commit()
+    cur.close(); conn.close()
+    return redirect(f'/{company_key}/invoices/{invoice_id}')
 
 # ============================================================================
 # Billing — Michele's batch billing page

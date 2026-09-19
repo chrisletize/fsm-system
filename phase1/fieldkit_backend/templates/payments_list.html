@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Payments — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { margin-bottom:1.5rem; }
+    .page-header h1 { font-size:1.75rem; color:{{ branding.color_primary }}; }
+    .filter-bar { display:flex; gap:.75rem; flex-wrap:wrap; align-items:center; margin-bottom:1.25rem; }
+    .filter-bar input[type=text], .filter-bar input[type=date], .filter-bar select {
+        padding:.5rem .7rem; border:1px solid #ddd; border-radius:4px; font-size:.88rem;
+    }
+    .filter-bar label { font-size:.82rem; color:#666; display:flex; align-items:center; gap:.35rem; }
+    table { width:100%; border-collapse:collapse; font-size:.9rem; }
+    th { text-align:left; padding:.6rem 1rem; border-bottom:2px solid #eee;
+         font-size:.78rem; text-transform:uppercase; letter-spacing:.4px; color:#888; }
+    td { padding:.7rem 1rem; border-bottom:1px solid #f0f0f0; vertical-align:middle; }
+    tr:hover td { background:#fafafa; }
+    .num { text-align:right; font-variant-numeric:tabular-nums; }
+    .muted { color:#aaa; }
+    .credit { color:#c0392b; font-weight:600; }
+    a.pay-link { color:{{ branding.color_primary }}; font-weight:600; text-decoration:none; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header"><h1>Payments</h1></div>
+
+<form method="GET" class="filter-bar">
+    <input type="text" name="search" value="{{ search }}" placeholder="Customer or reference...">
+    <select name="method">
+        <option value="">All methods</option>
+        {% for m in methods %}
+        <option value="{{ m.id }}" {% if method_filter == m.id %}selected{% endif %}>{{ m.name }}</option>
+        {% endfor %}
+    </select>
+    <label>From <input type="date" name="date_from" value="{{ date_from }}"></label>
+    <label>To <input type="date" name="date_to" value="{{ date_to }}"></label>
+    <label><input type="checkbox" name="unapplied" value="1" {% if unapplied_only %}checked{% endif %}> Unapplied only</label>
+    <button type="submit" class="btn btn-outline" style="padding:.5rem 1rem;">Filter</button>
+    <a href="/{{ company_key }}/payments" style="font-size:.85rem; color:#888;">Clear</a>
+</form>
+
+<div class="card">
+    {% if payments %}
+    <table>
+        <thead>
+            <tr><th>Date</th><th>Customer</th><th>Method</th><th>Reference</th><th class="num">Amount</th><th>Status</th><th class="num">Unapplied</th></tr>
+        </thead>
+        <tbody>
+            {% for p in payments %}
+            <tr>
+                <td><a class="pay-link" href="/{{ company_key }}/payments/{{ p.id }}">{{ p.payment_date }}</a></td>
+                <td>{{ p.customer_name }}</td>
+                <td class="muted">{{ p.method_name or '—' }}</td>
+                <td class="muted">{{ p.reference_number or '—' }}</td>
+                <td class="num">${{ '%.2f'|format(p.amount) }}</td>
+                <td>{{ p.status }}</td>
+                <td class="num {% if p.unapplied and p.unapplied > 0.005 %}credit{% endif %}">
+                    {% if p.unapplied and p.unapplied > 0.005 %}${{ '%.2f'|format(p.unapplied) }}{% else %}—{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color:#aaa; padding:1.5rem 0; text-align:center;">No payments match these filters.</p>
+    {% endif %}
+</div>
+{% endblock %}

@@ -60,8 +60,23 @@
             {% if ver and ver.revision_number > 0 %}<span class="muted" style="font-size:1rem;">Rev {{ ver.revision_number }}</span>{% endif %}
         </h1>
         <span class="badge badge-{{ display_status|lower|replace(' ', '') }}">{{ display_status }}</span>
+        {% if unapplied_credit and unapplied_credit > 0.005 %}
+        <span style="display:inline-block; background:#fdecea; color:#c0392b; border-radius:8px;
+              padding:.2rem .65rem; font-size:.8rem; font-weight:600; margin-left:.5rem;">
+            Unapplied credit ${{ '%.2f'|format(unapplied_credit) }} — resolve
+        </span>
+        {% endif %}
     </div>
 </div>
+
+{% if display_status == 'Paid' %}
+<div class="card" style="background:#e8f5e9; border:1px solid #c8e6c9; display:flex; justify-content:space-between; align-items:center; margin-bottom:1.25rem;">
+    <span>🎉 Paid in full!</span>
+    {% if next_unpaid_id %}
+    <a href="/{{ company_key }}/invoices/{{ next_unpaid_id }}" class="btn btn-primary" style="margin:0;">Next Unpaid Invoice →</a>
+    {% endif %}
+</div>
+{% endif %}
 
 <div class="detail-grid">
     <div>
@@ -110,7 +125,56 @@
 
         <div class="card">
             <div class="section-title">Payments &amp; Adjustments</div>
-            <p class="muted">Payment recording arrives in a later increment.</p>
+            {% if applications %}
+            <table style="margin-bottom:1rem;">
+                <thead><tr><th>Date</th><th>Method</th><th>Reference</th><th class="num">Amount</th><th></th></tr></thead>
+                <tbody>
+                    {% for a in applications %}
+                    <tr {% if a.amount < 0 %}style="color:#c0392b;"{% endif %}>
+                        <td>{{ a.applied_date }}</td>
+                        <td class="muted">{{ a.method_name or '—' }}</td>
+                        <td class="muted">{{ a.reference_number or '—' }}</td>
+                        <td class="num">{% if a.amount < 0 %}-{% endif %}${{ '%.2f'|format(a.amount|abs) }}</td>
+                        <td>
+                            {% if a.reverses_application_id %}
+                            <span class="muted" style="font-size:.78rem;">reversal</span>
+                            {% elif a.id not in reversed_ids and inv.receivable_state == 'open' %}
+                            <a href="/{{ company_key }}/payments/{{ a.payment_id }}" style="font-size:.78rem; color:{{ branding.color_primary }};">view payment</a>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="muted">No payments applied yet.</p>
+            {% endif %}
+
+            {% if adjustments %}
+            <table style="margin-bottom:.75rem;">
+                <thead><tr><th>Date</th><th>Type</th><th>Reason</th><th class="num">Amount</th></tr></thead>
+                <tbody>
+                    {% for adj in adjustments %}
+                    <tr>
+                        <td>{{ adj.effective_date }}</td>
+                        <td class="muted">{{ adj.adjustment_type }}</td>
+                        <td class="muted">{{ adj.reason }}</td>
+                        <td class="num">${{ '%.2f'|format(adj.amount) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
+
+            {% if inv.receivable_state == 'open' %}
+            <div style="display:flex; gap:.6rem; flex-wrap:wrap;">
+                <button type="button" class="btn btn-outline" style="width:auto;" onclick="openModal('recordPaymentModal')">Record Payment</button>
+                {% if credit_payments %}
+                <button type="button" class="btn btn-outline" style="width:auto;" onclick="openModal('applyCreditModal')">Apply Existing Credit</button>
+                {% endif %}
+                <button type="button" class="btn btn-outline" style="width:auto;" onclick="openModal('adjustmentModal')">Add Adjustment</button>
+            </div>
+            {% endif %}
         </div>
 
         <div class="card">
@@ -198,9 +262,107 @@
             {% endif %}
 
             <p class="muted" style="font-size:.78rem; margin-top:.75rem;">
-                Record Payment, PDF download, and the Portal panel arrive in later increments.
+                PDF download and the Portal panel arrive in later increments.
             </p>
         </div>
+    </div>
+</div>
+
+<!-- Record Payment modal -->
+<div class="modal-overlay" id="recordPaymentModal">
+    <div class="modal-box">
+        <button type="button" class="modal-close" onclick="closeModal('recordPaymentModal')">✕</button>
+        <h3>Record Payment</h3>
+        <form method="POST" action="/{{ company_key }}/payments/new">
+            <input type="hidden" name="customer_id" value="{{ inv.customer_id }}">
+            <input type="hidden" name="apply_to_invoice_id" value="{{ inv.id }}">
+            <input type="hidden" name="redirect_to" value="/{{ company_key }}/invoices/{{ inv.id }}">
+            <div style="display:flex; flex-direction:column; gap:.7rem;">
+                <label style="font-size:.85rem; font-weight:600;">Amount
+                    <input type="number" name="amount" step="0.01" min="0.01" required
+                           value="{{ '%.2f'|format(balance) if balance is not none else '' }}"
+                           style="width:100%; padding:.5rem .6rem; border:1px solid #ddd; border-radius:4px; margin-top:.3rem;">
+                </label>
+                <label style="font-size:.85rem; font-weight:600;">Payment Date
+                    <input type="date" name="payment_date" value="{{ inv.invoice_date }}"
+                           style="width:100%; padding:.5rem .6rem; border:1px solid #ddd; border-radius:4px; margin-top:.3rem;">
+                </label>
+                <label style="font-size:.85rem; font-weight:600;">Method
+                    <select name="payment_method_id" style="width:100%; padding:.5rem .6rem; border:1px solid #ddd; border-radius:4px; margin-top:.3rem;">
+                        <option value="">—</option>
+                        {% for m in payment_methods %}
+                        <option value="{{ m.id }}">{{ m.name }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label style="font-size:.85rem; font-weight:600;">Reference #
+                    <input type="text" name="reference_number" style="width:100%; padding:.5rem .6rem; border:1px solid #ddd; border-radius:4px; margin-top:.3rem;">
+                </label>
+            </div>
+            <div style="margin-top:1.25rem;">
+                <button type="submit" class="btn btn-primary">Record Payment</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% if credit_payments %}
+<!-- Apply Existing Credit modal -->
+<div class="modal-overlay" id="applyCreditModal">
+    <div class="modal-box">
+        <button type="button" class="modal-close" onclick="closeModal('applyCreditModal')">✕</button>
+        <h3>Apply Existing Credit</h3>
+        <form method="POST" action="/{{ company_key }}/invoices/{{ inv.id }}/payments/apply">
+            <div style="display:flex; flex-direction:column; gap:.7rem;">
+                <label style="font-size:.85rem; font-weight:600;">Payment
+                    <select name="payment_id" required style="width:100%; padding:.5rem .6rem; border:1px solid #ddd; border-radius:4px; margin-top:.3rem;">
+                        {% for p in credit_payments %}
+                        <option value="{{ p.id }}">{{ p.payment_date }} — ${{ '%.2f'|format(p.unapplied) }} unapplied{% if p.reference_number %} ({{ p.reference_number }}){% endif %}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label style="font-size:.85rem; font-weight:600;">Amount
+                    <input type="number" name="amount" step="0.01" min="0.01" required
+                           value="{{ '%.2f'|format(balance) if balance is not none else '' }}"
+                           style="width:100%; padding:.5rem .6rem; border:1px solid #ddd; border-radius:4px; margin-top:.3rem;">
+                </label>
+            </div>
+            <div style="margin-top:1.25rem;">
+                <button type="submit" class="btn btn-primary">Apply Credit</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
+
+<!-- Add Adjustment modal -->
+<div class="modal-overlay" id="adjustmentModal">
+    <div class="modal-box">
+        <button type="button" class="modal-close" onclick="closeModal('adjustmentModal')">✕</button>
+        <h3>Add Adjustment</h3>
+        <form method="POST" action="/{{ company_key }}/invoices/{{ inv.id }}/adjustments/new">
+            <div style="display:flex; flex-direction:column; gap:.7rem;">
+                <label style="font-size:.85rem; font-weight:600;">Type
+                    <select name="adjustment_type" style="width:100%; padding:.5rem .6rem; border:1px solid #ddd; border-radius:4px; margin-top:.3rem;">
+                        <option value="write_off">Write-off</option>
+                        <option value="discount">Discount</option>
+                        <option value="late_fee">Late Fee</option>
+                        <option value="other">Other</option>
+                    </select>
+                </label>
+                <label style="font-size:.85rem; font-weight:600;">Amount <span class="muted">(positive reduces balance)</span>
+                    <input type="number" name="amount" step="0.01" min="0.01" required
+                           style="width:100%; padding:.5rem .6rem; border:1px solid #ddd; border-radius:4px; margin-top:.3rem;">
+                </label>
+                <label style="font-size:.85rem; font-weight:600;">Reason
+                    <input type="text" name="reason" required
+                           style="width:100%; padding:.5rem .6rem; border:1px solid #ddd; border-radius:4px; margin-top:.3rem;">
+                </label>
+            </div>
+            <div style="margin-top:1.25rem;">
+                <button type="submit" class="btn btn-primary">Add Adjustment</button>
+            </div>
+        </form>
     </div>
 </div>
 {% endblock %}

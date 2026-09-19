@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}Payment — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .breadcrumb { font-size:.82rem; color:#999; margin-bottom:.75rem; }
+    .breadcrumb a { color:{{ branding.color_primary }}; text-decoration:none; }
+    .page-header { margin-bottom:1.5rem; display:flex; justify-content:space-between; align-items:flex-start; gap:1rem; flex-wrap:wrap; }
+    .page-header h1 { font-size:1.6rem; color:{{ branding.color_primary }}; }
+    .detail-grid { display:grid; grid-template-columns:70% 30%; gap:1.5rem; align-items:start; }
+    @media (max-width: 900px) { .detail-grid { grid-template-columns:1fr; } }
+    .section-title { font-size:.75rem; font-weight:700; text-transform:uppercase; letter-spacing:.6px;
+                      color:#888; margin-bottom:.75rem; padding-bottom:.5rem; border-bottom:1px solid #eee; }
+    table { width:100%; border-collapse:collapse; font-size:.88rem; }
+    th { text-align:left; padding:.5rem .7rem; border-bottom:2px solid #eee; font-size:.74rem; text-transform:uppercase; color:#888; }
+    td { padding:.6rem .7rem; border-bottom:1px solid #f0f0f0; }
+    .num { text-align:right; font-variant-numeric:tabular-nums; }
+    .muted { color:#aaa; }
+    .badge { display:inline-block; padding:.2rem .65rem; border-radius:8px; font-size:.8rem; font-weight:500; }
+    .badge-received { background:#e8f5e9; color:#2e7d32; }
+    .badge-voided { background:#fdecea; color:#c0392b; }
+    .side-field { font-size:.85rem; margin-bottom:.6rem; }
+    .side-field .label { color:#999; font-size:.74rem; text-transform:uppercase; letter-spacing:.4px; }
+    .side-field a { color:{{ branding.color_primary }}; }
+    .btn { display:block; width:100%; box-sizing:border-box; padding:.6rem .9rem; border-radius:4px;
+           text-decoration:none; font-weight:500; cursor:pointer; border:none; font-size:.88rem;
+           margin-bottom:.5rem; text-align:center; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-outline { background:white; color:{{ branding.color_primary }}; border:1px solid {{ branding.color_primary }}; }
+    .btn-danger { background:#fdecea; color:#c0392b; border:1px solid #f5c6cb; }
+    .action-form textarea, .action-form input[type=text], .action-form input[type=number] {
+        width:100%; box-sizing:border-box; padding:.5rem .6rem; border:1px solid #ddd;
+        border-radius:4px; font-size:.85rem; margin-bottom:.5rem; font-family:inherit;
+    }
+    .history-row { font-size:.82rem; padding:.5rem 0; border-bottom:1px solid #f5f5f5; }
+    .history-row .meta { color:#aaa; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="/{{ company_key }}/payments">Payments</a> /
+    <a href="/{{ company_key }}/customers/{{ payment.customer_id }}">{{ payment.customer_name }}</a>
+</div>
+
+<div class="page-header">
+    <div>
+        <h1>${{ '%.2f'|format(payment.amount) }} — {{ payment.payment_date }}</h1>
+        <span class="badge badge-{{ payment.status }}">{{ payment.status }}</span>
+        {% if remaining and remaining > 0.005 %}
+        <span class="badge" style="background:#fdecea; color:#c0392b;">${{ '%.2f'|format(remaining) }} unapplied</span>
+        {% endif %}
+    </div>
+</div>
+
+<div class="detail-grid">
+    <div>
+        <div class="card">
+            <div class="section-title">Applications</div>
+            {% if applications %}
+            <table>
+                <thead><tr><th>Invoice</th><th>Date</th><th class="num">Amount</th><th></th></tr></thead>
+                <tbody>
+                    {% for a in applications %}
+                    <tr {% if a.amount < 0 %}style="color:#c0392b;"{% endif %}>
+                        <td><a href="/{{ company_key }}/invoices/{{ a.invoice_id }}" style="color:{{ branding.color_primary }};">{{ a.invoice_number }}</a></td>
+                        <td class="muted">{{ a.applied_date }}</td>
+                        <td class="num">{% if a.amount < 0 %}-{% endif %}${{ '%.2f'|format(a.amount|abs) }}</td>
+                        <td>
+                            {% if not a.reverses_application_id and a.id not in reversed_ids and payment.status == 'received' %}
+                            <form method="POST" action="/{{ company_key }}/payments/{{ payment.id }}/unapply/{{ a.id }}" style="display:inline;"
+                                  onsubmit="return confirm('Un-apply this ${{ '%.2f'|format(a.amount) }} application?');">
+                                <button type="submit" style="background:none; border:none; color:#c0392b; font-size:.78rem; cursor:pointer;">Un-apply</button>
+                            </form>
+                            {% elif a.reverses_application_id %}
+                            <span class="muted" style="font-size:.78rem;">reversal</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="muted">No applications yet.</p>
+            {% endif %}
+        </div>
+
+        <div class="card">
+            <div class="section-title">History</div>
+            {% for h in history %}
+            <div class="history-row">
+                <strong>{{ h.event }}</strong>
+                <span class="meta">— {{ h.changed_by }}, {{ h.changed_at_display }}</span>
+                {% if h.notes %}<div>{{ h.notes }}</div>{% endif %}
+            </div>
+            {% else %}
+            <p class="muted">No history yet.</p>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div>
+        <div class="card">
+            <div class="section-title">Details</div>
+            <div class="side-field"><div class="label">Customer</div><a href="/{{ company_key }}/customers/{{ payment.customer_id }}">{{ payment.customer_name }}</a></div>
+            <div class="side-field"><div class="label">Method</div>{{ payment.method_name or '—' }}</div>
+            <div class="side-field"><div class="label">Reference</div>{{ payment.reference_number or '—' }}</div>
+            {% if payment.refunded_amount and payment.refunded_amount > 0 %}
+            <div class="side-field"><div class="label">Refunded</div>${{ '%.2f'|format(payment.refunded_amount) }}</div>
+            {% endif %}
+        </div>
+
+        {% if payment.status == 'received' %}
+        <div class="card">
+            <div class="section-title">Actions</div>
+
+            {% if remaining and remaining > 0.005 and open_invoices %}
+            <form class="action-form" method="POST" action="/{{ company_key }}/invoices/{{ open_invoices[0].id }}/payments/apply">
+                <input type="hidden" name="payment_id" value="{{ payment.id }}">
+                <label style="font-size:.82rem; color:#555;">Apply to</label>
+                <select name="invoice_id_display" onchange="this.form.action='/{{ company_key }}/invoices/'+this.value+'/payments/apply'"
+                        style="width:100%; padding:.5rem .6rem; border:1px solid #ddd; border-radius:4px; margin-bottom:.5rem;">
+                    {% for inv in open_invoices %}
+                    <option value="{{ inv.id }}">{{ inv.invoice_number }}</option>
+                    {% endfor %}
+                </select>
+                <input type="number" name="amount" step="0.01" min="0.01" max="{{ '%.2f'|format(remaining) }}"
+                       value="{{ '%.2f'|format(remaining) }}" placeholder="Amount">
+                <button type="submit" class="btn btn-primary">Apply</button>
+            </form>
+
+            <form class="action-form" method="POST" action="/{{ company_key }}/payments/{{ payment.id }}/refund">
+                <input type="number" name="amount" step="0.01" min="0.01" max="{{ '%.2f'|format(remaining) }}" placeholder="Refund amount">
+                <input type="text" name="reference" placeholder="Reference (optional)">
+                <button type="submit" class="btn btn-outline">Refund</button>
+            </form>
+            {% endif %}
+
+            <form class="action-form" method="POST" action="/{{ company_key }}/payments/{{ payment.id }}/void"
+                  onsubmit="return confirm('Void this payment? Every active application will be reversed.');">
+                <textarea name="void_reason" placeholder="Void reason (required)" rows="2" required></textarea>
+                <button type="submit" class="btn btn-danger">Void Payment</button>
+            </form>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

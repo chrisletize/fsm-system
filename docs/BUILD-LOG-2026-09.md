@@ -218,3 +218,63 @@ gone; curl-checked the route renders cleanly (302 to login) for all four compani
 (same shared template, so this is a formality, not a real per-company risk).
 
 Proceeding back to Increment 1.4.
+
+---
+
+## 2026-09-19 — Stage 1, Increment 1.4 — Payments, applications, adjustments, credits
+
+**What:**
+- New `payment_methods` (seeded: Check/Credit Card/Paymode-X/ACH/Cash/Other),
+  `payments`, `payment_applications` (append-only — un-apply inserts a reversal row,
+  never mutates), `invoice_adjustments`, `payment_status_history`, and
+  `v_invoice_balances` (finally buildable now that the tables it needs exist — see
+  D-009 from Increment 1.2).
+- `invoice_balance()`/`transition_invoice()`'s reopen/void payment guards, written two
+  increments ago against this exact schema and gated behind `to_regclass()`, are now
+  live and enforcing for real.
+- Payment model layer: record (against a customer, optionally applying to one
+  invoice), apply (rejects over-application against both the invoice balance and the
+  payment's unapplied amount), un-apply (reversal row), void (reason required,
+  reverses every active application), refund (only disposition for money owed back to
+  a customer — write-offs go through `invoice_adjustments` instead, on amounts owed
+  *to* the company).
+- Routes + templates: invoice detail's Record Payment / Apply Existing Credit / Add
+  Adjustment modals (first real use of a new small modal brick in `base.html`),
+  payments list (`/payments`, with date/method/customer/unapplied filters), payment
+  detail (`/payments/<id>`, apply/unapply/void/refund actions), customer detail's new
+  Payments card. Paying an invoice in full shows a celebration banner + "Next Unpaid
+  Invoice →" link right on the (reloaded) invoice detail page.
+- The red "Unapplied credit $X — resolve" badge on customer detail, invoice detail,
+  and the work order form (via the existing customer-context AJAX endpoint) — not on
+  the v1 billing page, which Increment 1.8 replaces wholesale (D-021).
+
+**Migration:** 011 (`011_payments.sql`), applied to all four DBs (tested on `getagrip`
+first, then rolled out; idempotency re-verified). Pre-migration backups in
+`~/db-backups/2026-09-19b/`.
+
+**Commit:** (pending — migration file, `app.py`, six new/changed templates, smoke
+test, this entry, decisions log).
+
+**Smoke test:** `tests/smoke_invoice_versions.py` and `tests/smoke_invoice_routes.py`
+re-run clean as regressions throughout. `tests/smoke_payments.py` — 30/30 checks —
+drives the real routes: record + apply a partial payment, reject an over-application,
+pay off in full and confirm the Paid celebration + Next-Unpaid-Invoice link, un-apply
+and confirm the balance is genuinely restored (not just accepted), refund + void,
+same-day adjustment soft-delete vs. later-day reversal row, and every list/detail page
+render. **Caught two real bugs this way, not just exercised the happy path** — both
+fixed and re-verified before calling the increment done (D-018, D-019): a
+`reverses_application_id IS NULL` filter that was backwards for every SUM-based
+balance/guard calculation (an un-applied payment never actually freed up the invoice —
+found because the test re-checks the balance after unapplying instead of trusting the
+200 response), and a `Decimal`/`float` arithmetic `TypeError` in the over-application
+guard (found because the test records a *real* payment instead of only checking
+routes return the right status code).
+
+**Deferred:** `v_invoice_balances` exists now but nothing queries it yet — list pages
+still compute balance/status in Python per row (D-016); switching them over is a
+cheap follow-up, not urgent. Multi-invoice-per-payment recording in one step isn't
+built — the primary flow (record against one invoice) and the secondary "apply
+elsewhere" flow (from payment detail or an invoice's Apply Existing Credit modal)
+together cover the directive's dispositions without that extra UI.
+
+Proceeding to Increment 1.5 (invoice PDF).

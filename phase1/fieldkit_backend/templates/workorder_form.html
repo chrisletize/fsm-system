@@ -123,6 +123,8 @@
                    wo.customer_id if wo else none,
                    (wo.customer_name + ' (' + wo.customer_type + ')') if wo else '',
                    'Type customer name…', True, 'customerCombo') }}
+            <span id="creditBadge" style="display:none; background:#fdecea; color:#c0392b; border-radius:8px;
+                  padding:.2rem .6rem; font-size:.78rem; font-weight:600; margin-top:.3rem; width:fit-content;"></span>
         </div>
         <div class="form-group">
             <label>Service Location</label>
@@ -618,6 +620,14 @@
                     return `<option value="${ct.id}">${esc(ct.first_name + ' ' + ct.last_name + t)}</option>`;
                 }).join('');
                 locationSelect.disabled = contactSelect.disabled = false;
+
+                const badge = document.getElementById('creditBadge');
+                if (data.unapplied_credit && data.unapplied_credit > 0.005) {
+                    badge.textContent = 'Unapplied credit $' + data.unapplied_credit.toFixed(2) + ' — resolve';
+                    badge.style.display = 'block';
+                } else {
+                    badge.style.display = 'none';
+                }
 
                 if (preserve) {
                     if (INIT_LOCATION) locationSelect.value = String(INIT_LOCATION);

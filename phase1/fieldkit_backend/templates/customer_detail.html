@@ -192,6 +192,12 @@
             {{ customer.customer_type }}
              · Added {{ customer.created_at.strftime('%b %d, %Y') if customer.created_at else '—' }}
         </div>
+        {% if unapplied_credit and unapplied_credit > 0.005 %}
+        <span style="display:inline-block; background:#fdecea; color:#c0392b; border-radius:8px;
+              padding:.25rem .7rem; font-size:.8rem; font-weight:600; margin-top:.5rem;">
+            Unapplied credit ${{ '%.2f'|format(unapplied_credit) }} — resolve
+        </span>
+        {% endif %}
     </div>
     <div class="header-actions">
         <a href="/{{ company_key }}/customers/{{ customer.id }}/edit" class="btn btn-outline">Edit</a>
@@ -455,6 +461,91 @@
     {% else %}
     <div class="no-locations">No invoices on file.</div>
     {% endif %}
+</div>
+
+<!-- Payments -->
+<div class="card" style="margin-bottom:1.25rem;">
+    <div class="section-title">
+        Payments
+        {% if customer_payments %}<span style="font-weight:400; text-transform:none; letter-spacing:0; color:#aaa; margin-left:0.4rem;">({{ customer_payments|length }})</span>{% endif %}
+    </div>
+    {% if customer_payments %}
+    <table style="width:100%; border-collapse:collapse; font-size:.88rem;">
+        <thead>
+            <tr>
+                <th style="text-align:left; padding:.4rem .5rem; border-bottom:1px solid #eee; color:#888; font-size:.74rem; text-transform:uppercase;">Date</th>
+                <th style="text-align:left; padding:.4rem .5rem; border-bottom:1px solid #eee; color:#888; font-size:.74rem; text-transform:uppercase;">Method</th>
+                <th style="text-align:right; padding:.4rem .5rem; border-bottom:1px solid #eee; color:#888; font-size:.74rem; text-transform:uppercase;">Amount</th>
+                <th style="text-align:left; padding:.4rem .5rem; border-bottom:1px solid #eee; color:#888; font-size:.74rem; text-transform:uppercase;">Status</th>
+                <th style="text-align:right; padding:.4rem .5rem; border-bottom:1px solid #eee; color:#888; font-size:.74rem; text-transform:uppercase;">Unapplied</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in customer_payments %}
+            <tr>
+                <td style="padding:.5rem; border-bottom:1px solid #f5f5f5;">
+                    <a href="/{{ company_key }}/payments/{{ p.id }}" style="color:{{ branding.color_primary }};">{{ p.payment_date }}</a>
+                </td>
+                <td style="padding:.5rem; border-bottom:1px solid #f5f5f5; color:#999;">{{ p.method_name or '—' }}</td>
+                <td style="padding:.5rem; border-bottom:1px solid #f5f5f5; text-align:right;">${{ '%.2f'|format(p.amount) }}</td>
+                <td style="padding:.5rem; border-bottom:1px solid #f5f5f5;">{{ p.status }}</td>
+                <td style="padding:.5rem; border-bottom:1px solid #f5f5f5; text-align:right; {% if p.unapplied and p.unapplied > 0.005 %}color:#c0392b; font-weight:600;{% endif %}">
+                    {% if p.unapplied and p.unapplied > 0.005 %}${{ '%.2f'|format(p.unapplied) }}{% else %}—{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="no-locations">No payments on file.</div>
+    {% endif %}
+    <div style="margin-top:.75rem;">
+        <button type="button" class="btn btn-outline btn-sm" onclick="openModal('recordPaymentModal')">+ Record Payment</button>
+    </div>
+</div>
+
+<!-- Record Payment modal -->
+<div class="modal-overlay" id="recordPaymentModal">
+    <div class="modal-box">
+        <button type="button" class="modal-close" onclick="closeModal('recordPaymentModal')">✕</button>
+        <h3>Record Payment</h3>
+        <form method="POST" action="/{{ company_key }}/payments/new">
+            <input type="hidden" name="customer_id" value="{{ customer.id }}">
+            <input type="hidden" name="redirect_to" value="/{{ company_key }}/customers/{{ customer.id }}">
+            <div style="display:flex; flex-direction:column; gap:.7rem;">
+                <label style="font-size:.85rem; font-weight:600;">Amount
+                    <input type="number" name="amount" step="0.01" min="0.01" required
+                           style="width:100%; padding:.5rem .6rem; border:1px solid #ddd; border-radius:4px; margin-top:.3rem;">
+                </label>
+                <label style="font-size:.85rem; font-weight:600;">Payment Date
+                    <input type="date" name="payment_date" value="{{ today }}"
+                           style="width:100%; padding:.5rem .6rem; border:1px solid #ddd; border-radius:4px; margin-top:.3rem;">
+                </label>
+                <label style="font-size:.85rem; font-weight:600;">Method
+                    <select name="payment_method_id" style="width:100%; padding:.5rem .6rem; border:1px solid #ddd; border-radius:4px; margin-top:.3rem;">
+                        <option value="">—</option>
+                        {% for m in payment_methods %}
+                        <option value="{{ m.id }}">{{ m.name }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label style="font-size:.85rem; font-weight:600;">Reference #
+                    <input type="text" name="reference_number" style="width:100%; padding:.5rem .6rem; border:1px solid #ddd; border-radius:4px; margin-top:.3rem;">
+                </label>
+                <label style="font-size:.85rem; font-weight:600;">Apply to Invoice
+                    <select name="apply_to_invoice_id" style="width:100%; padding:.5rem .6rem; border:1px solid #ddd; border-radius:4px; margin-top:.3rem;">
+                        <option value="">Leave unapplied (credit)</option>
+                        {% for inv in customer_invoices if inv.balance and inv.balance > 0.005 %}
+                        <option value="{{ inv.id }}">{{ inv.invoice_number }} — ${{ '%.2f'|format(inv.balance) }} due</option>
+                        {% endfor %}
+                    </select>
+                </label>
+            </div>
+            <div style="margin-top:1.25rem;">
+                <button type="submit" class="btn btn-primary">Record Payment</button>
+            </div>
+        </form>
+    </div>
 </div>
 
 <!-- Contacts -->

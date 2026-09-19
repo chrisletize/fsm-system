@@ -179,6 +179,51 @@ exact separator; `" - "` was chosen to match the existing "Unit Number OCC AM GA
 space/token style used elsewhere in the same generated description. One shared
 template serves all four companies, so one fix covers all of them.
 
+D-018 — [MODEL, bug caught by smoke testing] Every numeric SUM over
+`payment_applications` (`invoice_balance()`, `_remaining_unapplied()`,
+`customer_unapplied_credit()`, and `transition_invoice()`'s Void/reopen payment
+guards) originally filtered `WHERE reverses_application_id IS NULL`, intending to sum
+only "active" applications. That filter is backwards for a SUM: it excludes the
+reversal row itself (which carries the negative amount that's supposed to net the
+original back out), so it keeps counting an application as fully in effect forever,
+even after it's been un-applied. Fixed by summing ALL rows (originals + reversals,
+no filter) for every numeric total — the reversal's negative amount is what makes the
+net correct. The `reverses_application_id IS NULL` filter is still correct, and kept,
+for the two places that need "find an original application with no reversal yet"
+(`_unapply_payment`'s lookup, `_void_payment`'s NOT EXISTS scan) — those are boolean/
+selection queries, not sums, and are a genuinely different question. Caught by
+`smoke_payments.py`'s unapply-then-recheck-balance assertion; without that check this
+would have shipped silently (a voided/un-applied payment would have kept blocking
+reopen/void forever, and balances would never have recovered).
+
+D-019 — [MODEL, bug caught by smoke testing] `invoice_balance()` now always returns a
+plain `float` rather than sometimes a `Decimal` (psycopg2's type for NUMERIC columns).
+Comparing Decimal and float works fine in Python, but arithmetic (`+`/`-`) between
+them raises `TypeError` — `_apply_payment()`'s over-application guard (`amount > bal +
+0.005`) 500'd on the very first real payment the smoke test tried to record. Casting
+once at the source means every caller can do arithmetic freely without hitting this
+again.
+
+D-020 — [UX] "Record Payment is an inline modal... never navigates away" (§2.4) is
+implemented as a real modal (the new `.modal-overlay`/`.modal-box` brick in
+`base.html`) whose form POSTs and reloads — it never leaves the invoice/customer
+detail page it was opened from, but it is a full page load, not an AJAX no-reload
+submission. This codebase has no AJAX-form or toast infrastructure anywhere yet
+(confirmed before building this increment), and building one is a bigger scope change
+than one increment's payment form justifies. The "celebration toast + Next Unpaid
+Invoice" requirement is similarly implemented as a green banner rendered server-side
+on the reloaded invoice detail page (shown whenever `display_status == 'Paid'`) rather
+than an ephemeral JS toast — same reasoning as D-013's flash-message choice.
+
+D-021 — [SCOPE] The v1 billing page (`billing.html`) does NOT get the "Unapplied
+credit" badge that directive §2.4 asks for on "every page that shows a customer."
+That page is explicitly rebuilt from scratch in Increment 1.8 ("Billing page (full)"),
+including its own "Open credits" panel per §2.8 — adding a badge to the page now, only
+to delete it in 1.8's rewrite, is exactly the kind of throwaway work the build
+shouldn't do. The badge is on customer detail, invoice detail, and the work order
+form (via the existing customer-context AJAX endpoint) — the three pages from that
+list that aren't about to be rebuilt wholesale.
+
 ---
 
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:
