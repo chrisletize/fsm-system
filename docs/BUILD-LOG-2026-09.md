@@ -193,3 +193,28 @@ work order is correctly refused. Re-ran `smoke_tax_settings.py` and
 (1.4/1.5/1.8) — the invoice detail sidebar says so rather than showing dead buttons.
 
 Proceeding to Increment 1.4 (payments, applications, adjustments, credits).
+
+---
+
+## 2026-09-19 — Out-of-sequence bug fix: work order auto-description
+
+**What:** Chris reported that typing a per-line description on a standard work order
+line (e.g. "guest bathtub") was *replacing* that line's contribution to the
+auto-generated job description instead of adding to it — so the catalog item's own
+name disappeared from the description the moment someone typed a note on the line.
+Root cause: `lineContribution()` in `workorder_form.html` returned the typed
+description alone whenever it was non-empty, ignoring the catalog item name
+entirely. Fixed to combine both (`"<Catalog Name> - <typed note>"` when both are
+present, matching the existing token style of the generated description). One shared
+template serves all four companies — no per-company work needed. See D-017.
+
+**Migration:** none (frontend JS only).
+
+**Commit:** (pending — `workorder_form.html`, this entry, decisions log).
+
+**Verification:** restarted the app, confirmed via the Flask test client that
+`/workorders/new` now serves the combining logic and the old replace-only logic is
+gone; curl-checked the route renders cleanly (302 to login) for all four companies
+(same shared template, so this is a formality, not a real per-company risk).
+
+Proceeding back to Increment 1.4.

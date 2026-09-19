@@ -455,9 +455,13 @@
         const hidden = row.querySelector('.ac-wrap input[type=hidden]').value;
         if (row.dataset.kind === 'std') {
             const d = row.querySelector('.li-desc').value.trim();
-            if (d) return d;
             const cat = hidden ? catById(hidden) : null;
-            return cat ? cat.name : '';
+            const base = cat ? cat.name : '';
+            // The description field is a note ON TOP OF the catalog item
+            // ("guest bathtub"), not a replacement for it — combine both
+            // rather than letting one hide the other.
+            if (base && d) return base + ' - ' + d;
+            return base || d;
         }
         const eq = hidden ? eqById(hidden) : null;
         return eq ? eq.name + ' deployed' : '';

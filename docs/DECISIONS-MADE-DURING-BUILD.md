@@ -170,6 +170,15 @@ doesn't exist until migration 011 (Increment 1.4). Fine at today's invoice volum
 switch the list query to the view once it exists rather than duplicating its math in a
 raw `WHERE`.
 
+D-017 — [DEFAULTED] Bug fix (reported by Chris 2026-09-19, out of increment sequence):
+`lineContribution()` in `workorder_form.html` combines a standard line's catalog item
+name and its typed description with `" - "` (e.g. "Bathtub Resurface - guest bathtub")
+when the auto-generated job description is rebuilt. Previously the typed description
+silently replaced the catalog name instead of adding to it. Chris didn't specify an
+exact separator; `" - "` was chosen to match the existing "Unit Number OCC AM GATED"
+space/token style used elsewhere in the same generated description. One shared
+template serves all four companies, so one fix covers all of them.
+
 ---
 
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:
