@@ -27,6 +27,8 @@ reporting until FieldKit's billing is complete.
 | `company_settings` | Built (migration 009), `/settings/company` UI live. One seeded row per DB (`company_name` only; everything else NULL pending Chris/Michele). |
 | Invoice engine | Receivable/version schema + full UI (1.2–1.6) + email delivery (1.7, migration 014) + WTN/PO + compliance portal fields (1.8, migration 015). Zero real invoice/payment/email rows in production yet (only test fixtures, created and cleaned up by each smoke test — email tests use a monkey-patched Resend + `.invalid`-address fixtures, confirmed zero real sends). |
 | Compliance portals | Built (1.8, migration 015): `customer_compliance_portals` table, enrollment/edit/toggle UI, auto-assign-on-harden, `/compliance` review page with accept/reject + generic `.xlsx` export (real per-portal templates still pending from Chris/Michele). |
+| NC cash-basis tax report | Built (1.10, migration 016, `/reports/tax`): cash-basis by county, state/county/transit split incl. Mecklenburg's 1% additional-county line, refund handling, Excel + PDF export. Untested against real data (none exists yet). |
+| Cutover import from Phase 0 | Not built — deferred by Chris (2026-09-19) until the site is ready for day-to-day testing. Investigation-only finding logged: the statements DB (`fsm_prod`) currently has zero invoice/tax rows for all four companies (D-038); needs resolving before this increment actually runs. |
 | Dispatch, extraction queue, other reports, estimates, sales CRM, payment methods, tags, dashboard stats | Not built |
 
 This table matches `FIELDKIT_BUILD_DIRECTIVE_2026-09.md` §0.2 — confirmed by grepping
@@ -35,12 +37,14 @@ production databases directly, not taken on faith from either doc.
 
 ## Current build
 Following `docs/FIELDKIT_BUILD_DIRECTIVE_2026-09.md` stage by stage. Stage 0 complete.
-**Stage 1 — Finish invoicing & billing**: Increments 1.1 through 1.8 complete (tax
-rates/company settings, receivable/version invoice refactor, invoice UI, payments,
+**Stage 1 — Finish invoicing & billing**: Increments 1.1 through 1.8 and 1.10 complete
+(tax rates/company settings, receivable/version invoice refactor, invoice UI, payments,
 invoice PDF, statements, email delivery, billing page rebuild + A/R aging + compliance
-portals). Next: Increment 1.9 (cutover data import from Phase 0) — flagged in the
-directive as requiring Chris's explicit go-ahead before the real, non-dry-run import
-runs.
+portals, NC cash-basis tax report). Increment 1.9 (cutover data import) is deferred at
+Chris's direction (2026-09-19) until the site is ready for his and Michele's
+day-to-day testing — see D-038 for what was found investigating the source data.
+Stage 1's remaining exit criteria (tax report reconciling by hand, Michele's
+walkthrough) need real data/Michele's time, not more code.
 
 Decisions Chris has already made for this build (delinquent threshold = 90 days past
 invoice date, FL tax left empty/exempt for Kleanit SF, SF-import receivables excluded

@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}NC Tax Report — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { margin-bottom:.5rem; }
+    .page-header h1 { font-size:1.75rem; color:{{ branding.color_primary }}; }
+    .help-text { color:#888; font-size:.85rem; margin-bottom:1.25rem; max-width:70ch; }
+    .controls { display:flex; gap:.75rem; margin-bottom:1.25rem; align-items:flex-end; flex-wrap:wrap; }
+    .controls label { display:flex; flex-direction:column; gap:.3rem; font-size:.78rem; color:#666; font-weight:600; }
+    .controls input[type=date] { padding:.45rem .6rem; border:1px solid #ddd; border-radius:4px; font-size:.88rem; }
+    .controls .btn { padding:.5rem 1rem; border-radius:4px; text-decoration:none; font-size:.85rem; font-weight:500; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; border:none; cursor:pointer; }
+    .btn-outline { background:white; color:{{ branding.color_primary }}; border:1px solid {{ branding.color_primary }}; }
+    table { width:100%; border-collapse:collapse; font-size:.88rem; }
+    th { text-align:left; padding:.6rem .8rem; border-bottom:2px solid #eee; font-size:.72rem; text-transform:uppercase;
+         letter-spacing:.4px; color:#888; background:#fafafa; }
+    th.num, td.num { text-align:right; }
+    td { padding:.6rem .8rem; border-bottom:1px solid #f5f5f5; }
+    .county-block { margin-bottom:1.75rem; }
+    .county-block h2 { font-size:1.1rem; color:{{ branding.color_primary }}; margin-bottom:.5rem; }
+    .totals-box { background:#fafafa; border-radius:6px; padding:.9rem 1.1rem; margin-bottom:.75rem; }
+    .totals-box table { font-size:.85rem; }
+    .totals-box td, .totals-box th { border:none; padding:.35rem .6rem; }
+    .grand-totals { border-top:3px solid {{ branding.color_primary }}; margin-top:1.5rem; padding-top:1rem; }
+    .refund-row td { color:#c0392b; }
+    .unallocated-note { font-size:.82rem; color:#888; margin-top:.5rem; }
+    @media print {
+        .controls, .subnav, nav { display:none !important; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header"><h1>NC Cash-Basis Tax Report — {{ branding.name }}</h1></div>
+<p class="help-text">
+    Cash basis: grouped by the date money actually moved (payment applied, or
+    refund issued), not by invoice date. Revising an already-billed invoice
+    never changes what was already reported for cash received in an earlier
+    period — only money movement matters here.
+</p>
+
+<form method="GET" class="controls">
+    <label>From <input type="date" name="date_from" value="{{ date_from }}"></label>
+    <label>To <input type="date" name="date_to" value="{{ date_to }}"></label>
+    <button type="submit" class="btn btn-primary">Run Report</button>
+    <a class="btn btn-outline" href="/{{ company_key }}/reports/tax/export.xlsx?date_from={{ date_from }}&date_to={{ date_to }}">Export Excel</a>
+    <a class="btn btn-outline" href="/{{ company_key }}/reports/tax/export.pdf?date_from={{ date_from }}&date_to={{ date_to }}">Export PDF</a>
+    <a class="btn btn-outline" href="javascript:window.print()">Print</a>
+</form>
+
+{% if not data.counties %}
+<div class="card" style="text-align:center; color:#aaa; padding:2rem;">No cash received in this date range.</div>
+{% endif %}
+
+{% for c in data.counties %}
+<div class="county-block">
+    <h2>{{ c.county }}</h2>
+    <div class="totals-box">
+        <table>
+            <thead>
+                <tr><th>Cash Applied</th><th>Taxable Base</th><th>Tax Collected</th><th>State</th><th>County</th><th>Additional County</th><th>Transit</th></tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>${{ '{:,.2f}'.format(c.totals.applied) }}</td>
+                    <td>${{ '{:,.2f}'.format(c.totals.taxable) }}</td>
+                    <td>${{ '{:,.2f}'.format(c.totals.tax) }}</td>
+                    <td>${{ '{:,.2f}'.format(c.totals.state) }}</td>
+                    <td>${{ '{:,.2f}'.format(c.totals.county) }}</td>
+                    <td>${{ '{:,.2f}'.format(c.totals.additional_county) }}</td>
+                    <td>${{ '{:,.2f}'.format(c.totals.transit) }}</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+    <table>
+        <thead>
+            <tr><th>Invoice #</th><th>Customer</th><th>Date</th><th class="num">Applied</th><th class="num">Taxable</th><th class="num">Tax</th></tr>
+        </thead>
+        <tbody>
+            {% for r in c.rows %}
+            <tr {% if r.is_refund %}class="refund-row"{% endif %}>
+                <td><a href="/{{ company_key }}/invoices?search={{ r.invoice_number }}">{{ r.invoice_number }}</a>{% if r.is_refund %} (refund){% endif %}</td>
+                <td>{{ r.customer_name }}</td>
+                <td>{{ r.applied_date }}</td>
+                <td class="num">${{ '{:,.2f}'.format(r.applied_amount) }}</td>
+                <td class="num">${{ '{:,.2f}'.format(r.taxable_alloc) }}</td>
+                <td class="num">${{ '{:,.2f}'.format(r.tax_alloc) }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endfor %}
+
+{% if data.counties %}
+<div class="totals-box grand-totals">
+    <table>
+        <thead>
+            <tr><th>GRAND TOTAL</th><th>Cash Applied</th><th>Taxable Base</th><th>Tax Collected</th><th>State</th><th>County</th><th>Additional County</th><th>Transit</th></tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td></td>
+                <td>${{ '{:,.2f}'.format(data.grand_totals.applied) }}</td>
+                <td>${{ '{:,.2f}'.format(data.grand_totals.taxable) }}</td>
+                <td>${{ '{:,.2f}'.format(data.grand_totals.tax) }}</td>
+                <td>${{ '{:,.2f}'.format(data.grand_totals.state) }}</td>
+                <td>${{ '{:,.2f}'.format(data.grand_totals.county) }}</td>
+                <td>${{ '{:,.2f}'.format(data.grand_totals.additional_county) }}</td>
+                <td>${{ '{:,.2f}'.format(data.grand_totals.transit) }}</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{% if data.unallocated %}
+<div class="card" style="margin-top:1.5rem;">
+    <strong>Unallocated refunds</strong>
+    <p class="unallocated-note">
+        These refunds were issued from credit that was never applied to any invoice —
+        no tax was ever reported against them, so they can't be netted out of a
+        county. Shown here for reconciliation visibility only.
+    </p>
+    <table>
+        <thead><tr><th>Customer</th><th>Refunded</th><th class="num">Amount</th><th>Reference</th></tr></thead>
+        <tbody>
+            {% for u in data.unallocated %}
+            <tr>
+                <td>{{ u.customer_name }}</td>
+                <td>{{ u.refunded_at }}</td>
+                <td class="num">${{ '{:,.2f}'.format(u.refunded_amount) }}</td>
+                <td>{{ u.refund_reference or '—' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endblock %}

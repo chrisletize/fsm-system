@@ -1658,7 +1658,10 @@ def _tax_rate_as_of(cur, county, as_of):
 def _compute_invoice_tax(cur, invoice_id, version_id):
     """Resolve and total the tax for one invoice VERSION from the county rate
     that was effective on the receivable's invoice_date. Returns
-    (tax_rate_pct, subtotal, tax_total, total).
+    (tax_rate_pct, subtotal, tax_total, total, state_pct, county_pct,
+    transit_pct, taxable_base). The last four are frozen onto the version at
+    harden by the caller so the NC cash-basis tax report (Increment 1.10)
+    never has to re-look-up tax_rates for an already-hardened invoice.
 
     Anchoring on invoice_date (not "today") is what makes a later correction
     to tax_rates (e.g. NC changing a county's rate) never change a version
@@ -1673,7 +1676,7 @@ def _compute_invoice_tax(cur, invoice_id, version_id):
     """, (invoice_id,))
     inv = cur.fetchone()
     if not inv:
-        return None, None, None, None
+        return None, None, None, None, None, None, None, None
     as_of = inv['invoice_date']
 
     cur.execute("SELECT tax_county FROM invoice_versions WHERE id = %s", (version_id,))
@@ -1692,15 +1695,19 @@ def _compute_invoice_tax(cur, invoice_id, version_id):
     taxable_base = sums['taxable_base']
 
     rate_pct = None
+    state_pct = county_pct = transit_pct = None
     if county and as_of:
         r = _tax_rate_as_of(cur, county, as_of)
         if r:
             rate_pct = r['total_pct']
+            state_pct = r['state_pct']
+            county_pct = r['county_pct']
+            transit_pct = r['transit_pct']
 
     effective_rate = rate_pct if rate_pct is not None else 0
     tax_total = (taxable_base * effective_rate) / 100
     total     = subtotal + tax_total
-    return rate_pct, subtotal, tax_total, total
+    return rate_pct, subtotal, tax_total, total, state_pct, county_pct, transit_pct, taxable_base
 
 
 def _resolve_equipment_labels(cur, version_id):
@@ -2021,14 +2028,18 @@ def transition_invoice(cur, company_key, invoice_id, to_state, username, notes=N
             return False, ('Cannot harden: one or more equipment lines have '
                            'not been retrieved yet.'), None
 
-        rate_pct, subtotal, tax_total, total = _compute_invoice_tax(cur, invoice_id, ver['id'])
+        (rate_pct, subtotal, tax_total, total,
+         state_pct, county_pct, transit_pct, taxable_subtotal) = _compute_invoice_tax(cur, invoice_id, ver['id'])
         cur.execute("""
             UPDATE invoice_versions
             SET subtotal = %s, tax_rate_pct = %s, tax_total = %s, total = %s,
+                state_pct = %s, county_pct = %s, transit_pct = %s, taxable_subtotal = %s,
                 state = 'Hardened', hardened_at = CURRENT_TIMESTAMP, hardened_by = %s,
                 updated_at = CURRENT_TIMESTAMP, updated_by = %s
             WHERE id = %s
-        """, (subtotal, rate_pct, tax_total, total, username, username, ver['id']))
+        """, (subtotal, rate_pct, tax_total, total,
+              state_pct, county_pct, transit_pct, taxable_subtotal,
+              username, username, ver['id']))
         # Bake equipment-ordinal labels into the frozen snapshot so a reprint
         # years later is byte-identical (same freeze discipline as the tax rate).
         for _li_id, _label in _resolve_equipment_labels(cur, ver['id']).items():
@@ -6228,6 +6239,344 @@ def billing_send_statements(company_key, branding, all_companies, company_access
         company_access=company_access, all_companies=all_companies,
         sent=sent, failed=failed, skipped=skipped,
     )
+
+# ============================================================================
+# NC cash-basis tax report  (admin + manager + office; Increment 1.10)
+# ============================================================================
+
+def _split_mecklenburg_county_component(county, county_pct, county_alloc):
+    """NCDOR reports Mecklenburg's 1.00% 'additional county' tax (effective
+    2026-07-01, migration 009) on its own line, separate from the regular
+    2.00% county rate -- but this build's tax_rates schema pools both into a
+    single county_pct (see migration 016's header comment for why: the
+    directive only asked for state/county/transit, and a 4th stored column
+    for one county's one-time rate change felt like over-fitting the schema
+    to a single jurisdiction). So the split happens here, at report-render
+    time, from the pooled dollar amount already allocated to 'county'.
+    Hardcoded to the known 2.00/1.00 composition (migration 009's Mecklenburg
+    row); if NC changes Mecklenburg's county rate again, this needs a
+    matching update -- there is nowhere in the schema this could self-derive
+    from. Every other county's county_alloc passes through unsplit."""
+    if county == 'Mecklenburg' and county_pct is not None and float(county_pct) >= 2.995:
+        base_share = 2.000 / float(county_pct)
+        return county_alloc * base_share, county_alloc * (1 - base_share)
+    return county_alloc, 0.0
+
+
+def _tax_report_data(cur, date_from, date_to):
+    """NC cash-basis tax report (directive §2.10). Cash basis: grouped by the
+    date money actually moved -- payment_applications.applied_date for
+    receipts, payments.refunded_at for refunds -- never by invoice_date or
+    revision history. A revised invoice doesn't retroactively change what was
+    already reported for cash received in an earlier period ("Revisions:
+    nothing special -- cash basis means only money movement matters").
+
+    Excludes source='sf_import' receivables (D-001: SF-era balances were
+    already reported through the Phase 0 statements path; counting them here
+    would double-report the same tax).
+
+    Each receipt is allocated against the invoice's CURRENT version (not
+    whatever version was live when the cash was applied) per the directive's
+    formula: taxable_base = applied x (taxable_subtotal / total), tax
+    collected = applied x (tax_total / total), then tax split into
+    state/county/transit using the version's frozen percentages.
+
+    Refunds (real cash returned) appear as negative rows in the period they
+    were refunded, allocated against the last invoice that payment's money
+    was ever applied to (even a since-reversed application, found via the
+    most recent payment_applications row for that payment) -- see
+    docs/DECISIONS-MADE-DURING-BUILD.md. A refund from credit that was NEVER
+    applied to any invoice never contributed taxable revenue in the first
+    place and can't be netted out of any county; those are returned
+    separately as 'unallocated' for visibility rather than guessed at.
+
+    Returns {'counties': [...], 'grand_totals': {...}, 'unallocated': [...]}.
+    """
+    def _empty_totals():
+        return {'applied': 0.0, 'taxable': 0.0, 'tax': 0.0,
+                'state': 0.0, 'county': 0.0, 'additional_county': 0.0, 'transit': 0.0}
+
+    def _allocate(row, applied_amount):
+        total = float(row['total']) if row['total'] else 0.0
+        if total <= 0.005:
+            return None
+        frac = applied_amount / total
+        taxable_alloc = frac * float(row['taxable_subtotal'] or 0)
+        tax_alloc = frac * float(row['tax_total'] or 0)
+        rate_pct = float(row['state_pct'] or 0) + float(row['county_pct'] or 0) + float(row['transit_pct'] or 0)
+        if rate_pct > 0.0005 and tax_alloc:
+            state_alloc = tax_alloc * (float(row['state_pct'] or 0) / rate_pct)
+            county_alloc_raw = tax_alloc * (float(row['county_pct'] or 0) / rate_pct)
+            transit_alloc = tax_alloc * (float(row['transit_pct'] or 0) / rate_pct)
+        else:
+            state_alloc = county_alloc_raw = transit_alloc = 0.0
+        county_alloc, additional_alloc = _split_mecklenburg_county_component(
+            row['tax_county'], row['county_pct'], county_alloc_raw)
+        return {
+            'tax_county': row['tax_county'] or 'Unknown / No County Set',
+            'invoice_number': row['invoice_number'], 'customer_name': row['customer_name'],
+            'applied_date': row['cash_date'], 'applied_amount': applied_amount,
+            'taxable_alloc': taxable_alloc, 'tax_alloc': tax_alloc,
+            'state_alloc': state_alloc, 'county_alloc': county_alloc,
+            'additional_alloc': additional_alloc, 'transit_alloc': transit_alloc,
+            'is_refund': applied_amount < 0,
+        }
+
+    cur.execute("""
+        SELECT pa.amount AS applied_amount, pa.applied_date AS cash_date,
+               i.invoice_number, c.property_name AS customer_name,
+               v.tax_county, v.taxable_subtotal, v.tax_total, v.total,
+               v.state_pct, v.county_pct, v.transit_pct
+        FROM payment_applications pa
+        JOIN invoices i ON i.id = pa.invoice_id
+        JOIN customers c ON c.id = i.customer_id
+        JOIN invoice_versions v ON v.id = i.current_version_id
+        WHERE pa.reverses_application_id IS NULL
+          AND pa.applied_date BETWEEN %s AND %s
+          AND i.deleted_at IS NULL AND i.source = 'fieldkit'
+        ORDER BY i.invoice_number, pa.applied_date
+    """, (date_from, date_to))
+    receipt_rows = cur.fetchall()
+
+    cur.execute("""
+        SELECT p.id AS payment_id, p.refunded_amount, p.refunded_at, p.refund_reference,
+               cu.property_name AS customer_name
+        FROM payments p
+        JOIN customers cu ON cu.id = p.customer_id
+        WHERE p.refunded_at IS NOT NULL AND p.refunded_at::date BETWEEN %s AND %s
+          AND p.refunded_amount > 0.005 AND p.deleted_at IS NULL
+    """, (date_from, date_to))
+    refund_payments = cur.fetchall()
+
+    refund_alloc_rows = []
+    unallocated = []
+    for rp in refund_payments:
+        cur.execute("""
+            SELECT pa.invoice_id FROM payment_applications pa
+            WHERE pa.payment_id = %s ORDER BY pa.created_at DESC, pa.id DESC LIMIT 1
+        """, (rp['payment_id'],))
+        last_app = cur.fetchone()
+        matched = None
+        if last_app:
+            cur.execute("""
+                SELECT i.invoice_number, c.property_name AS customer_name,
+                       v.tax_county, v.taxable_subtotal, v.tax_total, v.total,
+                       v.state_pct, v.county_pct, v.transit_pct
+                FROM invoices i
+                JOIN customers c ON c.id = i.customer_id
+                JOIN invoice_versions v ON v.id = i.current_version_id
+                WHERE i.id = %s AND i.deleted_at IS NULL AND i.source = 'fieldkit'
+            """, (last_app['invoice_id'],))
+            matched = cur.fetchone()
+        if matched:
+            row = dict(matched)
+            row['cash_date'] = rp['refunded_at'].date() if hasattr(rp['refunded_at'], 'date') else rp['refunded_at']
+            alloc = _allocate(row, -float(rp['refunded_amount']))
+            if alloc:
+                refund_alloc_rows.append(alloc)
+                continue
+        unallocated.append({
+            'customer_name': rp['customer_name'], 'refunded_at': rp['refunded_at'],
+            'refunded_amount': float(rp['refunded_amount']), 'refund_reference': rp['refund_reference'],
+        })
+
+    by_county = {}
+    for row in receipt_rows:
+        alloc = _allocate(row, float(row['applied_amount']))
+        if not alloc:
+            continue
+        by_county.setdefault(alloc['tax_county'], {'totals': _empty_totals(), 'rows': []})
+        by_county[alloc['tax_county']]['rows'].append(alloc)
+    for alloc in refund_alloc_rows:
+        by_county.setdefault(alloc['tax_county'], {'totals': _empty_totals(), 'rows': []})
+        by_county[alloc['tax_county']]['rows'].append(alloc)
+
+    for county, bucket in by_county.items():
+        for r in bucket['rows']:
+            bucket['totals']['applied'] += r['applied_amount']
+            bucket['totals']['taxable'] += r['taxable_alloc']
+            bucket['totals']['tax'] += r['tax_alloc']
+            bucket['totals']['state'] += r['state_alloc']
+            bucket['totals']['county'] += r['county_alloc']
+            bucket['totals']['additional_county'] += r['additional_alloc']
+            bucket['totals']['transit'] += r['transit_alloc']
+
+    grand = _empty_totals()
+    for bucket in by_county.values():
+        for k in grand:
+            grand[k] += bucket['totals'][k]
+
+    counties = [{'county': c, **by_county[c]} for c in sorted(by_county.keys())]
+    return {'counties': counties, 'grand_totals': grand, 'unallocated': unallocated}
+
+
+def _tax_report_default_range():
+    today = date.today()
+    first_of_this_month = today.replace(day=1)
+    last_of_prev_month = first_of_this_month - timedelta(days=1)
+    first_of_prev_month = last_of_prev_month.replace(day=1)
+    return first_of_prev_month, last_of_prev_month
+
+
+def _tax_report_build_xlsx(data, date_from, date_to):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Summary'
+    ws.append([f'NC Cash-Basis Tax Report: {date_from} to {date_to}'])
+    ws.append([])
+    ws.append(['County', 'Cash Applied', 'Taxable Base', 'Tax Collected',
+               'State', 'County', 'Additional County', 'Transit'])
+    for c in data['counties']:
+        t = c['totals']
+        ws.append([c['county'], t['applied'], t['taxable'], t['tax'],
+                   t['state'], t['county'], t['additional_county'], t['transit']])
+    g = data['grand_totals']
+    ws.append(['GRAND TOTAL', g['applied'], g['taxable'], g['tax'],
+               g['state'], g['county'], g['additional_county'], g['transit']])
+
+    detail = wb.create_sheet('Detail')
+    detail.append(['County', 'Invoice #', 'Customer', 'Date', 'Applied',
+                    'Taxable', 'Tax', 'State', 'County', 'Additional County', 'Transit'])
+    for c in data['counties']:
+        for r in c['rows']:
+            detail.append([c['county'], r['invoice_number'], r['customer_name'],
+                            str(r['applied_date']), r['applied_amount'], r['taxable_alloc'],
+                            r['tax_alloc'], r['state_alloc'], r['county_alloc'],
+                            r['additional_alloc'], r['transit_alloc']])
+    if data['unallocated']:
+        unalloc = wb.create_sheet('Unallocated Refunds')
+        unalloc.append(['Customer', 'Refunded At', 'Amount', 'Reference'])
+        for u in data['unallocated']:
+            unalloc.append([u['customer_name'], str(u['refunded_at']), u['refunded_amount'], u['refund_reference']])
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _tax_report_build_pdf(data, date_from, date_to, branding):
+    primary = colors.HexColor(branding.get('color_primary', '#2C2C2C'))
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter,
+                             rightMargin=0.5*inch, leftMargin=0.5*inch,
+                             topMargin=0.6*inch, bottomMargin=0.6*inch,
+                             pageCompression=0)
+    doc.invariant = 1
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle('title', parent=styles['Heading1'], fontSize=16,
+                                  textColor=primary, spaceAfter=6, alignment=TA_CENTER)
+    heading_style = ParagraphStyle('heading', parent=styles['Heading2'], fontSize=11,
+                                    textColor=primary, spaceAfter=6, spaceBefore=14)
+    small = ParagraphStyle('small', parent=styles['Normal'], fontSize=8)
+
+    elements = [
+        Paragraph(f"{branding.get('name', '')} — NC Cash-Basis Tax Report", title_style),
+        Paragraph(f"{date_from.strftime('%B %d, %Y')} – {date_to.strftime('%B %d, %Y')}",
+                   ParagraphStyle('sub', parent=styles['Normal'], alignment=TA_CENTER, spaceAfter=14)),
+    ]
+
+    summary_data = [['County', 'Cash Applied', 'Taxable', 'Tax', 'State', 'County', 'Add\'l Co.', 'Transit']]
+    for c in data['counties']:
+        t = c['totals']
+        summary_data.append([c['county'], f"${t['applied']:,.2f}", f"${t['taxable']:,.2f}",
+                              f"${t['tax']:,.2f}", f"${t['state']:,.2f}", f"${t['county']:,.2f}",
+                              f"${t['additional_county']:,.2f}", f"${t['transit']:,.2f}"])
+    g = data['grand_totals']
+    summary_data.append(['GRAND TOTAL', f"${g['applied']:,.2f}", f"${g['taxable']:,.2f}",
+                          f"${g['tax']:,.2f}", f"${g['state']:,.2f}", f"${g['county']:,.2f}",
+                          f"${g['additional_county']:,.2f}", f"${g['transit']:,.2f}"])
+    t = Table(summary_data, repeatRows=1)
+    t.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), primary), ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTSIZE', (0, 0), (-1, -1), 8), ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#dddddd')),
+        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+        ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+    ]))
+    elements.append(t)
+
+    for c in data['counties']:
+        elements.append(Paragraph(f"{c['county']} — invoice detail", heading_style))
+        det = [['Invoice #', 'Customer', 'Date', 'Applied', 'Taxable', 'Tax']]
+        for r in c['rows']:
+            det.append([r['invoice_number'], r['customer_name'][:30], str(r['applied_date']),
+                        f"${r['applied_amount']:,.2f}", f"${r['taxable_alloc']:,.2f}", f"${r['tax_alloc']:,.2f}"])
+        dt = Table(det, repeatRows=1)
+        dt.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#eeeeee')),
+            ('FONTSIZE', (0, 0), (-1, -1), 7.5), ('GRID', (0, 0), (-1, -1), 0.4, colors.HexColor('#eeeeee')),
+            ('ALIGN', (3, 0), (-1, -1), 'RIGHT'),
+        ]))
+        elements.append(dt)
+
+    doc.build(elements)
+    return buf.getvalue()
+
+
+@app.route('/<company_key>/reports/tax')
+@login_required
+@company_access_required
+@with_branding
+def report_tax(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    default_from, default_to = _tax_report_default_range()
+    date_from = request.args.get('date_from') or default_from.isoformat()
+    date_to = request.args.get('date_to') or default_to.isoformat()
+
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    data = _tax_report_data(cur, date_from, date_to)
+    cur.close(); conn.close()
+
+    return render_template('tax_report.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        data=data, date_from=date_from, date_to=date_to,
+    )
+
+
+@app.route('/<company_key>/reports/tax/export.xlsx')
+@login_required
+@company_access_required
+@with_branding
+def report_tax_export_xlsx(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    default_from, default_to = _tax_report_default_range()
+    date_from = request.args.get('date_from') or default_from.isoformat()
+    date_to = request.args.get('date_to') or default_to.isoformat()
+
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    data = _tax_report_data(cur, date_from, date_to)
+    cur.close(); conn.close()
+
+    xlsx_bytes = _tax_report_build_xlsx(data, date_from, date_to)
+    return Response(xlsx_bytes, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                     headers={'Content-Disposition': f'attachment; filename="tax_report_{date_from}_to_{date_to}.xlsx"'})
+
+
+@app.route('/<company_key>/reports/tax/export.pdf')
+@login_required
+@company_access_required
+@with_branding
+def report_tax_export_pdf(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    default_from, default_to = _tax_report_default_range()
+    date_from_s = request.args.get('date_from') or default_from.isoformat()
+    date_to_s = request.args.get('date_to') or default_to.isoformat()
+    date_from = datetime.strptime(date_from_s, '%Y-%m-%d').date()
+    date_to = datetime.strptime(date_to_s, '%Y-%m-%d').date()
+
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    data = _tax_report_data(cur, date_from_s, date_to_s)
+    cur.close(); conn.close()
+
+    pdf_bytes = _tax_report_build_pdf(data, date_from, date_to, branding)
+    return Response(pdf_bytes, mimetype='application/pdf',
+                     headers={'Content-Disposition': f'attachment; filename="tax_report_{date_from_s}_to_{date_to_s}.pdf"'})
 
 # ============================================================================
 # Run

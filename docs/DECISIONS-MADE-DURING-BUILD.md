@@ -372,6 +372,65 @@ Payment modal pre-filtered to that customer's open receivables" without needing 
 AJAX endpoint, consistent with how every other pre-filled dropdown in this build works
 (e.g. the invoice edit line-item catalog picker).
 
+D-038 — [FINDING, not a build decision] Increment 1.9 (cutover import) was scoped to
+a dry run only — Chris confirmed 2026-09-19 that real imports are on hold until the
+whole site is ready for his and Michele's day-to-day testing, so the real (non-dry-run)
+import described in directive §2.9 was never going to run this session regardless.
+Investigating the source (`statements-db-1`/`fsm_prod`, the live container behind
+statements.cletize.com) before writing the import script surfaced a discrepancy worth
+recording now so it doesn't get lost before 1.9 actually runs: `invoices` and
+`tax_transactions` both have **zero rows** for all four companies, and `customers` has
+296 rows for Get a Grip only (Kleanit Charlotte/CTS/Kleanit SF all have 0). The import
+script (`scripts/import_sf_data.py`) is a plain upsert with no `TRUNCATE`/`DELETE`, so
+this isn't "the table gets cleared every cycle" — it looks like invoice/tax data has
+simply never been loaded into this container, contradicting the directive's premise
+that real open-invoice data already lives there. Flagged to Chris directly rather than
+guessed past. No code changed as a result of this finding; revisit before 1.9's real
+run.
+
+D-039 — [SCOPE] Increment 1.10's tax report needs a "taxable-only" dollar figure per
+the directive's own allocation formula ("taxable base = applied x (taxable subtotal /
+total)"), but `invoice_versions.subtotal` totals ALL lines (taxable or not) and no
+taxable-only figure was previously frozen anywhere. Rather than back-deriving it from
+`tax_total / (tax_rate_pct/100)` (undefined whenever a version is legitimately 0%
+taxed), migration 016 adds a 4th column, `taxable_subtotal`, alongside the three the
+directive named (`state_pct`/`county_pct`/`transit_pct`) and freezes it at harden the
+same way. See migration 016's header comment for the full rationale.
+
+D-040 — [MODEL] Mecklenburg's 1.00% "additional county" NCDOR reporting line
+(effective 2026-07-01) is NOT stored as its own column — this build's `tax_rates`
+schema (built in Increment 1.1, before 1.10 existed) pools it into `county_pct`
+(2.00 base + 1.00 additional = 3.000), matching how NCDOR itself announces county-rate
+changes as one combined number per county. Rather than reshape `tax_rates` mid-build
+for one county's one-time change, the report splits the pooled dollar amount back into
+2.00/1.00 shares at render time (`_split_mecklenburg_county_component`), hardcoded to
+the known composition from migration 009. If NC changes Mecklenburg's county rate
+again, this needs a matching code update — there's nowhere in the schema this could
+self-derive from. Verified against the sibling Phase 0 statements site's own
+`nc_tax_rates.py`, which independently models the same 4-component breakdown
+(state/county/transit/additional_county) for the same reason.
+
+D-041 — [MODEL] Refund allocation for the tax report: a refund is recorded against a
+*payment's* unapplied balance, not against one specific invoice, so there's no direct
+link from a refund to a tax jurisdiction to net out. Resolved by walking that payment's
+most recent `payment_applications` row (even a since-reversed one, found by
+`created_at DESC`) to find the last invoice that money was ever associated with, and
+allocating the negative refund against THAT invoice's current version using the exact
+same proportional formula as a normal receipt. A refund from credit that was **never**
+applied to any invoice never contributed taxable revenue in the first place, so it
+can't be netted out of any county — those surface separately as "unallocated" on the
+report for reconciliation visibility rather than being silently dropped or guessed
+into an arbitrary county. Flagged for the accountant to confirm; not something the
+directive specified beyond "refunds in range appear as negative rows."
+
+D-042 — [DEFAULTED] `payment_applications.applied_date` already equals
+`payments.payment_date` for every application created via the Record Payment modal
+(`_record_payment` passes `payment_date` straight through to `_apply_payment` as
+`applied_date` — built in Increment 1.4, before this was a named requirement). The
+modal has never exposed a separate applied_date field, so the two have been equal by
+construction since 1.4; formally logging the `[DEFAULTED]` here per directive §2.10
+since no prior entry named it explicitly.
+
 ---
 
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:

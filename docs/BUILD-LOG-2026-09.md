@@ -513,3 +513,83 @@ review-doc item #33, not blocking per directive's own fallback).
 This closes out Stage 1's billing/collections surface. Proceeding to Increment 1.9
 (cutover data import from Phase 0) pending Chris's go-ahead — the directive flags this
 one as requiring explicit sign-off before the real (non-dry-run) import runs.
+
+---
+
+## 2026-09-19 — Stage 1, Increment 1.9 — Cutover import: investigation only (real import deferred)
+
+Chris confirmed real cutover imports are on hold until the whole site is ready for his
+and Michele's day-to-day testing — so `import_open_invoices.py` was not built this
+session, and no real or dry-run import ran. Before parking the increment, checked the
+source the directive assumes it will read from (`statements-db-1`/`fsm_prod`, the live
+container behind statements.cletize.com) and found a discrepancy worth recording now:
+`invoices` and `tax_transactions` are both empty for all four companies, and
+`customers` only has rows for Get a Grip (296; the other three companies have 0). See
+D-038. Not a blocker today (real imports are deferred anyway) but needs resolving
+before 1.9 actually runs for real — either a fresh ServiceFusion Excel import into that
+container, or pointing at wherever the real current numbers actually live.
+
+---
+
+## 2026-09-19 — Stage 1, Increment 1.10 — NC cash-basis tax report from live data
+
+**What:**
+- `/<company>/reports/tax?date_from=&date_to=` (default: last calendar month).
+  Cash-basis: rows are selected by `payment_applications.applied_date` (receipts) and
+  `payments.refunded_at` (refunds), never by `invoice_date` — a revised invoice never
+  retroactively changes what was already reported for cash received in an earlier
+  period.
+- **Migration 016**: adds `state_pct`/`county_pct`/`transit_pct`/`taxable_subtotal` to
+  `invoice_versions`, frozen at harden by extending `_compute_invoice_tax()` (which
+  already looked up the `tax_rates` row — this just captures more of what it already
+  resolves) rather than adding a second lookup path. `taxable_subtotal` is one column
+  beyond what the directive named — see D-039.
+- `_tax_report_data()`: for each non-reversed `payment_application` in range, allocates
+  proportionally against the invoice's CURRENT version (taxable base = applied ×
+  taxable_subtotal/total, tax = applied × tax_total/total), splits tax into
+  state/county/transit using the version's frozen percentages, excludes
+  `source='sf_import'` (D-001 — SF-era balances already reported through Phase 0).
+  Mecklenburg's NCDOR-required 1% "additional county" reporting line is split back out
+  of the pooled `county_pct` at render time (D-040), since this build's `tax_rates`
+  schema pools it rather than storing it separately.
+- Refunds appear as negative rows in the period refunded, allocated against the last
+  invoice that payment's money was ever associated with (even a since-reversed
+  application) — see D-041 for the full reasoning and its limits. Money refunded from
+  credit that was never applied to any invoice can't be netted against any county;
+  those surface separately as "Unallocated refunds" for visibility.
+- County totals box first, then per-county invoice detail, matching the August 2026
+  statements tax report rework's layout. Excel export (2-3 sheets: Summary, Detail,
+  Unallocated Refunds if any) and PDF export (ReportLab, `pageCompression=0` +
+  `doc.invariant = 1`, same discipline as invoice/statement PDFs).
+- `applied_date` defaulting to `payment_date` (directive's explicit `[DEFAULTED]`
+  requirement) turned out to already be true by construction since Increment 1.4 — the
+  Record Payment modal has never had a separate applied_date field. Logged as D-042
+  rather than silently assumed satisfied.
+
+**Migration:** 016 (`016_tax_report_components.sql`), applied to all four DBs with a
+backfill DO block for any pre-existing Hardened+ versions (a no-op today — production
+has zero real invoices). Pre-migration backups in `~/db-backups/2026-09-19g/`.
+
+**Commit:** (pending — migration file, `app.py`, `tax_report.html`, `billing.html` nav
+link, smoke test, this entry, decisions log, status doc).
+
+**Smoke test:** `tests/smoke_tax_report.py` — 30/30 checks. Covers: harden correctly
+freezes all four new columns (8.25% Mecklenburg rate → 4.75 state / 3.00 county / 0.50
+transit / $1000 taxable); a $541.25 partial payment against a $1082.50 invoice
+allocates to exact-cent-clean values (state $23.75, county $10.00, additional-county
+$5.00, transit $2.50, summing back to $41.25 tax); an `sf_import` invoice's payment in
+the same window is fully excluded (county row count stays 1, not 2); a refund from
+never-applied credit lands in "unallocated"; a refund of money that WAS applied then
+un-applied produces a correctly-signed negative row against the right county; the HTML
+page, xlsx export, and PDF export (byte-searched for "Mecklenburg") all render without
+error across all four companies. Cleanup verified zero residue. All 8 prior smoke
+tests re-run clean as regressions.
+
+**Deferred:** nothing — this closes out Stage 1's directive-listed report work.
+Real-data validation ("Tax report for August 2026 test data reconciles by hand for one
+county" per the Stage 1 exit criteria) still needs real invoice data, which doesn't
+exist yet (D-038/imports deferred).
+
+This closes out Stage 1's exit-criteria feature list except the parts that need real
+data (imports) or Michele's hands-on walkthrough. Proceeding per Chris's direction —
+awaiting his call on what's next.
