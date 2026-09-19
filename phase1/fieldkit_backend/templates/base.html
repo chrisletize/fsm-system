@@ -478,6 +478,13 @@
             </a>
             {% endif %}
 
+            {% if session.user_role in ('admin', 'manager') %}
+            <a href="/{{ company_key }}/dispatch"
+               class="subnav-link {% if '/dispatch' in current_path %}active{% endif %}">
+                Dispatch
+            </a>
+            {% endif %}
+
             {% if session.user_role in ('admin', 'manager', 'office') %}
             <a href="/{{ company_key }}/invoices"
                class="subnav-link {% if '/invoices' in current_path %}active{% endif %}">

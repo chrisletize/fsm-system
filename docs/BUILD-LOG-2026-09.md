@@ -593,3 +593,76 @@ exist yet (D-038/imports deferred).
 This closes out Stage 1's exit-criteria feature list except the parts that need real
 data (imports) or Michele's hands-on walkthrough. Proceeding per Chris's direction —
 awaiting his call on what's next.
+
+---
+
+## 2026-09-19 — Stage 2, Increment 2.1 — Tech profiles + dispatch board
+
+**What:**
+- **Migration 017**: `users` gains `color_hex`, `is_field_tech`, `can_be_dispatched`,
+  `phone_mobile`, `default_start_time`, `is_active_tech`, `dispatch_sort_order`.
+  `work_orders` gains `scheduled_start` (maintained on save = `start_date` +
+  `arrival_window_start`, NULL when there's no arrival time — see D-049),
+  `catalog_estimated_duration_hours`, `duration_overridden`.
+  `work_order_line_items` gains `estimated_minutes` (snapshotted from
+  `catalog_items.estimated_minutes` at line-add time, per design addendum §13).
+- User form: Tech/Dispatch Profile section (field-tech/dispatchable/active-tech
+  checkboxes, mobile phone, default start time, sort order); `color_hex` auto-assigned
+  from a fixed 12-color palette by `id % 12` on create, shown read-only on edit.
+- WO form: live "Catalog estimate" readout computed client-side from line items
+  (`estimated_minutes × quantity`, one formula for every line kind per the addendum),
+  auto-syncing the Scheduled Duration field until a manual edit sets
+  `duration_overridden` (a hidden flag flipped by JS); server-side recomputation in
+  `_save_work_order` matches the client formula exactly, with a non-blocking flash
+  warning when scheduled and catalog estimates diverge by more than 15 minutes
+  (D-048 — simplified from the addendum's two-button banner sketch).
+- **Dispatch board** `/<company>/dispatch?date=&view=day|week`: horizontal timeline
+  (tech rows ordered by `dispatch_sort_order`, plus Unassigned), 30-min-resolution
+  blocks colored by tech, native HTML5 drag-to-move (`POST /dispatch/move`) and
+  edge-drag-to-resize (`POST /dispatch/resize`, same warning logic as WO save),
+  click-to-popover (View / Edit / Mark Completed / Mark No Charge — the last two via a
+  new lightweight `POST /workorders/<id>/quick-status` route), click-empty-slot →
+  pre-filled WO create (`/workorders/new?tech=&date=&time=`), server-computed
+  same-tech-row collision detection (red outline + "Overlaps with GAG-2026-0042"
+  banner, non-blocking, no auto-bump), a read-only week view (7-day grid per tech),
+  and an "unscheduled" strip for WOs with a date but no arrival time.
+  `GET /dispatch/data?date=` is the JSON data endpoint the page renders from
+  client-side, so drag/resize never triggers a full reload.
+- Work order list: `tech`/`date` filters. WO detail: each assigned tech's chip now
+  links to `/dispatch?date=&tech=`.
+- Nav: Dispatch link for admin/manager only (salesperson and below: no access).
+
+**Bugs found and fixed (pre-existing, not introduced this increment):** D-043
+(`user_new`'s INSERT referenced a `created_by` column that has never existed on
+`users` — silently failed on every DB, every time, with the route redirecting as if it
+succeeded) and D-044 (the WO form's tech checklist read the per-company DB's `users`
+table, which is empty for 3 of 4 companies per the known D-003 quirk — always rendered
+zero techs there). Both fixed; see the decisions log for detail. Neither was
+introduced by this increment, but both were found by its smoke test and are load-
+bearing for the dispatch board actually showing techs.
+
+**Migration:** 017 (`017_tech_profiles_and_scheduling.sql`), applied to all four DBs.
+Pre-migration backups in `~/db-backups/2026-09-19h/`.
+
+**Commit:** (pending — migration file, `app.py`, `dispatch.html` (new), `base.html`
+(nav link), `user_form.html`, `workorder_form.html`, `workorder_detail.html`,
+`workorder_list.html`, smoke test, this entry, decisions log, status doc).
+
+**Smoke test:** `tests/smoke_dispatch.py` — 30/30 checks. Covers: creating a real
+technician through the user form with color auto-assignment and tech-field round-trip;
+creating a WO through the real form and verifying the live catalog-duration total
+(120min × 2 qty = 4.0h), `scheduled_start` composition, and the line item's snapshotted
+`estimated_minutes`; a second overlapping WO on the same tech correctly flagged by
+collision detection both directions; the dispatch data/page/week routes; `/dispatch/
+move` re-homing a WO's tech and time (and clearing tech assignment when dropped on
+Unassigned); `/dispatch/resize` setting `duration_overridden` and returning the
+±15-minute warning; the quick-status route; WO list tech+date filters; and the
+click-empty-slot prefill flow. Cleanup verified zero residue across all four DBs
+(user creation replicates everywhere via `write_to_all_dbs`). All 9 prior smoke tests
+re-run clean as regressions.
+
+**Deferred:** delinquent/rating/callback badges (D-046 — depend on features not yet
+built); the richer two-button duration-warning banner (D-048); per-line
+`estimated_minutes` override UI (addendum mentions it as possible, not required).
+
+Proceeding to Increment 2.2 (water extraction queue + accrual engine).

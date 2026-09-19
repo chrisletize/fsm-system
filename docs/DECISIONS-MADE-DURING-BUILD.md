@@ -431,6 +431,77 @@ modal has never exposed a separate applied_date field, so the two have been equa
 construction since 1.4; formally logging the `[DEFAULTED]` here per directive §2.10
 since no prior entry named it explicitly.
 
+D-043 — [BUG FIX, pre-existing] `user_new`'s INSERT named a `created_by` column that
+has never existed on `users` (that table doesn't carry the created_by/updated_by/
+deleted_at audit columns every other table has — confirmed via `\d users`). The insert
+therefore failed on **every** database, every time, silently: `write_to_all_dbs()`
+catches the exception into an `errs` list rather than raising, and the route's own
+comment ("Still redirect — getagrip (canonical) succeeded") assumed success without
+checking, so it redirected as if the user had been created. Found because Increment
+2.1's smoke test tried to create a real technician through this route and got a 302
+with no row to show for it. Fixed two things: (1) dropped `created_by` from the
+INSERT's column list; (2) the route now actually verifies the getagrip row exists
+before claiming success, surfacing a real error message instead of a false-positive
+redirect if it ever fails again. The 7 real production users were seeded directly by
+SQL before this route existed in its current form, which is why nobody had hit this.
+
+D-044 — [BUG FIX, pre-existing] `_wo_form_data()`'s tech list (used for the WO form's
+"Assigned Techs" checklist) queried `get_db_connection(company_key)` — the
+PER-COMPANY database's own `users` table. Per the known quirk (D-003/CLAUDE.md), only
+`fieldkit_getagrip.users` has ever actually been seeded; the other three companies'
+copies are empty. That meant the tech checklist has always silently rendered zero
+techs for Kleanit Charlotte, CTS, and Kleanit South Florida. Extracted a shared
+`_company_techs(company_key, dispatchable_only=False)` helper that reads the
+CANONICAL getagrip table (same source auth already uses) filtered by
+`company_access ? company_key`, and pointed both the WO form and the new dispatch
+board at it — one source for "who are this company's techs," not two, and both now
+actually populate for every company.
+
+D-045 — [MODEL] Dispatch board tech rows only show users where
+`can_be_dispatched = TRUE AND is_active_tech = TRUE` (plus `is_active`/role/
+company_access) — a field tech who isn't marked dispatchable yet (new hire, or an
+office-only field role) doesn't appear as a draggable row, matching the three-flag
+design in migration 017's header comment.
+
+D-046 — [DEFERRED] Dispatch board badges for delinquent (red) and customer rating
+letter are NOT built in this increment — they depend on `customer_flags` (§3.5,
+Increment 2.5, not yet built) and the rating system (§4.2, not yet built) respectively.
+Priority and an extraction badge (💧, heuristic: WO has any per-day-equipment line
+item — `is_extraction` itself doesn't exist until Increment 2.2) are built now.
+Callback badge deferred to §4.4 for the same reason. Revisit once those land.
+
+D-047 — [MODEL] `/dispatch/move`'s payload names a single `username` (directive's own
+JSON shape: `{wo_id, username, scheduled_start}`), so a move REPLACES a WO's tech
+assignments with exactly that one tech (or clears them entirely when dropped on the
+Unassigned row) rather than adding to a multi-tech WO's existing roster. Multi-tech
+WOs still DISPLAY on every assigned tech's row (per the directive's separate bullet on
+that) — only the move action itself is single-tech, matching what the payload shape
+actually describes. Reassigning a multi-tech WO to a different combination still goes
+through the full WO edit form.
+
+D-048 — [SCOPE] The duration-mismatch warning (directive: "non-blocking... gets a
+warning... [Use catalog] [Keep Anyway]") is implemented as a plain flash-message notice
+on WO save, and a JSON `warning` string on dispatch-board resize (rendered as a banner
+the client already shows) — not the richer two-button interactive banner the addendum
+sketches. Same non-blocking informational intent and the same ±15-minute tolerance
+check; simpler to build and verify this pass. Upgrading to the two-button version is a
+pure frontend addition later if Chris wants it — no schema or backend change needed.
+
+D-049 — [MODEL] A work order with a `start_date` but no `arrival_window_start` gets
+`scheduled_start = NULL` and shows in the dispatch board's "No arrival time set" strip
+rather than being placed on the timeline at a fabricated default time (e.g. business
+open). The directive doesn't specify this case; forcing a fake time would make an
+unscheduled job look scheduled, which is worse than a visible "needs a time" bucket.
+
+D-050 — [MODEL] An equipment (per-day) line item's contribution to
+`catalog_estimated_duration_hours` uses `quantity = 1` when the line hasn't been
+retrieved yet (`retrieved_at IS NULL`, open-ended deployment — day count genuinely
+unknown). 1 represents the initial setup visit, not a guess at total days; this mirrors
+the existing "quantity is None until retrieved" pattern the invoice engine already
+established for these lines (D-016 era). Applied identically client-side (JS) and
+server-side (`_save_work_order`) so the live preview and the saved value never
+disagree.
+
 ---
 
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:

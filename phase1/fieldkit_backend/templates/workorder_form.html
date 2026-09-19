@@ -112,6 +112,7 @@
 <input type="hidden" name="line_items_json" id="lineItemsJson">
 <input type="hidden" name="description_occ_vac" id="occVacHidden" value="{{ wo.description_occ_vac or '' if wo else '' }}">
 <input type="hidden" name="description_am_pm" id="amPmHidden" value="{{ wo.description_am_pm or '' if wo else '' }}">
+<input type="hidden" name="duration_overridden" id="durationOverriddenHidden" value="{{ 'true' if wo and wo.duration_overridden else 'false' }}">
 
 <!-- ============================ Customer & Location ============================ -->
 <div class="card">
@@ -183,21 +184,22 @@
         <div class="form-group">
             <label>Start Date <span class="hint">(required)</span></label>
             <input type="date" name="start_date" id="startDate"
-                   value="{{ wo.start_date or '' if wo else '' }}" required>
+                   value="{{ wo.start_date or '' if wo else (prefill_date or '') }}" required>
         </div>
         <div class="form-group">
             <label>End Date <span class="hint">(multi-day jobs)</span></label>
             <input type="date" name="end_date" value="{{ wo.end_date or '' if wo else '' }}">
         </div>
         <div class="form-group">
-            <label>Est. Duration <span class="hint">(hours)</span></label>
-            <input type="number" name="estimated_duration_hours" min="0" step="0.25"
+            <label>Scheduled Duration <span class="hint">(hours — sizes the dispatch board block)</span></label>
+            <input type="number" name="estimated_duration_hours" id="estDurationInput" min="0" step="0.25"
                    value="{{ wo.estimated_duration_hours or '' if wo else '' }}">
+            <span class="hint" id="catalogDurationNote">Catalog estimate: —</span>
         </div>
         <div class="form-group">
             <label>Arrival Time <span class="hint">(pick or type — e.g. 8:30 AM)</span></label>
 {{ autocomplete_field('arrival_window_start',
-                   wo.arrival_window_start or '' if wo else '',
+                   wo.arrival_window_start or '' if wo else (prefill_time or ''),
                    arrival_suggestions, 'e.g. 8:30 AM') }}
         </div>
         <div class="form-group">
@@ -497,8 +499,15 @@
         return Math.max(d, 1);  // same-day set-and-pull bills one day
     }
 
+    // Design addendum §13: catalog-estimated duration = sum(estimated_minutes x
+    // quantity), same formula for every line kind, no special-casing. An equipment
+    // line with no retrieved date yet (open-ended) counts as quantity 1 — the day
+    // count isn't known yet, and 1 reflects the initial setup visit, matching the
+    // server-side computation in _save_work_order.
+    let durationOverridden = document.getElementById('durationOverriddenHidden').value === 'true';
+
     function recalc() {
-        let sub = 0, accruingPerDay = 0;
+        let sub = 0, accruingPerDay = 0, catalogMinutes = 0;
         const rows = liRows.querySelectorAll('.li-row');
         rows.forEach(row => {
             if (row.dataset.kind === 'std') {
@@ -507,12 +516,17 @@
                 const total = qty * price;
                 sub += total;
                 row.querySelector('.li-total').textContent = money(total);
+                const hidden = row.querySelector('.ac-wrap input[type=hidden]').value;
+                const cat = hidden ? catById(hidden) : null;
+                if (cat && cat.estimated_minutes) catalogMinutes += cat.estimated_minutes * qty;
             } else {
                 const unitId = row.querySelector('.ac-wrap input[type=hidden]').value;
                 const eq = unitId ? eqById(unitId) : null;
                 const rate = eq ? eq.daily_rate : null;
                 row.querySelector('.li-rate').textContent = rate != null ? money(rate) + ' / day' : '—';
                 const d = rowDays(row);
+                const durQty = (d === -1 || d === null) ? 1 : d;
+                if (eq && eq.estimated_minutes) catalogMinutes += eq.estimated_minutes * durQty;
                 if (d === -1) {
                     row.querySelector('.li-days').innerHTML = '<span style="color:#c33;">invalid dates</span>';
                     row.querySelector('.li-total').textContent = '—';
@@ -533,7 +547,20 @@
         document.getElementById('liSubtotal').textContent = money(sub);
         document.getElementById('liAccrueNote').textContent = accruingPerDay > 0
             ? 'Plus ' + money(accruingPerDay) + '/day still accruing on deployed equipment' : '';
+
+        const catalogHours = Math.round((catalogMinutes / 60) * 100) / 100;
+        document.getElementById('catalogDurationNote').textContent = 'Catalog estimate: ' + catalogHours + 'h';
+        if (!durationOverridden) {
+            document.getElementById('estDurationInput').value = catalogHours || '';
+        }
     }
+
+    // A manual edit to Scheduled Duration locks it — line-item changes stop
+    // auto-syncing it from here on (duration_overridden, per the addendum).
+    document.getElementById('estDurationInput').addEventListener('input', () => {
+        durationOverridden = true;
+        document.getElementById('durationOverriddenHidden').value = 'true';
+    });
 
     // Any input/change inside the line items area recomputes totals.
     // Combo selections bubble a change event from their hidden input (brick upgrade).

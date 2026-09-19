@@ -110,6 +110,14 @@
                 <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ s }}</option>
                 {% endfor %}
             </select>
+            <input type="date" name="date" class="filter-select" value="{{ date_filter }}"
+                   onchange="document.getElementById('filterForm').submit()">
+            <input type="hidden" name="tech" value="{{ tech_filter }}">
+            {% if tech_filter %}
+            <span class="result-count">tech: {{ tech_filter }}
+                <a href="/{{ company_key }}/workorders?search={{ search }}&status={{ status_filter }}&date={{ date_filter }}" style="margin-left:.3rem;">✕</a>
+            </span>
+            {% endif %}
             <span class="result-count" id="resultCount">{{ total }} work order{{ 's' if total != 1 }}</span>
         </div>
     </form>

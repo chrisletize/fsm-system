@@ -275,6 +275,63 @@
             </span>
         </div>
 
+        <div class="form-section">
+            <h3>Tech / Dispatch Profile</h3>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label style="flex-direction:row;align-items:center;gap:.5rem;">
+                        <input type="checkbox" name="is_field_tech" style="width:16px;height:16px;"
+                               {% if user and user.is_field_tech %}checked{% endif %}>
+                        Field tech
+                    </label>
+                    <span class="field-hint">Does field work (vs. office-only).</span>
+                </div>
+                <div class="form-group">
+                    <label style="flex-direction:row;align-items:center;gap:.5rem;">
+                        <input type="checkbox" name="can_be_dispatched" style="width:16px;height:16px;"
+                               {% if user and user.can_be_dispatched %}checked{% endif %}>
+                        Can be dispatched
+                    </label>
+                    <span class="field-hint">Shows as a row on the dispatch board.</span>
+                </div>
+                {% if user %}
+                <div class="form-group">
+                    <label style="flex-direction:row;align-items:center;gap:.5rem;">
+                        <input type="checkbox" name="is_active_tech" style="width:16px;height:16px;"
+                               {% if user.is_active_tech %}checked{% endif %}>
+                        Active tech
+                    </label>
+                    <span class="field-hint">Uncheck when a tech leaves — keeps history, drops off the board.</span>
+                </div>
+                {% endif %}
+                <div class="form-group">
+                    <label for="phone_mobile">Mobile Phone</label>
+                    <input type="text" id="phone_mobile" name="phone_mobile"
+                           value="{{ user.phone_mobile if user else '' }}" placeholder="e.g. (704) 555-0100">
+                </div>
+                <div class="form-group">
+                    <label for="default_start_time">Default Start Time</label>
+                    <input type="text" id="default_start_time" name="default_start_time"
+                           value="{{ user.default_start_time if user else '08:00' }}" placeholder="08:00">
+                </div>
+                <div class="form-group">
+                    <label for="dispatch_sort_order">Dispatch Board Sort Order</label>
+                    <input type="text" id="dispatch_sort_order" name="dispatch_sort_order"
+                           value="{{ user.dispatch_sort_order if user and user.dispatch_sort_order is not none else '' }}"
+                           placeholder="Lower sorts first">
+                </div>
+                {% if user and user.color_hex %}
+                <div class="form-group">
+                    <label>Dispatch Block Color</label>
+                    <div style="display:flex;align-items:center;gap:.5rem;">
+                        <span style="display:inline-block;width:24px;height:24px;border-radius:4px;background:{{ user.color_hex }};border:1px solid #ddd;"></span>
+                        <span class="field-hint">{{ user.color_hex }} — assigned automatically, not editable.</span>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
         {% if not user %}
         <div class="form-section">
             <h3>Initial Password</h3>

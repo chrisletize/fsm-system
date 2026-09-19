@@ -1,0 +1,338 @@
+{% extends "base.html" %}
+{% block title %}Dispatch — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; flex-wrap:wrap; gap:.75rem; }
+    .page-header h1 { font-size:1.6rem; color:{{ branding.color_primary }}; }
+    .controls { display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; }
+    .controls input[type=date] { padding:.4rem .6rem; border:1px solid #ddd; border-radius:4px; }
+    .controls a.btn, .controls button.btn { padding:.4rem .9rem; border-radius:4px; text-decoration:none; font-size:.85rem; cursor:pointer; border:none; }
+    .btn-outline { background:white; color:{{ branding.color_primary }}; border:1px solid {{ branding.color_primary }}; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .view-toggle a { padding:.4rem .8rem; border-radius:20px; font-size:.8rem; text-decoration:none; color:#666; background:#f0f0f0; }
+    .view-toggle a.active { background:{{ branding.color_primary }}; color:white; }
+
+    #boardWrap { overflow-x:auto; border:1px solid #eee; border-radius:6px; background:white; }
+    .ruler { display:flex; border-bottom:2px solid #eee; position:sticky; top:0; background:white; z-index:2; }
+    .ruler .tech-col-spacer { flex-shrink:0; width:160px; border-right:1px solid #eee; }
+    .ruler .hours { position:relative; }
+    .hour-label { position:absolute; top:0; font-size:.7rem; color:#999; border-left:1px solid #f0f0f0; padding-left:.25rem; height:24px; }
+
+    .tech-row { display:flex; border-bottom:1px solid #f0f0f0; min-height:56px; }
+    .tech-row.unassigned { background:#fafafa; }
+    .tech-label { flex-shrink:0; width:160px; border-right:1px solid #eee; padding:.5rem .75rem; display:flex; align-items:center; gap:.5rem; font-size:.85rem; }
+    .tech-color-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+    .tech-timeline { position:relative; flex:1; }
+
+    .wo-block { position:absolute; top:4px; bottom:4px; border-radius:4px; color:white; font-size:.72rem;
+                padding:.25rem .4rem; overflow:hidden; cursor:grab; box-shadow:0 1px 2px rgba(0,0,0,.15); }
+    .wo-block.collision { outline:2px solid #c0392b; outline-offset:-2px; }
+    .wo-block .resize-handle { position:absolute; right:0; top:0; bottom:0; width:8px; cursor:ew-resize; }
+    .wo-block .badges { font-size:.68rem; opacity:.9; }
+
+    .unscheduled-strip { padding:.75rem; border-top:2px solid #eee; }
+    .unscheduled-strip h3 { font-size:.8rem; color:#888; text-transform:uppercase; margin-bottom:.5rem; }
+    .unsch-chip { display:inline-block; background:#eee; border-radius:4px; padding:.3rem .6rem; margin:.2rem; font-size:.78rem; cursor:pointer; }
+
+    #popover { position:absolute; background:white; border:1px solid #ddd; border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,.15);
+               padding:1rem; width:260px; z-index:50; display:none; }
+    #popover h4 { font-size:.95rem; margin-bottom:.4rem; }
+    #popover .row { font-size:.8rem; color:#666; margin-bottom:.25rem; }
+    #popover .actions { margin-top:.75rem; display:flex; gap:.4rem; flex-wrap:wrap; }
+    #popover .actions a, #popover .actions button { font-size:.76rem; padding:.3rem .6rem; border-radius:4px; border:1px solid #ddd; background:#f7f7f7; cursor:pointer; text-decoration:none; color:#333; }
+
+    .warn-banner { background:#fff8e1; border:1px solid #ffe082; color:#8a6d00; padding:.6rem 1rem; border-radius:4px; margin-bottom:1rem; display:none; font-size:.85rem; }
+
+    /* Week view */
+    .week-grid { display:grid; grid-template-columns:160px repeat(7, 1fr); border:1px solid #eee; border-radius:6px; overflow:hidden; background:white; }
+    .week-grid .wk-cell { border-right:1px solid #f0f0f0; border-bottom:1px solid #f0f0f0; padding:.4rem; min-height:70px; font-size:.72rem; }
+    .week-grid .wk-head { font-weight:600; background:#fafafa; text-align:center; padding:.5rem; font-size:.78rem; }
+    .wk-chip { display:block; border-radius:3px; color:white; padding:.15rem .35rem; margin-bottom:.2rem; text-decoration:none; font-size:.7rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Dispatch — {{ branding.name }}</h1>
+    <div class="controls">
+        <div class="view-toggle">
+            <a href="?date={{ target_date }}&view=day" class="{% if view == 'day' %}active{% endif %}">Day</a>
+            <a href="?date={{ target_date }}&view=week" class="{% if view == 'week' %}active{% endif %}">Week</a>
+        </div>
+        <a class="btn btn-outline" id="prevDay">&larr;</a>
+        <input type="date" id="dateInput" value="{{ target_date }}">
+        <a class="btn btn-outline" id="nextDay">&rarr;</a>
+        <a class="btn btn-outline" id="todayBtn">Today</a>
+        <a class="btn btn-primary" href="/{{ company_key }}/workorders/new?date={{ target_date }}">+ New Work Order</a>
+    </div>
+</div>
+
+<div class="warn-banner" id="warnBanner"></div>
+
+{% if view == 'week' %}
+<div id="weekWrap"><div class="card" style="text-align:center;color:#aaa;">Loading week…</div></div>
+{% else %}
+<div id="boardWrap">
+    <div class="ruler"><div class="tech-col-spacer"></div><div class="hours" id="rulerHours"></div></div>
+    <div id="techRows"></div>
+    <div class="unscheduled-strip">
+        <h3>No arrival time set</h3>
+        <div id="unscheduledList"><span style="color:#aaa;font-size:.8rem;">None.</span></div>
+    </div>
+</div>
+{% endif %}
+
+<div id="popover"></div>
+
+<script>
+const companyKey = '{{ company_key }}';
+const viewMode = '{{ view }}';
+let targetDate = '{{ target_date }}';
+const PX_PER_MIN = 2;
+
+document.getElementById('dateInput').addEventListener('change', e => navigate(e.target.value, viewMode));
+document.getElementById('todayBtn').addEventListener('click', () => navigate(new Date().toISOString().slice(0,10), viewMode));
+document.getElementById('prevDay').addEventListener('click', () => shiftDay(-1));
+document.getElementById('nextDay').addEventListener('click', () => shiftDay(1));
+
+function navigate(d, v) { window.location.href = `?date=${d}&view=${v}`; }
+function shiftDay(delta) {
+    const d = new Date(targetDate + 'T00:00:00');
+    d.setDate(d.getDate() + delta);
+    navigate(d.toISOString().slice(0,10), viewMode);
+}
+
+function money(n) { return '$' + Number(n || 0).toFixed(2); }
+
+function showWarning(msg) {
+    const el = document.getElementById('warnBanner');
+    if (!msg) { el.style.display = 'none'; return; }
+    el.textContent = msg;
+    el.style.display = 'block';
+}
+
+function hidePopover() { document.getElementById('popover').style.display = 'none'; }
+document.addEventListener('click', e => {
+    if (!e.target.closest('.wo-block') && !e.target.closest('#popover')) hidePopover();
+});
+
+function showPopover(block, anchorEl) {
+    const pop = document.getElementById('popover');
+    const badges = [];
+    if (block.priority && block.priority !== 'Normal') badges.push(block.priority);
+    if (block.has_equipment) badges.push('💧 Extraction');
+    pop.innerHTML = `
+        <h4>${block.work_order_number}</h4>
+        <div class="row">${block.customer_name}</div>
+        <div class="row">Status: ${block.status}</div>
+        ${badges.length ? `<div class="row">${badges.join(' · ')}</div>` : ''}
+        ${block.techs && block.techs.length ? `<div class="row">Techs: ${block.techs.join(', ')}</div>` : '<div class="row">Unassigned</div>'}
+        ${block.collides_with ? `<div class="row" style="color:#c0392b;">Overlaps with ${block.collides_with}</div>` : ''}
+        <div class="actions">
+            <a href="/${companyKey}/workorders/${block.id}">View</a>
+            <a href="/${companyKey}/workorders/${block.id}/edit">Edit</a>
+            <button onclick="quickStatus(${block.id}, 'Completed')">Mark Completed</button>
+            <button onclick="quickStatus(${block.id}, 'No Charge')">Mark No Charge</button>
+        </div>`;
+    const rect = anchorEl.getBoundingClientRect();
+    pop.style.left = (window.scrollX + rect.left) + 'px';
+    pop.style.top = (window.scrollY + rect.bottom + 6) + 'px';
+    pop.style.display = 'block';
+}
+
+function quickStatus(woId, status) {
+    fetch(`/${companyKey}/workorders/${woId}/quick-status`, {
+        method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: `status=${encodeURIComponent(status)}`,
+    }).then(() => { hidePopover(); loadDay(); });
+}
+
+// ============================== Day view ==============================
+function loadDay() {
+    fetch(`/${companyKey}/dispatch/data?date=${targetDate}`)
+        .then(r => r.json())
+        .then(renderDay);
+}
+
+function renderDay(data) {
+    const startMin = timeToMinutes(data.business_hours.start) - 60;
+    const endMin   = timeToMinutes(data.business_hours.end) + 120;
+    const totalMin = endMin - startMin;
+    const widthPx  = totalMin * PX_PER_MIN;
+
+    const ruler = document.getElementById('rulerHours');
+    ruler.style.width = widthPx + 'px';
+    ruler.innerHTML = '';
+    for (let m = Math.ceil(startMin/60)*60; m <= endMin; m += 60) {
+        const label = document.createElement('div');
+        label.className = 'hour-label';
+        label.style.left = ((m - startMin) * PX_PER_MIN) + 'px';
+        label.textContent = minutesToLabel(m);
+        ruler.appendChild(label);
+    }
+
+    const rowsEl = document.getElementById('techRows');
+    rowsEl.innerHTML = '';
+    const rows = data.techs.map(t => ({ username: t.username, label: t.full_name, color: t.color_hex || '#888' }));
+    rows.push({ username: '', label: 'Unassigned', color: '#999', unassigned: true });
+
+    rows.forEach(row => {
+        const rowEl = document.createElement('div');
+        rowEl.className = 'tech-row' + (row.unassigned ? ' unassigned' : '');
+        rowEl.innerHTML = `<div class="tech-label"><span class="tech-color-dot" style="background:${row.color}"></span>${row.label}</div>
+                            <div class="tech-timeline" style="width:${widthPx}px" data-username="${row.username}"></div>`;
+        rowsEl.appendChild(rowEl);
+        const timeline = rowEl.querySelector('.tech-timeline');
+
+        const blocksForRow = data.blocks.filter(b =>
+            row.unassigned ? (!b.techs || b.techs.length === 0) : (b.techs || []).includes(row.username));
+
+        blocksForRow.forEach(b => {
+            const startM = timeToMinutes(b.scheduled_start.slice(11, 16));
+            const left = (startM - startMin) * PX_PER_MIN;
+            const width = b.duration_hours * 60 * PX_PER_MIN;
+            const div = document.createElement('div');
+            div.className = 'wo-block' + (b.collides_with ? ' collision' : '');
+            div.style.left = left + 'px';
+            div.style.width = Math.max(width, 20) + 'px';
+            div.style.background = row.color;
+            div.draggable = true;
+            div.dataset.woId = b.id;
+            const badges = [b.priority !== 'Normal' ? b.priority[0] : '', b.has_equipment ? '💧' : ''].filter(Boolean).join(' ');
+            div.innerHTML = `<div><strong>${b.work_order_number}</strong> ${badges ? '<span class="badges">' + badges + '</span>' : ''}</div>
+                              <div>${b.customer_name}</div>
+                              <div class="resize-handle"></div>`;
+            div.addEventListener('click', e => { e.stopPropagation(); showPopover(b, div); });
+            div.addEventListener('dragstart', e => {
+                e.dataTransfer.setData('text/plain', JSON.stringify({ woId: b.id, offsetMin: 0 }));
+            });
+            wireResize(div, b);
+            timeline.appendChild(div);
+        });
+
+        timeline.addEventListener('dragover', e => e.preventDefault());
+        timeline.addEventListener('drop', e => {
+            e.preventDefault();
+            const payload = JSON.parse(e.dataTransfer.getData('text/plain') || '{}');
+            if (!payload.woId) return;
+            const rect = timeline.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const minutes = Math.round((x / PX_PER_MIN) / 15) * 15 + startMin;
+            const newTime = minutesToTimeStr(minutes);
+            moveBlock(payload.woId, row.username, `${targetDate}T${newTime}:00`);
+        });
+        timeline.addEventListener('click', e => {
+            if (e.target !== timeline) return;
+            const rect = timeline.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const minutes = Math.round((x / PX_PER_MIN) / 15) * 15 + startMin;
+            const timeStr = minutesToLabel(minutes, true);
+            window.location.href = `/${companyKey}/workorders/new?tech=${encodeURIComponent(row.username)}&date=${targetDate}&time=${encodeURIComponent(timeStr)}`;
+        });
+    });
+
+    const unschEl = document.getElementById('unscheduledList');
+    if (data.unscheduled.length) {
+        unschEl.innerHTML = data.unscheduled.map(b =>
+            `<a class="unsch-chip" href="/${companyKey}/workorders/${b.id}">${b.work_order_number} — ${b.customer_name}</a>`
+        ).join('');
+    } else {
+        unschEl.innerHTML = '<span style="color:#aaa;font-size:.8rem;">None.</span>';
+    }
+}
+
+function wireResize(div, block) {
+    const handle = div.querySelector('.resize-handle');
+    handle.addEventListener('mousedown', e => {
+        e.stopPropagation(); e.preventDefault();
+        const startX = e.clientX;
+        const startWidth = div.offsetWidth;
+        function onMove(ev) {
+            const newWidth = Math.max(startWidth + (ev.clientX - startX), 20);
+            div.style.width = newWidth + 'px';
+        }
+        function onUp(ev) {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            const newWidth = Math.max(startWidth + (ev.clientX - startX), 20);
+            const hours = Math.max(Math.round((newWidth / PX_PER_MIN / 60) * 4) / 4, 0.5);
+            resizeBlock(block.id, hours);
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    });
+}
+
+function moveBlock(woId, username, scheduledStart) {
+    fetch(`/${companyKey}/dispatch/move`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ wo_id: woId, username: username, scheduled_start: scheduledStart }),
+    }).then(r => r.json()).then(res => {
+        if (!res.ok) { alert(res.error || 'Move failed.'); }
+        loadDay();
+    });
+}
+
+function resizeBlock(woId, hours) {
+    fetch(`/${companyKey}/dispatch/resize`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ wo_id: woId, estimated_duration_hours: hours }),
+    }).then(r => r.json()).then(res => {
+        showWarning(res.warning);
+        loadDay();
+    });
+}
+
+function timeToMinutes(hhmm) { const [h, m] = hhmm.split(':').map(Number); return h * 60 + m; }
+function minutesToLabel(m, as24 = false) {
+    let h = Math.floor(((m % 1440) + 1440) % 1440 / 60);
+    let mm = ((m % 60) + 60) % 60;
+    if (as24) return String(h).padStart(2,'0') + ':' + String(mm).padStart(2,'0');
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    let h12 = h % 12; if (h12 === 0) h12 = 12;
+    return h12 + (mm ? ':' + String(mm).padStart(2,'0') : '') + ' ' + ampm;
+}
+function minutesToTimeStr(m) {
+    const h = Math.floor(m / 60), mm = m % 60;
+    return String(h).padStart(2,'0') + ':' + String(mm).padStart(2,'0');
+}
+
+// ============================== Week view (read-only) ==============================
+function loadWeek() {
+    const start = new Date(targetDate + 'T00:00:00');
+    const day = start.getDay();
+    start.setDate(start.getDate() - day); // Sunday-start week
+    const days = [...Array(7)].map((_, i) => {
+        const d = new Date(start); d.setDate(start.getDate() + i);
+        return d.toISOString().slice(0, 10);
+    });
+    Promise.all(days.map(d => fetch(`/${companyKey}/dispatch/data?date=${d}`).then(r => r.json())))
+        .then(results => renderWeek(days, results));
+}
+
+function renderWeek(days, results) {
+    const techMap = {};
+    results.forEach(r => r.techs.forEach(t => { techMap[t.username] = t; }));
+    const techs = Object.values(techMap);
+
+    let html = '<div class="week-grid">';
+    html += '<div class="wk-cell wk-head"></div>';
+    days.forEach(d => { html += `<div class="wk-cell wk-head">${d}</div>`; });
+
+    techs.forEach(t => {
+        html += `<div class="wk-cell" style="font-weight:600;">${t.full_name}</div>`;
+        results.forEach((r, i) => {
+            const blocks = r.blocks.filter(b => (b.techs || []).includes(t.username));
+            html += '<div class="wk-cell">' + blocks.map(b =>
+                `<a class="wk-chip" style="background:${t.color_hex || '#888'}" href="/${companyKey}/workorders/${b.id}">${b.work_order_number}</a>`
+            ).join('') + '</div>';
+        });
+    });
+    html += '</div>';
+    document.getElementById('weekWrap').innerHTML = html;
+}
+
+if (viewMode === 'week') { loadWeek(); } else { loadDay(); }
+</script>
+{% endblock %}

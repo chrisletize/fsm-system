@@ -274,7 +274,10 @@
         <div class="card">
             <h2>Assigned Techs</h2>
             {% if techs %}
-            {% for t in techs %}<span class="tech-chip">{{ t.full_name }}</span>{% endfor %}
+            {% for t in techs %}
+            <a class="tech-chip" style="text-decoration:none;color:inherit;"
+               href="/{{ company_key }}/dispatch{% if wo.start_date %}?date={{ wo.start_date }}&{% else %}?{% endif %}tech={{ t.username }}">{{ t.full_name }}</a>
+            {% endfor %}
             {% else %}
             <div class="empty-note">No techs assigned yet.</div>
             {% endif %}

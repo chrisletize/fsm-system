@@ -2225,6 +2225,31 @@ def _parse_arrival_time(raw):
             continue
     return None, f'Arrival time "{raw}" could not be read — try a format like 8:30 AM.'
 
+def _company_techs(company_key, dispatchable_only=False):
+    """Techs (role='technician') with access to this company. Reads the
+    CANONICAL getagrip users table, not get_db_connection(company_key) --
+    users are replicated in code (write_to_all_dbs) but only getagrip has
+    ever actually been seeded (CLAUDE.md's known quirk, D-003); reading a
+    per-company DB here would always return zero techs for the other three
+    companies. Filters by company_access the same way session-based access
+    control already does. Used by both the WO form's tech checklist and the
+    dispatch board (Increment 2.1) -- one source, not two."""
+    conn = get_db_connection('getagrip')
+    cur  = conn.cursor()
+    where = "role = 'technician' AND is_active = TRUE AND company_access ? %s"
+    if dispatchable_only:
+        where += " AND can_be_dispatched = TRUE AND is_active_tech = TRUE"
+    cur.execute(f"""
+        SELECT username, full_name, color_hex, phone_mobile, dispatch_sort_order
+        FROM users
+        WHERE {where}
+        ORDER BY dispatch_sort_order NULLS LAST, full_name
+    """, (company_key,))
+    techs = [dict(r) for r in cur.fetchall()]
+    cur.close(); conn.close()
+    return techs
+
+
 def _wo_form_data(company_key):
     """Everything the work order form needs embedded: standard catalog items,
     equipment units (joined to their billing type/rate), and technicians."""
@@ -2241,7 +2266,7 @@ def _wo_form_data(company_key):
     catalog_std = [dict(r) for r in cur.fetchall()]
     cur.execute("""
         SELECT eu.id, eu.name, ci.id AS catalog_item_id, ci.name AS billing_type_name,
-               ci.category, ci.unit_price AS daily_rate, ci.is_taxable
+               ci.category, ci.unit_price AS daily_rate, ci.is_taxable, ci.estimated_minutes
         FROM equipment_units eu
         JOIN catalog_items ci ON ci.id = eu.catalog_item_id
         WHERE eu.is_active = TRUE AND eu.deleted_at IS NULL
@@ -2249,13 +2274,8 @@ def _wo_form_data(company_key):
         ORDER BY eu.name
     """)
     equipment = [dict(r) for r in cur.fetchall()]
-    cur.execute("""
-        SELECT username, full_name FROM users
-        WHERE role = 'technician' AND is_active = TRUE
-        ORDER BY full_name
-    """)
-    techs = [dict(r) for r in cur.fetchall()]
     cur.close(); conn.close()
+    techs = _company_techs(company_key)
     # NUMERIC comes back as Decimal — make everything JSON-safe for tojson.
     for c in catalog_std:
         for k in ('unit_price', 'minimum_quantity', 'billing_increment'):
@@ -2308,7 +2328,7 @@ def _parse_wo_line_items(company_key, raw_json):
                 catalog_item_id = item.get('catalog_item_id')
                 cur.execute("""
                     SELECT id, name, unit_price, cost, is_taxable, is_catch_all,
-                           minimum_quantity, billing_increment
+                           minimum_quantity, billing_increment, estimated_minutes
                     FROM catalog_items
                     WHERE id = %s AND billing_behavior = 'standard' AND deleted_at IS NULL
                 """, (catalog_item_id,))
@@ -2341,13 +2361,14 @@ def _parse_wo_line_items(company_key, raw_json):
                     'quantity': quantity, 'unit_price': unit_price, 'total': total,
                     'cost': cat['cost'], 'is_taxable': cat['is_taxable'],
                     'deployed_at': None, 'retrieved_at': None,
+                    'estimated_minutes': cat['estimated_minutes'],
                 })
 
             elif kind == 'eq':
                 equipment_unit_id = item.get('equipment_unit_id')
                 cur.execute("""
                     SELECT eu.id, eu.name, ci.id AS catalog_item_id,
-                           ci.unit_price AS daily_rate, ci.cost, ci.is_taxable
+                           ci.unit_price AS daily_rate, ci.cost, ci.is_taxable, ci.estimated_minutes
                     FROM equipment_units eu
                     JOIN catalog_items ci ON ci.id = eu.catalog_item_id
                     WHERE eu.id = %s AND eu.deleted_at IS NULL
@@ -2379,6 +2400,7 @@ def _parse_wo_line_items(company_key, raw_json):
                     'quantity': quantity, 'unit_price': float(eq['daily_rate']),
                     'total': total, 'cost': eq['cost'], 'is_taxable': eq['is_taxable'],
                     'deployed_at': deployed_at, 'retrieved_at': retrieved_at,
+                    'estimated_minutes': eq['estimated_minutes'],
                 })
             else:
                 return None, f'Line {idx}: unknown line type.'
@@ -2410,6 +2432,7 @@ def _save_work_order(company_key, wo_id):
     arrival_start       = request.form.get('arrival_window_start', '').strip() or None
     arrival_end         = request.form.get('arrival_window_end', '').strip() or None
     est_duration        = _opt_num(request.form.get('estimated_duration_hours'))
+    duration_overridden = request.form.get('duration_overridden') == 'true'
     assigned_techs      = request.form.getlist('assigned_techs')
 
     if not customer_id:
@@ -2433,6 +2456,29 @@ def _save_work_order(company_key, wo_id):
     lines, line_error = _parse_wo_line_items(company_key, request.form.get('line_items_json'))
     if line_error:
         return None, line_error
+
+    # Design addendum §13 (docs/FIELDKIT_DESIGN_ADDENDUM_duration-and-rating.md):
+    # catalog-estimated duration is Sigma(line.estimated_minutes x line.quantity),
+    # one formula for every unit type, no special-casing. An equipment line not yet
+    # retrieved has quantity=None (open-ended deployment) -- treated as 1 for this
+    # sum (the day count isn't known yet; 1 reflects the initial setup visit, not a
+    # guess at total days). Scheduled duration (estimated_duration_hours) auto-syncs
+    # to this total until the office manually overrides it (duration_overridden).
+    catalog_minutes = sum(
+        (float(l['estimated_minutes']) if l['estimated_minutes'] is not None else 0)
+        * (l['quantity'] if l['quantity'] is not None else 1)
+        for l in lines
+    )
+    catalog_duration_hours = round(catalog_minutes / 60.0, 2) if catalog_minutes else 0.0
+    duration_warning = None
+    if not duration_overridden:
+        est_duration = catalog_duration_hours
+    elif est_duration is not None:
+        if abs(est_duration - catalog_duration_hours) > 0.25:  # +-15 minutes
+            duration_warning = (
+                f'Catalog estimate is {catalog_duration_hours:g}h, scheduled is '
+                f'{est_duration:g}h — non-blocking, just flagging the gap.'
+            )
 
     username = session.get('username')
     conn = get_db_connection(company_key)
@@ -2462,6 +2508,12 @@ def _save_work_order(company_key, wo_id):
             if not cur.fetchone():
                 return None, 'Contact does not belong to that customer.'
 
+        # scheduled_start is maintained here (not a generated column — see migration
+        # 017's header comment): the board's single sort/position field, combining
+        # the two source columns. NULL when there's no arrival time yet — such a WO
+        # shows as unscheduled on the board rather than getting a fabricated time.
+        scheduled_start = f'{start_date} {arrival_start}' if (start_date and arrival_start) else None
+
         prev_status = None
         if wo_id is None:
             wo_number = _next_wo_number(cur, company_key)
@@ -2473,15 +2525,19 @@ def _save_work_order(company_key, wo_id):
                      description_followup, description_special_notes,
                      internal_notes, notes_for_techs, po_number, job_source, priority,
                      start_date, end_date, arrival_window_start, arrival_window_end,
-                     estimated_duration_hours, created_by, updated_by)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                     estimated_duration_hours, scheduled_start,
+                     catalog_estimated_duration_hours, duration_overridden,
+                     created_by, updated_by)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 RETURNING id
             """, (wo_number, customer_id, service_location_id, primary_contact_id,
                   status, work_site_label, auto_description,
                   occ_vac, am_pm, gated, followup, special_notes,
                   internal_notes, notes_for_techs, po_number, job_source, priority,
                   start_date, end_date, arrival_start, arrival_end,
-                  est_duration, username, username))
+                  est_duration, scheduled_start,
+                  catalog_duration_hours, duration_overridden,
+                  username, username))
             wo_id = cur.fetchone()['id']
         else:
             cur.execute("""
@@ -2501,7 +2557,8 @@ def _save_work_order(company_key, wo_id):
                     job_source=%s, priority=%s,
                     start_date=%s, end_date=%s,
                     arrival_window_start=%s, arrival_window_end=%s,
-                    estimated_duration_hours=%s,
+                    estimated_duration_hours=%s, scheduled_start=%s,
+                    catalog_estimated_duration_hours=%s, duration_overridden=%s,
                     updated_at=CURRENT_TIMESTAMP, updated_by=%s
                 WHERE id=%s AND deleted_at IS NULL
             """, (customer_id, service_location_id, primary_contact_id,
@@ -2509,7 +2566,9 @@ def _save_work_order(company_key, wo_id):
                   occ_vac, am_pm, gated, followup, special_notes,
                   internal_notes, notes_for_techs, po_number, job_source, priority,
                   start_date, end_date, arrival_start, arrival_end,
-                  est_duration, username, wo_id))
+                  est_duration, scheduled_start,
+                  catalog_duration_hours, duration_overridden,
+                  username, wo_id))
 
         # ---- Line items: update by id, insert new, soft-delete missing. ----
         cur.execute("""
@@ -2527,23 +2586,25 @@ def _save_work_order(company_key, wo_id):
                     SET catalog_item_id=%s, equipment_unit_id=%s, description=%s,
                         quantity=%s, unit_price=%s, total=%s, cost=%s, is_taxable=%s,
                         tax_county=%s, deployed_at=%s, retrieved_at=%s, sort_order=%s,
+                        estimated_minutes=%s,
                         updated_at=CURRENT_TIMESTAMP, updated_by=%s
                     WHERE id=%s AND work_order_id=%s AND deleted_at IS NULL
                 """, (ln['catalog_item_id'], ln['equipment_unit_id'], ln['description'],
                       ln['quantity'], ln['unit_price'], ln['total'], ln['cost'],
                       ln['is_taxable'], tax_county, ln['deployed_at'], ln['retrieved_at'],
-                      sort_order, username, lid, wo_id))
+                      sort_order, ln['estimated_minutes'], username, lid, wo_id))
             else:
                 cur.execute("""
                     INSERT INTO work_order_line_items
                         (work_order_id, catalog_item_id, equipment_unit_id, description,
                          quantity, unit_price, total, cost, is_taxable, tax_county,
-                         deployed_at, retrieved_at, sort_order, created_by, updated_by)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                         deployed_at, retrieved_at, sort_order, estimated_minutes,
+                         created_by, updated_by)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 """, (wo_id, ln['catalog_item_id'], ln['equipment_unit_id'], ln['description'],
                       ln['quantity'], ln['unit_price'], ln['total'], ln['cost'],
                       ln['is_taxable'], tax_county, ln['deployed_at'], ln['retrieved_at'],
-                      sort_order, username, username))
+                      sort_order, ln['estimated_minutes'], username, username))
         removed = existing_ids - submitted_ids
         if removed:
             cur.execute("""
@@ -2573,6 +2634,8 @@ def _save_work_order(company_key, wo_id):
                   'Created' if prev_status is None else f'Changed from {prev_status}'))
 
         conn.commit()
+        if duration_warning:
+            flash(duration_warning, 'info')
         return wo_id, None
     finally:
         cur.close(); conn.close()
@@ -2586,6 +2649,8 @@ def workorder_list(company_key, branding, all_companies, company_access):
         abort(403)
     search        = request.args.get('search', '').strip()
     status_filter = request.args.get('status', '').strip()
+    tech_filter   = request.args.get('tech', '').strip()
+    date_filter   = request.args.get('date', '').strip()
 
     conditions = ["wo.deleted_at IS NULL"]
     params     = []
@@ -2597,6 +2662,15 @@ def workorder_list(company_key, branding, all_companies, company_access):
     if status_filter:
         conditions.append("wo.status = %s")
         params.append(status_filter)
+    if tech_filter:
+        conditions.append("""EXISTS (
+            SELECT 1 FROM work_order_techs wt
+            WHERE wt.work_order_id = wo.id AND wt.username = %s
+        )""")
+        params.append(tech_filter)
+    if date_filter:
+        conditions.append("wo.start_date = %s")
+        params.append(date_filter)
     where = " AND ".join(conditions)
 
     conn = get_db_connection(company_key)
@@ -2632,6 +2706,7 @@ def workorder_list(company_key, branding, all_companies, company_access):
         company_access=company_access, all_companies=all_companies,
         workorders=workorders, total=total,
         search=search, status_filter=status_filter,
+        tech_filter=tech_filter, date_filter=date_filter,
         statuses=WO_OFFICE_STATUSES,
     )
 
@@ -2882,15 +2957,20 @@ def workorder_new(company_key, branding, all_companies, company_access):
             return redirect(f'/{company_key}/workorders')
     catalog_std, equipment, techs = _wo_form_data(company_key)
     customers = _load_wo_customers(company_key)
+    # Prefill from the dispatch board: clicking an empty timeline slot links here
+    # with ?tech=&date=&time= (directive §3.1).
+    prefill_tech = request.args.get('tech', '').strip()
     return render_template('workorder_form.html',
         branding=branding, company_key=company_key,
         company_access=company_access, all_companies=all_companies,
-        wo=None, line_items=[], wo_techs=[], error=error,
+        wo=None, line_items=[], wo_techs=[prefill_tech] if prefill_tech else [], error=error,
         customers=customers, catalog_std=catalog_std, equipment=equipment,
         techs=techs, statuses=WO_OFFICE_STATUSES,
         job_sources=WO_JOB_SOURCES, priorities=WO_PRIORITIES,
         arrival_suggestions=WO_ARRIVAL_SUGGESTIONS,
         site_labels=WORK_SITE_LABELS,
+        prefill_date=request.args.get('date', '').strip(),
+        prefill_time=request.args.get('time', '').strip(),
     )
 
 @app.route('/<company_key>/workorders/<int:wo_id>/edit', methods=['GET', 'POST'])
@@ -3013,6 +3093,264 @@ def workorder_delete(company_key, wo_id):
     """, (username, wo_id))
     conn.commit(); cur.close(); conn.close()
     return redirect(f'/{company_key}/workorders')
+
+
+@app.route('/<company_key>/workorders/<int:wo_id>/quick-status', methods=['POST'])
+@login_required
+@company_access_required
+def workorder_quick_status(company_key, wo_id):
+    """Mark Completed / Mark No Charge from the dispatch board popover —
+    a status-only write, without the full WO form round trip."""
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    new_status = request.form.get('status')
+    if new_status not in ('Completed', 'No Charge'):
+        abort(400)
+    username = session.get('username')
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("SELECT status FROM work_orders WHERE id = %s AND deleted_at IS NULL", (wo_id,))
+    wo = cur.fetchone()
+    if not wo:
+        cur.close(); conn.close()
+        abort(404)
+    cur.execute("""
+        UPDATE work_orders SET status = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s
+    """, (new_status, username, wo_id))
+    cur.execute("""
+        INSERT INTO work_order_status_history (work_order_id, status, changed_by, notes)
+        VALUES (%s, %s, %s, %s)
+    """, (wo_id, new_status, username, f'Changed from {wo["status"]} (dispatch board)'))
+    conn.commit(); cur.close(); conn.close()
+    return jsonify({'ok': True})
+
+
+# ============================================================================
+# Dispatch board  (admin + manager; Increment 2.1)
+# ============================================================================
+
+MIN_BLOCK_HOURS = 0.5  # directive: every block spans at least 30 minutes
+
+def _dispatch_collisions(blocks_by_tech):
+    """{username: [block, ...]} -> {block_id: overlapping_wo_number}. Two
+    blocks on the SAME tech's row collide when their [start, start+duration)
+    ranges overlap. Reported once per colliding block, naming the other WO
+    it overlaps (directive: non-blocking red outline + 'Overlaps with
+    GAG-2026-0042' banner, no auto-bump)."""
+    collisions = {}
+    for username, blocks in blocks_by_tech.items():
+        timed = [b for b in blocks if b['scheduled_start']]
+        timed.sort(key=lambda b: b['scheduled_start'])
+        for i in range(len(timed)):
+            a = timed[i]
+            a_start = a['scheduled_start']
+            a_end = a_start + timedelta(hours=float(a['duration_hours']))
+            for j in range(i + 1, len(timed)):
+                b = timed[j]
+                b_start = b['scheduled_start']
+                if b_start >= a_end:
+                    break
+                collisions[a['id']] = b['work_order_number']
+                collisions[b['id']] = a['work_order_number']
+    return collisions
+
+
+def _dispatch_board_data(company_key, target_date):
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+
+    cur.execute("""
+        SELECT wo.id, wo.work_order_number, wo.status, wo.priority,
+               wo.scheduled_start, wo.estimated_duration_hours,
+               c.property_name AS customer_name,
+               EXISTS(
+                   SELECT 1 FROM work_order_line_items li
+                   WHERE li.work_order_id = wo.id AND li.deleted_at IS NULL
+                     AND li.equipment_unit_id IS NOT NULL
+               ) AS has_equipment
+        FROM work_orders wo
+        JOIN customers c ON c.id = wo.customer_id
+        WHERE wo.deleted_at IS NULL AND wo.start_date = %s
+        ORDER BY wo.scheduled_start NULLS LAST, wo.id
+    """, (target_date,))
+    wos = cur.fetchall()
+
+    wo_ids = [w['id'] for w in wos]
+    techs_by_wo = {}
+    if wo_ids:
+        cur.execute("""
+            SELECT work_order_id, username, is_lead_tech FROM work_order_techs
+            WHERE work_order_id = ANY(%s)
+        """, (wo_ids,))
+        for row in cur.fetchall():
+            techs_by_wo.setdefault(row['work_order_id'], []).append(row['username'])
+    cur.close(); conn.close()
+
+    blocks, unscheduled = [], []
+    blocks_by_tech = {}
+    for w in wos:
+        duration = float(w['estimated_duration_hours']) if w['estimated_duration_hours'] else MIN_BLOCK_HOURS
+        duration = max(duration, MIN_BLOCK_HOURS)
+        block = {
+            'id': w['id'], 'work_order_number': w['work_order_number'],
+            'customer_name': w['customer_name'], 'status': w['status'],
+            'priority': w['priority'], 'has_equipment': w['has_equipment'],
+            'techs': techs_by_wo.get(w['id'], []),
+            'scheduled_start': w['scheduled_start'], 'duration_hours': duration,
+        }
+        if w['scheduled_start']:
+            blocks.append(block)
+            for uname in (block['techs'] or ['__unassigned__']):
+                blocks_by_tech.setdefault(uname, []).append(block)
+        else:
+            unscheduled.append(block)
+
+    collisions = _dispatch_collisions(blocks_by_tech)
+    for b in blocks:
+        b['collides_with'] = collisions.get(b['id'])
+        b['scheduled_start'] = b['scheduled_start'].isoformat()
+    for b in unscheduled:
+        b.pop('scheduled_start', None)
+
+    techs = _company_techs(company_key, dispatchable_only=True)
+
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("SELECT business_hours_start, business_hours_end FROM company_settings WHERE deleted_at IS NULL LIMIT 1")
+    cs = cur.fetchone() or {}
+    cur.close(); conn.close()
+
+    return {
+        'date': target_date,
+        'business_hours': {
+            'start': (cs.get('business_hours_start') or datetime.strptime('08:00', '%H:%M').time()).strftime('%H:%M'),
+            'end': (cs.get('business_hours_end') or datetime.strptime('17:00', '%H:%M').time()).strftime('%H:%M'),
+        },
+        'techs': techs,
+        'blocks': blocks,
+        'unscheduled': unscheduled,
+    }
+
+
+@app.route('/<company_key>/dispatch')
+@login_required
+@company_access_required
+@with_branding
+def dispatch_board(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager'):
+        abort(403)
+    target_date = request.args.get('date') or date.today().isoformat()
+    view = request.args.get('view', 'day')
+    return render_template('dispatch.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        target_date=target_date, view=view,
+    )
+
+
+@app.route('/<company_key>/dispatch/data')
+@login_required
+@company_access_required
+def dispatch_data(company_key):
+    if session.get('user_role') not in ('admin', 'manager'):
+        abort(403)
+    target_date = request.args.get('date') or date.today().isoformat()
+    data = _dispatch_board_data(company_key, target_date)
+    return jsonify(data)
+
+
+@app.route('/<company_key>/dispatch/move', methods=['POST'])
+@login_required
+@company_access_required
+def dispatch_move(company_key):
+    """Drag a block to another tech/time. Payload: {wo_id, username,
+    scheduled_start}. Re-homes the WO to exactly that one tech (the payload
+    names a single username, not a set) and updates its time — multi-tech
+    WOs still DISPLAY on every assigned tech's row, but a move is a
+    reassignment, not an addition. username='' (dropped on the Unassigned
+    row) clears all tech assignments instead."""
+    if session.get('user_role') not in ('admin', 'manager'):
+        abort(403)
+    body = request.get_json(silent=True) or {}
+    wo_id = body.get('wo_id')
+    username = (body.get('username') or '').strip()
+    scheduled_start = body.get('scheduled_start')
+    if not wo_id or not scheduled_start:
+        return jsonify({'ok': False, 'error': 'wo_id and scheduled_start are required.'}), 400
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("SELECT id, start_date FROM work_orders WHERE id = %s AND deleted_at IS NULL", (wo_id,))
+    wo = cur.fetchone()
+    if not wo:
+        cur.close(); conn.close()
+        return jsonify({'ok': False, 'error': 'Work order not found.'}), 404
+
+    try:
+        ts = datetime.fromisoformat(scheduled_start)
+    except ValueError:
+        cur.close(); conn.close()
+        return jsonify({'ok': False, 'error': 'Bad scheduled_start.'}), 400
+
+    actor = session.get('username')
+    cur.execute("""
+        UPDATE work_orders
+        SET scheduled_start = %s, start_date = %s, arrival_window_start = %s,
+            updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s
+    """, (ts, ts.date(), ts.time(), actor, wo_id))
+    cur.execute("DELETE FROM work_order_techs WHERE work_order_id = %s", (wo_id,))
+    if username:
+        cur.execute("""
+            INSERT INTO work_order_techs (work_order_id, username, is_lead_tech)
+            VALUES (%s, %s, TRUE)
+        """, (wo_id, username))
+    conn.commit(); cur.close(); conn.close()
+    return jsonify({'ok': True})
+
+
+@app.route('/<company_key>/dispatch/resize', methods=['POST'])
+@login_required
+@company_access_required
+def dispatch_resize(company_key):
+    """Drag a block's edge to resize. Payload: {wo_id, estimated_duration_hours}.
+    Always sets duration_overridden (a resize IS a manual override, per the
+    duration addendum) and returns the +-15-minute warning text, if any, for
+    the client's non-blocking banner."""
+    if session.get('user_role') not in ('admin', 'manager'):
+        abort(403)
+    body = request.get_json(silent=True) or {}
+    wo_id = body.get('wo_id')
+    hours = body.get('estimated_duration_hours')
+    try:
+        hours = round(float(hours), 2)
+    except (TypeError, ValueError):
+        return jsonify({'ok': False, 'error': 'Bad duration.'}), 400
+    hours = max(hours, MIN_BLOCK_HOURS)
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("SELECT catalog_estimated_duration_hours FROM work_orders WHERE id = %s AND deleted_at IS NULL", (wo_id,))
+    wo = cur.fetchone()
+    if not wo:
+        cur.close(); conn.close()
+        return jsonify({'ok': False, 'error': 'Work order not found.'}), 404
+
+    cur.execute("""
+        UPDATE work_orders
+        SET estimated_duration_hours = %s, duration_overridden = TRUE,
+            updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s
+    """, (hours, session.get('username'), wo_id))
+    conn.commit(); cur.close(); conn.close()
+
+    catalog_hours = float(wo['catalog_estimated_duration_hours'] or 0)
+    warning = None
+    if abs(hours - catalog_hours) > 0.25:
+        warning = f'Catalog estimate is {catalog_hours:g}h, scheduled is {hours:g}h — non-blocking, just flagging the gap.'
+    return jsonify({'ok': True, 'warning': warning, 'duration_hours': hours})
+
 
 # ============================================================================
 # Contacts — new
@@ -5529,6 +5867,15 @@ def compliance_reject(company_key, invoice_id):
 VALID_ROLES = ['admin', 'manager', 'office', 'salesperson', 'technician']
 ALL_COMPANY_KEYS = list(DB_CONFIG.keys())  # ['getagrip', 'kleanit_charlotte', 'cts', 'kleanit_sf']
 
+# Fixed 12-color dispatch-board palette (directive §3.1). Assigned by id % 12 so a
+# tech's color is stable and deterministic without a separate "next unused color"
+# lookup — two techs sharing a color once >12 dispatchable techs exist is an
+# accepted, documented limitation (see docs/DECISIONS-MADE-DURING-BUILD.md).
+DISPATCH_COLOR_PALETTE = [
+    '#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#46f0f0',
+    '#f032e6', '#bcf60c', '#fabebe', '#008080', '#9a6324', '#808000',
+]
+
 
 def write_to_all_dbs(sql, params):
     """Execute a write (INSERT/UPDATE) against all 4 company databases."""
@@ -5552,7 +5899,9 @@ def get_all_users():
     cur  = conn.cursor()
     cur.execute("""
         SELECT id, username, email, full_name, role,
-               company_access, is_active, last_login, created_at
+               company_access, is_active, last_login, created_at,
+               color_hex, is_field_tech, can_be_dispatched, is_active_tech,
+               phone_mobile, default_start_time, dispatch_sort_order
         FROM users
         ORDER BY full_name ASC
     """)
@@ -5568,7 +5917,9 @@ def get_user_by_id(user_id):
     cur  = conn.cursor()
     cur.execute("""
         SELECT id, username, email, full_name, role,
-               company_access, is_active, last_login, created_at
+               company_access, is_active, last_login, created_at,
+               color_hex, is_field_tech, can_be_dispatched, is_active_tech,
+               phone_mobile, default_start_time, dispatch_sort_order
         FROM users
         WHERE id = %s
     """, (user_id,))
@@ -5615,6 +5966,11 @@ def user_new(company_key, branding, all_companies, company_access):
         password     = request.form.get('password', '')
         confirm_pw   = request.form.get('confirm_password', '')
         co_access    = request.form.getlist('company_access')  # multi-select checkboxes
+        is_field_tech     = request.form.get('is_field_tech') == 'on'
+        can_be_dispatched = request.form.get('can_be_dispatched') == 'on'
+        phone_mobile      = request.form.get('phone_mobile', '').strip() or None
+        default_start_time = request.form.get('default_start_time', '').strip() or '08:00'
+        dispatch_sort_order = _opt_num(request.form.get('dispatch_sort_order'))
 
         # Validation
         if not username or not full_name or not password or not email:
@@ -5641,19 +5997,48 @@ def user_new(company_key, branding, all_companies, company_access):
 
         if not error:
             pw_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt(12)).decode('utf-8')
+            # NOTE: `users` does NOT carry the created_by/updated_by/deleted_at audit
+            # columns every other table has (see \d users) -- discovered while
+            # building this increment (D-0xx): the pre-existing INSERT here named a
+            # created_by column that has never existed, so user_new silently failed
+            # on every DB (write_to_all_dbs swallows the exception into `errs`, and
+            # the route redirected as if it had succeeded regardless). Fixed by
+            # dropping created_by from the column list; the 7 real users in
+            # production were seeded directly by SQL, never through this route,
+            # which is why nobody had hit this yet.
             errs = write_to_all_dbs("""
                 INSERT INTO users (username, email, full_name, role, password_hash,
-                                   company_access, is_active, created_by)
-                VALUES (%s, %s, %s, %s, %s, %s, TRUE, %s)
+                                   company_access, is_active,
+                                   is_field_tech, can_be_dispatched, phone_mobile,
+                                   default_start_time, dispatch_sort_order)
+                VALUES (%s, %s, %s, %s, %s, %s, TRUE, %s, %s, %s, %s, %s)
                 ON CONFLICT (username) DO NOTHING
             """, (username, email, full_name, role, pw_hash,
-                  json.dumps(co_access), session.get('username')))
+                  json.dumps(co_access),
+                  is_field_tech, can_be_dispatched, phone_mobile,
+                  default_start_time, dispatch_sort_order))
 
-            if errs:
+            # Color is assigned from the new user's canonical (getagrip) id, once
+            # it exists — id % 12 into the fixed palette (see DISPATCH_COLOR_PALETTE).
+            conn = get_db_connection('getagrip')
+            cur  = conn.cursor()
+            cur.execute("SELECT id FROM users WHERE username = %s", (username,))
+            row = cur.fetchone()
+            cur.close(); conn.close()
+            if row:
+                color = DISPATCH_COLOR_PALETTE[row['id'] % len(DISPATCH_COLOR_PALETTE)]
+                write_to_all_dbs("UPDATE users SET color_hex = %s WHERE username = %s", (color, username))
+
+            if not row:
+                # getagrip (canonical) itself failed — surface it instead of
+                # redirecting as if the user exists (the bug this replaced: a
+                # failure here used to silently redirect to "success").
+                error = 'User was not created: ' + '; '.join(errs or ['unknown database error'])
+            elif errs:
                 error = 'User created but errors syncing to some databases: ' + '; '.join(errs)
-                # Still redirect — getagrip (canonical) succeeded
                 return redirect(f'/{company_key}/settings/users')
-            return redirect(f'/{company_key}/settings/users')
+            else:
+                return redirect(f'/{company_key}/settings/users')
 
     return render_template('user_form.html',
         branding=branding, company_key=company_key,
@@ -5684,6 +6069,12 @@ def user_edit(company_key, user_id, branding, all_companies, company_access):
         email      = request.form.get('email', '').strip().lower()
         role       = request.form.get('role', 'tech')
         co_access  = request.form.getlist('company_access')
+        is_field_tech      = request.form.get('is_field_tech') == 'on'
+        can_be_dispatched  = request.form.get('can_be_dispatched') == 'on'
+        is_active_tech     = request.form.get('is_active_tech') == 'on'
+        phone_mobile       = request.form.get('phone_mobile', '').strip() or None
+        default_start_time = request.form.get('default_start_time', '').strip() or '08:00'
+        dispatch_sort_order = _opt_num(request.form.get('dispatch_sort_order'))
 
         if not full_name:
             error = 'Full name is required.'
@@ -5696,9 +6087,14 @@ def user_edit(company_key, user_id, branding, all_companies, company_access):
             errs = write_to_all_dbs("""
                 UPDATE users
                 SET full_name = %s, email = %s, role = %s,
-                    company_access = %s, updated_at = CURRENT_TIMESTAMP
+                    company_access = %s, updated_at = CURRENT_TIMESTAMP,
+                    is_field_tech = %s, can_be_dispatched = %s, is_active_tech = %s,
+                    phone_mobile = %s, default_start_time = %s, dispatch_sort_order = %s
                 WHERE username = %s
-            """, (full_name, email if email else user['email'], role, json.dumps(co_access), user['username']))
+            """, (full_name, email if email else user['email'], role, json.dumps(co_access),
+                  is_field_tech, can_be_dispatched, is_active_tech,
+                  phone_mobile, default_start_time, dispatch_sort_order,
+                  user['username']))
 
             if errs:
                 error = 'Saved but errors syncing: ' + '; '.join(errs)

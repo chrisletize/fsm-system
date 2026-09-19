@@ -20,7 +20,8 @@ reporting until FieldKit's billing is complete.
 | Customers: list/search/detail/new/edit, contacts (billing flags), service locations, custom fields, notes | Built |
 | Users: list/new/edit/reset-password/toggle-active/email reset via Resend | Built |
 | Catalog CRUD, equipment registry CRUD | Built |
-| Work orders: list/search/new/edit/detail/delete, two-row-type line items, per-day equipment accrual, `work_site_label`, auto-description, double-booking banner, status history, tech assignment (username-keyed) | Built |
+| Work orders: list/search/new/edit/detail/delete, two-row-type line items, per-day equipment accrual, `work_site_label`, auto-description, double-booking banner, status history, tech assignment (username-keyed), tech/date list filters, live catalog-duration estimate | Built |
+| Dispatch board | Built (2.1, migration 017, `/dispatch`): drag-to-move, resize, click-to-popover, day/week views, collision detection, tech profiles (color/dispatchable/sort order) on the user form. |
 | Billing page | Full rebuild (1.8): summary cards, aging strip, filter bar (delinquent/no_contact/portal/all), per-customer Record Payment pre-filtered to real open invoices. |
 | A/R Aging report | Built (1.8, `/reports/aging`), 4-bucket (0-30/31-60/61-90/90+), sortable, print-friendly drill-down. |
 | `tax_rates` | Built, effective-dated (migration 009), `/settings/tax` UI live. 101 rows (NC) in GAG/KC/CTS, 0 in Kleanit SF. |
@@ -29,7 +30,7 @@ reporting until FieldKit's billing is complete.
 | Compliance portals | Built (1.8, migration 015): `customer_compliance_portals` table, enrollment/edit/toggle UI, auto-assign-on-harden, `/compliance` review page with accept/reject + generic `.xlsx` export (real per-portal templates still pending from Chris/Michele). |
 | NC cash-basis tax report | Built (1.10, migration 016, `/reports/tax`): cash-basis by county, state/county/transit split incl. Mecklenburg's 1% additional-county line, refund handling, Excel + PDF export. Untested against real data (none exists yet). |
 | Cutover import from Phase 0 | Not built — deferred by Chris (2026-09-19) until the site is ready for day-to-day testing. Investigation-only finding logged: the statements DB (`fsm_prod`) currently has zero invoice/tax rows for all four companies (D-038); needs resolving before this increment actually runs. |
-| Dispatch, extraction queue, other reports, estimates, sales CRM, payment methods, tags, dashboard stats | Not built |
+| Extraction queue, other reports (day sheet/hours/jobs), tag replacements, nightly jobs, estimates, sales CRM, payment methods, dashboard stats | Not built |
 
 This table matches `FIELDKIT_BUILD_DIRECTIVE_2026-09.md` §0.2 — confirmed by grepping
 the full route list out of `app.py` (3,248 lines) and querying row counts in all four
@@ -45,6 +46,12 @@ Chris's direction (2026-09-19) until the site is ready for his and Michele's
 day-to-day testing — see D-038 for what was found investigating the source data.
 Stage 1's remaining exit criteria (tax report reconciling by hand, Michele's
 walkthrough) need real data/Michele's time, not more code.
+
+**Stage 2 — Finish scheduling**: Increment 2.1 (tech profiles + dispatch board)
+complete, migration 017. Found and fixed two pre-existing bugs along the way (D-043:
+user creation silently failed on every DB; D-044: the tech checklist always rendered
+empty for 3 of 4 companies) — neither introduced by this increment, both caught by its
+smoke test. Next: Increment 2.2 (water extraction queue + accrual engine).
 
 Decisions Chris has already made for this build (delinquent threshold = 90 days past
 invoice date, FL tax left empty/exempt for Kleanit SF, SF-import receivables excluded
