@@ -135,6 +135,8 @@
                    'Type customer name…', True, 'customerCombo') }}
             <span id="creditBadge" style="display:none; background:#fdecea; color:#c0392b; border-radius:8px;
                   padding:.2rem .6rem; font-size:.78rem; font-weight:600; margin-top:.3rem; width:fit-content;"></span>
+            <span id="delinquentBadge" style="display:none; background:#fdecea; color:#a32d2d; border-radius:8px;
+                  padding:.2rem .6rem; font-size:.78rem; font-weight:600; margin-top:.3rem; width:fit-content;">Delinquent</span>
         </div>
         <div class="form-group">
             <label>Service Location</label>
@@ -734,7 +736,12 @@
         }
     }
 
-    customerHidden.addEventListener('change', () => loadCustomerContext(customerHidden.value, false));
+    function updateDelinquentBadge() {
+        const opts = JSON.parse(document.getElementById('customerCombo').dataset.options || '[]');
+        const cust = opts.find(c => String(c.id) === customerHidden.value);
+        document.getElementById('delinquentBadge').style.display = (cust && cust.is_delinquent) ? 'block' : 'none';
+    }
+    customerHidden.addEventListener('change', () => { loadCustomerContext(customerHidden.value, false); updateDelinquentBadge(); });
     locationSelect.addEventListener('change', () => { maybePrefillSite(); checkDupes(); });
     siteInput.addEventListener('input', () => { delete siteInput.dataset.prefilled; regenDescription(); });
 
@@ -942,6 +949,7 @@
             loadCustomerContext(customerHidden.value, true);
         }
         applyInternalTaskState();
+        updateDelinquentBadge();
         recalc();
     });
 </script>

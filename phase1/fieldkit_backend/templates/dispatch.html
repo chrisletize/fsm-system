@@ -28,6 +28,7 @@
     .wo-block { position:absolute; top:4px; bottom:4px; border-radius:4px; color:white; font-size:.72rem;
                 padding:.25rem .4rem; overflow:hidden; cursor:grab; box-shadow:0 1px 2px rgba(0,0,0,.15); }
     .wo-block.collision { outline:2px solid #c0392b; outline-offset:-2px; }
+    .wo-block.delinquent { border-left:4px solid #c0392b; }
     .wo-block .resize-handle { position:absolute; right:0; top:0; bottom:0; width:8px; cursor:ew-resize; }
     .wo-block .badges { font-size:.68rem; opacity:.9; }
 
@@ -124,6 +125,7 @@ function showPopover(block, anchorEl) {
     if (block.has_equipment) badges.push('💧 Extraction');
     if (block.equipment_incomplete) badges.push('⚠️ Equipment not confirmed');
     if (block.is_new_customer) badges.push('🆕 New Customer');
+    if (block.is_delinquent) badges.push('🔴 Delinquent');
     pop.innerHTML = `
         <h4>${block.work_order_number}</h4>
         <div class="row">${block.customer_name || 'Internal Task'}</div>
@@ -195,13 +197,13 @@ function renderDay(data) {
             const left = (startM - startMin) * PX_PER_MIN;
             const width = b.duration_hours * 60 * PX_PER_MIN;
             const div = document.createElement('div');
-            div.className = 'wo-block' + (b.collides_with ? ' collision' : '');
+            div.className = 'wo-block' + (b.collides_with ? ' collision' : '') + (b.is_delinquent ? ' delinquent' : '');
             div.style.left = left + 'px';
             div.style.width = Math.max(width, 20) + 'px';
             div.style.background = row.color;
             div.draggable = true;
             div.dataset.woId = b.id;
-            const badges = [b.priority !== 'Normal' ? b.priority[0] : '', b.has_equipment ? '💧' : '', b.is_new_customer ? '🆕' : ''].filter(Boolean).join(' ');
+            const badges = [b.priority !== 'Normal' ? b.priority[0] : '', b.has_equipment ? '💧' : '', b.is_new_customer ? '🆕' : '', b.is_delinquent ? '🔴' : ''].filter(Boolean).join(' ');
             div.innerHTML = `<div><strong>${b.work_order_number}</strong> ${badges ? '<span class="badges">' + badges + '</span>' : ''}</div>
                               <div>${b.customer_name || 'Internal Task'}</div>
                               <div class="resize-handle"></div>`;

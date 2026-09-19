@@ -619,6 +619,60 @@ Shown on the dispatch board (badge in the popover and inline on the block) and W
 detail (header badge) per the directive; NOT added to the WO list page, which the
 directive doesn't mention for this badge.
 
+D-065 — [CONFIRMED, Chris 2026-09-19] Increment 2.5 (scheduled jobs) ships with a
+per-company master on/off switch (`company_settings.scheduled_alerts_enabled`,
+default FALSE) gating every email-sending step in `jobs.py`. Chris's explicit
+condition for proceeding: build it, keep the switch off, and prove the send path
+actually works via a mocked test before installing anything live. All three were
+satisfied: the switch defaults off in the migration, `smoke_scheduled_jobs.py`
+temporarily flips it on inside a monkey-patched Resend session to prove the email
+path fires (then restores the real value in `finally` regardless of pass/fail), and
+the cron schedule was installed only after that test passed. Computation (customer_
+flags, extraction day-count upkeep, job_runs bookkeeping) always runs regardless of
+the switch — only real email sends are gated.
+
+D-066 — [SCOPE] `job_nightly` explicitly skips customer ratings (§4.2) and dormancy
+alerts (§4.1) with a note in its own summary string ("skipped -- not built yet")
+rather than silently omitting them — neither feature exists yet (both are later-
+stage work), and the directive's nightly-job description references both as if they
+already exist. Revisit once §4.1/§4.2 land.
+
+D-067 — [MODEL] `uninvoiced`'s dedupe (`work_orders.alert_sent_at`) is per-WO and
+one-shot (once sent, never re-alerted for that WO), matching "one email per WO to
+alert_email (dedupe via alert_sent_at)" literally. `eod_escalation`'s digest
+deliberately does NOT check `alert_sent_at` — it's a standing summary of "what's
+still outstanding right now," not a per-item alert, so the same WO can legitimately
+appear in multiple days' digests until it's actually invoiced. Verified both
+behaviors explicitly in the smoke test (a second `uninvoiced` run finds nothing new;
+the same fixture still appears in the eod digest).
+
+D-068 — [MODEL] Completing 2.4's deferred Delinquent Account display (D-046): now
+that `customer_flags` exists (populated by the nightly job), the badge is wired to
+customer detail, the WO form's customer picker (client-side, from the same options
+JSON the combo already embeds — no new endpoint), and the dispatch board (block +
+popover), matching the directive's list exactly. The billing page's OWN delinquent
+computation (built in 1.8, live via `_customer_aging_summary` + the same 90-day
+threshold) is left as-is rather than switched to read `customer_flags` — it was
+already correct and already tested; there was no reason to make it depend on a
+once-nightly cache when its live computation costs nothing extra at current volumes
+(same reasoning as D-035).
+
+D-069 — [MODEL] The "Scheduled Jobs" status panel (directive: "a panel on the
+settings landing page... is how Chris knows cron is wired") lives on
+`/settings/company` rather than a new settings landing page — this codebase has
+never had one (settings is a dropdown menu, not a page), and `/settings/company` is
+already the closest thing to a settings home (it's also where `alert_email` and now
+the master switch live). Inventing a new landing page for one panel felt like more
+surface area than the directive's actual ask.
+
+D-070 — [OPS] The cron schedule (directive's exact 4-line schedule) is installed
+under the `letize` user's own `crontab`, not `/etc/cron.d/fieldkit` — no passwordless
+`sudo` was available in this session, and the directive explicitly names this as the
+accepted fallback. Documented in `docs/DEPLOYMENT/cron-jobs.md`. Functionally
+identical either way since `letize` is the user both approaches would run jobs as;
+can be moved to `/etc/cron.d` later if `sudo` becomes available, for a more
+discoverable/version-controlled location.
+
 ---
 
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:

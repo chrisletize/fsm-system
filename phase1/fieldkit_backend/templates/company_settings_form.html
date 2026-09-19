@@ -180,4 +180,48 @@
     </div>
 </form>
 </div>
+
+<div class="card" style="margin-top:1.5rem;">
+    <h3 style="margin-bottom:.75rem;">Scheduled Jobs</h3>
+    <p style="font-size:.85rem; color:#888; margin-bottom:1rem;">
+        Host cron runs these on a schedule (§3.5). The master switch below controls
+        whether they're allowed to send real email — everything else (delinquency
+        flags, extraction day counts, job history below) runs either way.
+    </p>
+
+    <form method="POST" action="/{{ company_key }}/settings/company/scheduled-alerts" style="margin-bottom:1.25rem;">
+        <label style="display:flex; align-items:center; gap:.6rem; font-size:.92rem;">
+            <input type="checkbox" name="scheduled_alerts_enabled" style="width:18px; height:18px;"
+                   {% if settings and settings.scheduled_alerts_enabled %}checked{% endif %}
+                   onchange="this.form.submit()">
+            Scheduled email alerts enabled
+            <span style="font-size:.82rem; color:{{ '#2e7d32' if settings and settings.scheduled_alerts_enabled else '#c33' }}; font-weight:600;">
+                ({{ 'ON — real emails will send' if settings and settings.scheduled_alerts_enabled else 'OFF — no emails will send' }})
+            </span>
+        </label>
+    </form>
+
+    <table style="width:100%; border-collapse:collapse; font-size:.85rem;">
+        <thead>
+            <tr>
+                <th style="text-align:left; padding:.5rem; border-bottom:2px solid #eee;">Job</th>
+                <th style="text-align:left; padding:.5rem; border-bottom:2px solid #eee;">Last Run</th>
+                <th style="text-align:left; padding:.5rem; border-bottom:2px solid #eee;">Status</th>
+                <th style="text-align:left; padding:.5rem; border-bottom:2px solid #eee;">Summary</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for j in job_runs %}
+            <tr>
+                <td style="padding:.5rem; border-bottom:1px solid #f5f5f5;">{{ j.job_name }}</td>
+                <td style="padding:.5rem; border-bottom:1px solid #f5f5f5;">{{ j.finished_at or j.started_at or 'never run' }}</td>
+                <td style="padding:.5rem; border-bottom:1px solid #f5f5f5;">{{ j.status }}</td>
+                <td style="padding:.5rem; border-bottom:1px solid #f5f5f5; color:#666;">{{ j.summary or '—' }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" style="padding:1rem; text-align:center; color:#aaa;">No jobs have run yet — cron hasn't fired since this was installed.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
 {% endblock %}

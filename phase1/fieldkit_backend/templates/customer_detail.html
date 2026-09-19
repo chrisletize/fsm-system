@@ -187,7 +187,11 @@
 <!-- Page header -->
 <div class="page-header">
     <div>
-        <h1>{{ customer.property_name }}</h1>
+        <h1>{{ customer.property_name }}
+            {% if customer.is_delinquent %}
+            <span style="font-size:.8rem; background:#fdecea; color:#a32d2d; border-radius:10px; padding:.2rem .7rem; font-weight:600; vertical-align:middle;">Delinquent</span>
+            {% endif %}
+        </h1>
         <div class="meta">
             {{ customer.customer_type }}
              · Added {{ customer.created_at.strftime('%b %d, %Y') if customer.created_at else '—' }}

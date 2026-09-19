@@ -836,3 +836,89 @@ explicitly later increments per the directive's own table, not scope creep out o
 This closes out Stage 2's increments that don't require host-level changes. Increment
 2.5 (nightly/periodic jobs) needs a host crontab installed under sudo — flagging for
 Chris before proceeding, per the directive's own installation instructions.
+
+---
+
+## 2026-09-19 — Stage 2, Increment 2.5 — Scheduled jobs (nightly + periodic)
+
+Chris's condition for proceeding: build it with a master on/off switch defaulting to
+off, prove the email path actually works via a mocked test, and only then install the
+real cron schedule. All three done, in that order — see D-065.
+
+**What:**
+- **Migration 020**: `customer_flags` (customer_id PK, is_delinquent,
+  oldest_open_invoice_date, open_balance, unapplied_credit, computed_at), `job_runs`
+  (job_name, company_key, started_at/finished_at, status, summary),
+  `work_orders.alert_sent_at` (per-WO dedupe for the uninvoiced alert),
+  `company_settings.scheduled_alerts_enabled` (the master switch, default FALSE).
+- `phase1/fieldkit_backend/jobs.py`: thin CLI wrapper (`python jobs.py <subcommand>`,
+  loops all four companies) around job functions living in `app.py` so they're
+  directly importable/testable — matches how every other piece of this codebase is
+  structured. Subcommands: `nightly`, `uninvoiced`, `eod_escalation`,
+  `weekly_sales_report`.
+  - `nightly`: recomputes `customer_flags` for every customer (reusing the exact
+    `_customer_aging_summary`/`customer_unapplied_credit`/`DELINQUENT_DAYS_PAST_INVOICE`
+    the billing page already uses — same answer everywhere, always); refreshes
+    `extraction_day_count` for active extractions; writes "Missed Today"
+    `extraction_daily_log` rows for active jobs with no log entry for yesterday;
+    sends a day-5+ escalation email (gated by the switch). Customer ratings (§4.2)
+    and dormancy alerts (§4.1) explicitly skipped with a note — neither exists yet
+    (D-066).
+  - `uninvoiced`: Completed, billable (non-internal-task), uninvoiced WOs whose most
+    recent Completed status-history entry is over an hour old; one email per WO
+    (gated by switch), deduped via `alert_sent_at` so it never re-fires for the same
+    WO.
+  - `eod_escalation`: one digest email of every still-uninvoiced Completed WO — not
+    deduped, since it's a standing summary, not a per-item alert (D-067).
+  - `weekly_sales_report`: no sales CRM exists yet (Stage 3) — records a `skipped`
+    job_runs row with an explanatory summary rather than erroring.
+  - Every job writes a `job_runs` row via a shared start/finish wrapper regardless of
+    the switch, so the status panel always shows a real last-run timestamp.
+- **Master switch UI**: `/settings/company` gets a "Scheduled Jobs" panel (admin
+  only) — the switch as its own explicit POST action (not bundled into the general
+  settings save, so flipping it is a deliberate, separately-logged action) plus a
+  table of last-run-per-job. Lives on `/settings/company` rather than a new settings
+  landing page, since this codebase has never had one (D-069).
+- **Delinquent badge**, deferred from 2.4 (D-046) pending `customer_flags`, now
+  wired to customer detail, the WO form's customer picker, and the dispatch board
+  (D-068) — completing that part of the retired-tag replacement work. Billing page
+  keeps its own pre-existing live computation (already correct, already tested).
+- **Cron installed**: the directive's exact 4-line schedule, under the `letize`
+  user's own crontab (no passwordless `sudo` available — the directive's own
+  documented fallback), documented in `docs/DEPLOYMENT/cron-jobs.md` (D-070). All
+  four subcommands were run for real against production data before and after
+  installing — safe, since the switch is off, confirmed zero emails sent (all four
+  ran clean: 1,330/3,013/903/61 real customers' flags recomputed across the four
+  companies, 0 delinquent — no real invoice data exists yet).
+
+**Migration:** 020 (`020_scheduled_jobs.sql`), applied to all four DBs. Pre-migration
+backups in `~/db-backups/2026-09-19k/`.
+
+**Commit:** (pending — migration file, `app.py`, `jobs.py` (new), 
+`company_settings_form.html`, `customer_detail.html`, `workorder_form.html`,
+`dispatch.html`, `docs/DEPLOYMENT/cron-jobs.md` (new), smoke test, this entry,
+decisions log, status doc).
+
+**Smoke test:** `tests/smoke_scheduled_jobs.py` — 34/34 checks. Same safety
+discipline as the 1.7 email test (Resend monkey-patched for the whole run, restored
+in `finally`), plus a new layer specific to this increment: the real
+`scheduled_alerts_enabled` value is captured before the test touches anything and
+force-restored in `finally` regardless of outcome, so the production switch can
+never be left on by a test run. Covers: `customer_flags` delinquency math against a
+real hardened/sent invoice backdated 120 days; the delinquent badge rendering on
+customer detail, the WO form's embedded customer JSON, and (implicitly, same query
+path) the dispatch board; extraction day-count/Missed-Today upkeep; escalation with
+the switch off (computes, sends nothing) and then on (computes AND sends, verified
+via the mock call count and recipient); the uninvoiced alert's dedupe (second run
+finds nothing new) versus the eod digest's non-dedupe (same fixture still appears);
+switching back off and confirming fresh qualifying data still computes but sends
+nothing; the `job_runs` wrapper functions; and the settings page panel + toggle
+route. Cleanup verified zero residue and the real switch restored to off. All 13
+prior smoke tests re-run clean as regressions.
+
+**Deferred:** customer ratings (§4.2) and dormancy alerts (§4.1) — both later-stage
+features the directive's nightly-job description references as if built; explicitly
+skipped with a logged reason, not silently dropped.
+
+This closes out Stage 2 in full. Awaiting Chris's direction on what's next — Stage 3
+(estimates, ratings, sales CRM, callbacks) or a pause for real-world testing.

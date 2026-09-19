@@ -468,9 +468,11 @@ def customer_detail(company_key, customer_id, branding, all_companies, company_a
     cur  = conn.cursor()
 
     cur.execute("""
-        SELECT c.*, mc.name as management_company_name
+        SELECT c.*, mc.name as management_company_name,
+               COALESCE(cf.is_delinquent, FALSE) AS is_delinquent
         FROM customers c
         LEFT JOIN management_companies mc ON c.management_company_id = mc.id
+        LEFT JOIN customer_flags cf ON cf.customer_id = c.id
         WHERE c.id = %s AND c.deleted_at IS NULL
     """, (customer_id,))
     customer = cur.fetchone()
@@ -1527,11 +1529,19 @@ def company_settings_edit(company_key, branding, all_companies, company_access):
     cur  = conn.cursor()
     cur.execute("SELECT * FROM company_settings WHERE deleted_at IS NULL LIMIT 1")
     settings = cur.fetchone()
+    # "Scheduled jobs" panel: last run per job_name (directive §3.5 — "that
+    # panel is how Chris knows cron is wired").
+    cur.execute("""
+        SELECT DISTINCT ON (job_name) job_name, started_at, finished_at, status, summary
+        FROM job_runs WHERE company_key = %s
+        ORDER BY job_name, started_at DESC
+    """, (company_key,))
+    job_runs = cur.fetchall()
     cur.close(); conn.close()
     return render_template('company_settings_form.html',
         branding=branding, company_key=company_key,
         company_access=company_access, all_companies=all_companies,
-        settings=settings, error=error,
+        settings=settings, error=error, job_runs=job_runs,
     )
 
 # ============================================================================
@@ -2292,10 +2302,12 @@ def _load_wo_customers(company_key):
     conn = get_db_connection(company_key)
     cur  = conn.cursor()
     cur.execute("""
-        SELECT id, property_name AS name, customer_type AS category
-        FROM customers
-        WHERE deleted_at IS NULL AND status = 'Active'
-        ORDER BY property_name
+        SELECT c.id, c.property_name AS name, c.customer_type AS category,
+               COALESCE(cf.is_delinquent, FALSE) AS is_delinquent
+        FROM customers c
+        LEFT JOIN customer_flags cf ON cf.customer_id = c.id
+        WHERE c.deleted_at IS NULL AND c.status = 'Active'
+        ORDER BY c.property_name
     """)
     rows = [dict(r) for r in cur.fetchall()]
     cur.close(); conn.close()
@@ -3270,9 +3282,11 @@ def _dispatch_board_data(company_key, target_date):
                    WHERE wo2.customer_id = wo.customer_id AND wo2.id != wo.id
                      AND wo2.status IN ('Completed', 'Invoiced') AND wo2.deleted_at IS NULL
                      AND wo2.start_date < wo.start_date
-               )) AS is_new_customer
+               )) AS is_new_customer,
+               COALESCE(cf.is_delinquent, FALSE) AS is_delinquent
         FROM work_orders wo
         LEFT JOIN customers c ON c.id = wo.customer_id
+        LEFT JOIN customer_flags cf ON cf.customer_id = wo.customer_id
         WHERE wo.deleted_at IS NULL AND wo.start_date = %s
         ORDER BY wo.scheduled_start NULLS LAST, wo.id
     """, (target_date,))
@@ -3299,6 +3313,7 @@ def _dispatch_board_data(company_key, target_date):
             'customer_name': w['customer_name'], 'status': w['status'],
             'priority': w['priority'], 'has_equipment': w['is_extraction'],
             'equipment_incomplete': w['equipment_incomplete'], 'is_new_customer': w['is_new_customer'],
+            'is_delinquent': w['is_delinquent'],
             'techs': techs_by_wo.get(w['id'], []),
             'scheduled_start': w['scheduled_start'], 'duration_hours': duration,
         }
@@ -7576,6 +7591,277 @@ def report_tax_export_pdf(company_key, branding, all_companies, company_access):
     pdf_bytes = _tax_report_build_pdf(data, date_from, date_to, branding)
     return Response(pdf_bytes, mimetype='application/pdf',
                      headers={'Content-Disposition': f'attachment; filename="tax_report_{date_from_s}_to_{date_to_s}.pdf"'})
+
+
+# ============================================================================
+# Scheduled jobs (directive §3.5, Increment 2.5)
+#
+# No scheduler in the container -- these are invoked by host cron via
+# jobs.py (a thin CLI wrapper around the functions below), which runs
+# `docker compose exec app python jobs.py <subcommand>`. Every job writes a
+# job_runs row regardless of the master switch below, so the "Scheduled
+# jobs" panel on /settings/company always shows a real last-run timestamp
+# even while alerting is off.
+#
+# scheduled_alerts_enabled (company_settings, default FALSE) is the master
+# on/off switch Chris asked for (2026-09-19): the computational work here
+# (customer_flags, extraction day-count upkeep, Missed Today logging,
+# job_runs bookkeeping) always runs; only the actual email-sending steps
+# check this flag. Cron can be installed and left running with real
+# schedules while this stays off -- nothing sends until it's flipped on.
+# ============================================================================
+
+def _job_run_start(company_key, job_name):
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO job_runs (job_name, company_key, status) VALUES (%s, %s, 'running') RETURNING id
+    """, (job_name, company_key))
+    run_id = cur.fetchone()['id']
+    conn.commit(); cur.close(); conn.close()
+    return run_id
+
+
+def _job_run_finish(company_key, run_id, status, summary):
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE job_runs SET finished_at = CURRENT_TIMESTAMP, status = %s, summary = %s WHERE id = %s
+    """, (status, summary, run_id))
+    conn.commit(); cur.close(); conn.close()
+
+
+def _job_alerts_enabled_and_recipient(cur):
+    """(enabled, alert_email) for this company, from company_settings. A
+    company with alerting enabled but no alert_email configured yet is
+    treated as not-actionable (nowhere to send), not an error."""
+    cur.execute("SELECT scheduled_alerts_enabled, alert_email FROM company_settings WHERE deleted_at IS NULL LIMIT 1")
+    row = cur.fetchone()
+    if not row or not row['scheduled_alerts_enabled'] or not row['alert_email']:
+        return False, None
+    return True, row['alert_email']
+
+
+def _job_recompute_customer_flags(company_key):
+    """directive: is_delinquent, oldest_open_invoice_date, open_balance,
+    unapplied_credit, computed_at -- reusing the exact same
+    _customer_aging_summary/customer_unapplied_credit/DELINQUENT_DAYS_PAST_INVOICE
+    the billing page and A/R aging report already use, so this table can
+    never disagree with what the office sees live there."""
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM customers WHERE deleted_at IS NULL")
+    customer_ids = [r['id'] for r in cur.fetchall()]
+    today = date.today()
+    for cid in customer_ids:
+        _, total, oldest = _customer_aging_summary(cur, cid)
+        credit = customer_unapplied_credit(cur, cid)
+        delinquent = oldest is not None and (today - oldest).days > DELINQUENT_DAYS_PAST_INVOICE
+        cur.execute("""
+            INSERT INTO customer_flags (customer_id, is_delinquent, oldest_open_invoice_date,
+                open_balance, unapplied_credit, computed_at)
+            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (customer_id) DO UPDATE
+            SET is_delinquent = EXCLUDED.is_delinquent, oldest_open_invoice_date = EXCLUDED.oldest_open_invoice_date,
+                open_balance = EXCLUDED.open_balance, unapplied_credit = EXCLUDED.unapplied_credit,
+                computed_at = EXCLUDED.computed_at
+        """, (cid, delinquent, oldest, total, credit))
+    conn.commit(); cur.close(); conn.close()
+    return len(customer_ids)
+
+
+def _job_extraction_upkeep(company_key):
+    """extraction_day_count refresh (the column exists from an earlier
+    increment; this is the first thing that ever writes it) + Missed Today
+    logging for any Extraction Active job with no daily_log row for
+    yesterday (directive: 'write extraction_daily_log Missed Today rows for
+    active extraction WOs with no log entry for yesterday')."""
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+    cur.execute("""
+        SELECT id, extraction_started_at, followup_tech_username FROM work_orders
+        WHERE deleted_at IS NULL AND status = 'Extraction Active' AND extraction_started_at IS NOT NULL
+    """)
+    active = cur.fetchall()
+    missed_written = 0
+    for wo in active:
+        day_count = (today - wo['extraction_started_at']).days + 1
+        cur.execute("UPDATE work_orders SET extraction_day_count = %s WHERE id = %s", (day_count, wo['id']))
+        cur.execute("""
+            SELECT 1 FROM extraction_daily_log WHERE work_order_id = %s AND log_date = %s
+        """, (wo['id'], yesterday))
+        if not cur.fetchone() and wo['extraction_started_at'] <= yesterday:
+            cur.execute("""
+                INSERT INTO extraction_daily_log (work_order_id, log_date, extraction_status, tech_username, notes, created_by)
+                VALUES (%s, %s, 'Missed Today', %s, 'Auto-logged by nightly job: no check recorded.', 'jobs.py')
+            """, (wo['id'], yesterday, wo['followup_tech_username']))
+            missed_written += 1
+    conn.commit(); cur.close(); conn.close()
+    return len(active), missed_written
+
+
+def _job_escalation_check(company_key):
+    """Day 5+ escalation email -- one summary email per company, only when
+    the master switch is on and an alert_email is configured."""
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT wo.work_order_number, c.property_name AS customer_name, wo.extraction_started_at
+        FROM work_orders wo
+        LEFT JOIN customers c ON c.id = wo.customer_id
+        WHERE wo.deleted_at IS NULL AND wo.status = 'Extraction Active'
+          AND wo.extraction_started_at IS NOT NULL
+          AND (CURRENT_DATE - wo.extraction_started_at) + 1 >= %s
+    """, (EXTRACTION_ESCALATION_DAY,))
+    rows = cur.fetchall()
+    enabled, alert_email = _job_alerts_enabled_and_recipient(cur)
+    if rows and enabled:
+        branding = COMPANY_BRANDING.get(company_key, {})
+        lines = ''.join(
+            f"<li>{r['work_order_number']} — {r['customer_name'] or 'Internal Task'} "
+            f"(day {(date.today() - r['extraction_started_at']).days + 1})</li>"
+            for r in rows
+        )
+        _send_email_via_resend(
+            [alert_email], f"[{branding.get('name', company_key)}] {len(rows)} extraction job(s) at day 5+",
+            f"<p>The following extraction jobs have been active for 5 or more days:</p><ul>{lines}</ul>",
+            from_name=branding.get('name'),
+        )
+    cur.close(); conn.close()
+    return len(rows)
+
+
+def _job_uninvoiced_check(company_key):
+    """Completed (billable) WOs with no invoice, Completed for over an hour,
+    not already alerted (alert_sent_at dedupe). Always computed; email only
+    sent when the master switch is on."""
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT wo.id, wo.work_order_number, c.property_name AS customer_name,
+               (SELECT MAX(changed_at) FROM work_order_status_history
+                WHERE work_order_id = wo.id AND status = 'Completed') AS completed_at
+        FROM work_orders wo
+        LEFT JOIN customers c ON c.id = wo.customer_id
+        WHERE wo.deleted_at IS NULL AND wo.status = 'Completed' AND wo.customer_id IS NOT NULL
+          AND wo.alert_sent_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.work_order_id = wo.id AND i.deleted_at IS NULL)
+    """)
+    candidates = [r for r in cur.fetchall() if r['completed_at'] and
+                  (datetime.now() - r['completed_at']) > timedelta(hours=1)]
+    enabled, alert_email = _job_alerts_enabled_and_recipient(cur)
+    if enabled:
+        branding = COMPANY_BRANDING.get(company_key, {})
+        for r in candidates:
+            _send_email_via_resend(
+                [alert_email], f"[{branding.get('name', company_key)}] Uninvoiced: {r['work_order_number']}",
+                f"<p>{r['work_order_number']} ({r['customer_name'] or 'Internal Task'}) has been Completed "
+                f"for over an hour and has no invoice yet.</p>",
+                from_name=branding.get('name'),
+            )
+            cur.execute("UPDATE work_orders SET alert_sent_at = CURRENT_TIMESTAMP WHERE id = %s", (r['id'],))
+    conn.commit(); cur.close(); conn.close()
+    return len(candidates)
+
+
+def _job_eod_escalation(company_key):
+    """5pm digest: every still-uninvoiced Completed WO, not just the ones
+    that haven't already been individually alerted (this is a summary, not
+    a per-WO dedupe list) -- one email when the switch is on."""
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT wo.work_order_number, c.property_name AS customer_name
+        FROM work_orders wo
+        LEFT JOIN customers c ON c.id = wo.customer_id
+        WHERE wo.deleted_at IS NULL AND wo.status = 'Completed' AND wo.customer_id IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.work_order_id = wo.id AND i.deleted_at IS NULL)
+        ORDER BY wo.work_order_number
+    """)
+    rows = cur.fetchall()
+    enabled, alert_email = _job_alerts_enabled_and_recipient(cur)
+    if rows and enabled:
+        branding = COMPANY_BRANDING.get(company_key, {})
+        lines = ''.join(f"<li>{r['work_order_number']} — {r['customer_name'] or 'Internal Task'}</li>" for r in rows)
+        _send_email_via_resend(
+            [alert_email], f"[{branding.get('name', company_key)}] End of day: {len(rows)} uninvoiced job(s)",
+            f"<p>Still uninvoiced at end of day:</p><ul>{lines}</ul>",
+            from_name=branding.get('name'),
+        )
+    cur.close(); conn.close()
+    return len(rows)
+
+
+def job_nightly(company_key):
+    run_id = _job_run_start(company_key, 'nightly')
+    try:
+        n_customers = _job_recompute_customer_flags(company_key)
+        n_active, n_missed = _job_extraction_upkeep(company_key)
+        n_escalated = _job_escalation_check(company_key)
+        summary = (
+            f"customer_flags recomputed for {n_customers} customers; "
+            f"{n_active} active extraction job(s) upkept, {n_missed} Missed Today row(s) written; "
+            f"{n_escalated} job(s) at day 5+ escalation. "
+            f"Customer ratings (§4.2) and dormancy alerts (§4.1) skipped -- not built yet."
+        )
+        _job_run_finish(company_key, run_id, 'success', summary)
+        return summary
+    except Exception as e:
+        _job_run_finish(company_key, run_id, 'failed', f'{type(e).__name__}: {e}')
+        raise
+
+
+def job_uninvoiced(company_key):
+    run_id = _job_run_start(company_key, 'uninvoiced')
+    try:
+        n = _job_uninvoiced_check(company_key)
+        summary = f"{n} uninvoiced Completed job(s) found."
+        _job_run_finish(company_key, run_id, 'success', summary)
+        return summary
+    except Exception as e:
+        _job_run_finish(company_key, run_id, 'failed', f'{type(e).__name__}: {e}')
+        raise
+
+
+def job_eod_escalation(company_key):
+    run_id = _job_run_start(company_key, 'eod_escalation')
+    try:
+        n = _job_eod_escalation(company_key)
+        summary = f"{n} still-uninvoiced job(s) in the end-of-day digest."
+        _job_run_finish(company_key, run_id, 'success', summary)
+        return summary
+    except Exception as e:
+        _job_run_finish(company_key, run_id, 'failed', f'{type(e).__name__}: {e}')
+        raise
+
+
+def job_weekly_sales_report(company_key):
+    """No sales CRM exists yet (Stage 3) -- this subcommand exists so cron
+    can call it without erroring, and records why it did nothing."""
+    run_id = _job_run_start(company_key, 'weekly_sales_report')
+    _job_run_finish(company_key, run_id, 'skipped', 'Sales CRM not built yet (Stage 3) -- nothing to report.')
+    return 'skipped'
+
+
+@app.route('/<company_key>/settings/company/scheduled-alerts', methods=['POST'])
+@login_required
+@company_access_required
+def settings_scheduled_alerts_toggle(company_key):
+    if session.get('user_role') != 'admin':
+        abort(403)
+    enabled = request.form.get('scheduled_alerts_enabled') == 'on'
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE company_settings SET scheduled_alerts_enabled = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE deleted_at IS NULL
+    """, (enabled, session.get('username')))
+    conn.commit(); cur.close(); conn.close()
+    flash(f"Scheduled email alerts {'enabled' if enabled else 'disabled'}.", 'success')
+    return redirect(f'/{company_key}/settings/company')
+
 
 # ============================================================================
 # Run
