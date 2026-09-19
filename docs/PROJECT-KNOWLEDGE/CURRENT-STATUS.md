@@ -24,7 +24,7 @@ reporting until FieldKit's billing is complete.
 | Billing page | Minimal v1 only — customer list + billing-contact readiness + CSV export. No balances/aging/statements. |
 | `tax_rates` | Built, effective-dated (migration 009), `/settings/tax` UI live. 101 rows (NC) in GAG/KC/CTS, 0 in Kleanit SF. |
 | `company_settings` | Built (migration 009), `/settings/company` UI live. One seeded row per DB (`company_name` only; everything else NULL pending Chris/Michele). |
-| Invoice engine | Receivable/version schema + full UI (1.2/1.3) + payments (1.4, migration 011): record/apply/unapply/void/refund, invoice_adjustments, unapplied-credit badges, Record Payment modal with paid-in-full celebration. No PDF/statements/email/portal yet (1.5–1.8). Zero real invoice/payment rows in production yet (only test fixtures, created and cleaned up by each smoke test). |
+| Invoice engine | Receivable/version schema + full UI (1.2/1.3) + payments (1.4) + PDF (1.5, migration 012): `generate_invoice_pdf()`, byte-for-byte reproducible once hardened (verified by smoke test, not assumed), no logo yet. No statements/email/portal yet (1.6–1.8). Zero real invoice/payment rows in production yet (only test fixtures, created and cleaned up by each smoke test). |
 | `customer_compliance_portals` | Table exists, 0 rows, no UI. |
 | Dispatch, extraction queue, reports, estimates, sales CRM, company settings, payment methods, tax settings UI, tags, dashboard stats | Not built |
 
@@ -36,8 +36,9 @@ production databases directly, not taken on faith from either doc.
 Following `docs/FIELDKIT_BUILD_DIRECTIVE_2026-09.md` stage by stage. Stage 0 complete.
 **Stage 1 — Finish invoicing & billing**: Increments 1.1 (tax rates + company
 settings), 1.2 (receivable/version invoice refactor), 1.3 (create invoice from work
-order + invoice UI), and 1.4 (payments/applications/adjustments/credits) complete.
-Next: Increment 1.5 (invoice PDF).
+order + invoice UI), 1.4 (payments/applications/adjustments/credits), and 1.5
+(invoice PDF) complete. Next: Increment 1.6 (statements, replacing the Phase 0
+generator).
 
 Decisions Chris has already made for this build (delinquent threshold = 90 days past
 invoice date, FL tax left empty/exempt for Kleanit SF, SF-import receivables excluded

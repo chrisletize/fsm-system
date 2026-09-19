@@ -3,7 +3,7 @@ FieldKit Flask Application
 Phase 1: Authentication & Company-in-URL Architecture
 """
 
-from flask import Flask, request, session, jsonify, render_template, redirect, url_for, abort, flash
+from flask import Flask, request, session, jsonify, render_template, redirect, url_for, abort, flash, Response
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import bcrypt
@@ -13,6 +13,14 @@ from functools import wraps
 import json
 import math
 import os
+import re
+import io
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.lib.enums import TA_RIGHT
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', secrets.token_hex(32))
@@ -1453,6 +1461,7 @@ def _save_company_settings(company_key):
         'business_hours_end':    request.form.get('business_hours_end') or '17:00',
         'remit_to_text':         request.form.get('remit_to_text', '').strip() or None,
         'invoice_footer_text':   request.form.get('invoice_footer_text', '').strip() or None,
+        'extraction_explainer_text': request.form.get('extraction_explainer_text', '').strip() or None,
     }
 
     username = session.get('username')
@@ -1464,7 +1473,7 @@ def _save_company_settings(company_key):
             state=%s, zip=%s, phone=%s, email_from_name=%s, email_reply_to=%s,
             alert_email=%s, default_tax_county=%s, tax_exempt_by_default=%s,
             state_base_rate=%s, business_hours_start=%s, business_hours_end=%s,
-            remit_to_text=%s, invoice_footer_text=%s,
+            remit_to_text=%s, invoice_footer_text=%s, extraction_explainer_text=%s,
             updated_at=CURRENT_TIMESTAMP, updated_by=%s
         WHERE deleted_at IS NULL
     """, (fields['company_name'], fields['legal_name'], fields['address'], fields['address_2'],
@@ -1472,7 +1481,8 @@ def _save_company_settings(company_key):
           fields['email_from_name'], fields['email_reply_to'], fields['alert_email'],
           fields['default_tax_county'], fields['tax_exempt_by_default'], fields['state_base_rate'],
           fields['business_hours_start'], fields['business_hours_end'],
-          fields['remit_to_text'], fields['invoice_footer_text'], username))
+          fields['remit_to_text'], fields['invoice_footer_text'],
+          fields['extraction_explainer_text'], username))
     conn.commit(); cur.close(); conn.close()
     return None
 
@@ -1821,7 +1831,7 @@ def _reissue_invoice(cur, company_key, old_invoice_id, username):
     invoice_date is preserved from the source (the work's effective date,
     Pattern 4) and remains editable while Live."""
     cur.execute("""
-        SELECT work_order_id, customer_id, service_location_id, invoice_date, notes
+        SELECT work_order_id, customer_id, service_location_id, invoice_date, notes, work_site_label
         FROM invoices WHERE id = %s AND deleted_at IS NULL
     """, (old_invoice_id,))
     src = cur.fetchone()
@@ -1837,11 +1847,11 @@ def _reissue_invoice(cur, company_key, old_invoice_id, username):
     cur.execute("""
         INSERT INTO invoices
             (invoice_number, work_order_id, customer_id, service_location_id,
-             invoice_date, notes, reissue_of_invoice_id, source, created_by, updated_by)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, 'fieldkit', %s, %s)
+             invoice_date, notes, work_site_label, reissue_of_invoice_id, source, created_by, updated_by)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'fieldkit', %s, %s)
         RETURNING id
     """, (new_number, src['work_order_id'], src['customer_id'], src['service_location_id'],
-          src['invoice_date'], src['notes'], old_invoice_id, username, username))
+          src['invoice_date'], src['notes'], src['work_site_label'], old_invoice_id, username, username))
     new_invoice_id = cur.fetchone()['id']
 
     cur.execute("""
@@ -3233,14 +3243,21 @@ def _create_invoice_from_wo(cur, company_key, wo, username):
     tax_county, cust_taxable, loc_taxable = _resolve_invoice_tax_context(
         cur, wo['customer_id'], wo['service_location_id'])
 
+    # Snapshotted (not live-joined from work_orders) so a hardened+ invoice's
+    # PDF never has to read the work order — see migration 012's header.
+    cur.execute("SELECT work_site_label FROM work_orders WHERE id = %s", (wo['id'],))
+    wo_row = cur.fetchone()
+    work_site_label = wo_row['work_site_label'] if wo_row else None
+
     new_number = _next_invoice_number(cur, company_key)
     cur.execute("""
         INSERT INTO invoices
             (invoice_number, work_order_id, customer_id, service_location_id,
-             invoice_date, source, created_by, updated_by)
-        VALUES (%s, %s, %s, %s, CURRENT_DATE, 'fieldkit', %s, %s)
+             invoice_date, source, work_site_label, created_by, updated_by)
+        VALUES (%s, %s, %s, %s, CURRENT_DATE, 'fieldkit', %s, %s, %s)
         RETURNING id
-    """, (new_number, wo['id'], wo['customer_id'], wo['service_location_id'], username, username))
+    """, (new_number, wo['id'], wo['customer_id'], wo['service_location_id'],
+          work_site_label, username, username))
     invoice_id = cur.fetchone()['id']
 
     cur.execute("""
@@ -3723,6 +3740,304 @@ def invoice_reissue(company_key, invoice_id):
 @company_access_required
 def invoice_revise(company_key, invoice_id):
     return _do_invoice_transition(company_key, invoice_id, 'Revise', request.form.get('revision_reason'))
+
+# ============================================================================
+# Invoice PDF  (admin + manager + office)
+#   Generated on demand, nothing stored to disk. A Hardened/Sent/Superseded
+#   version reads ONLY invoices/invoice_versions/invoice_version_line_items
+#   (plus customers/service_locations/company_settings/payment_applications,
+#   which are never mutated in a way that would change a past invoice's
+#   printed content) — never work_orders or catalog_items — so re-downloading
+#   the same version's PDF next year is byte-for-byte identical. A Live
+#   version additionally live-resolves equipment ordinals (not frozen yet)
+#   via _resolve_equipment_labels, which does read catalog_items; that's fine
+#   because a Live version's PDF has no reproducibility guarantee to keep.
+# ============================================================================
+
+def _parse_payment_terms_days(terms):
+    """'Net 30' -> 30, 'Net 15' -> 15, 'Due on Receipt' -> 0, unknown/unset -> 30."""
+    if not terms:
+        return 30
+    t = terms.strip().lower()
+    if 'receipt' in t:
+        return 0
+    m = re.search(r'(\d+)', t)
+    return int(m.group(1)) if m else 30
+
+
+def generate_invoice_pdf(company_key, version_id):
+    """Render one invoice version to PDF bytes. Returns None if the version
+    doesn't exist."""
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT iv.*, i.invoice_number, i.invoice_date, i.work_site_label, i.wtn_po_number,
+               i.customer_id, i.service_location_id,
+               c.property_name AS customer_name, c.address AS customer_address,
+               c.address_2 AS customer_address_2, c.city AS customer_city,
+               c.state AS customer_state, c.zip AS customer_zip, c.payment_terms,
+               sl.location_name, sl.address AS location_address, sl.city AS location_city,
+               sl.state AS location_state, sl.zip AS location_zip
+        FROM invoice_versions iv
+        JOIN invoices i ON i.id = iv.invoice_id
+        JOIN customers c ON c.id = i.customer_id
+        LEFT JOIN service_locations sl ON sl.id = i.service_location_id
+        WHERE iv.id = %s AND iv.deleted_at IS NULL
+    """, (version_id,))
+    data = cur.fetchone()
+    if not data:
+        cur.close(); conn.close()
+        return None
+
+    cur.execute("""
+        SELECT id, description, resolved_label, quantity, unit_price, total, is_taxable,
+               deployed_at, retrieved_at
+        FROM invoice_version_line_items
+        WHERE version_id = %s AND deleted_at IS NULL
+        ORDER BY sort_order, id
+    """, (version_id,))
+    lines = cur.fetchall()
+
+    live_labels = {}
+    if data['state'] == 'Live':
+        live_labels = _resolve_equipment_labels(cur, version_id)
+
+    cur.execute("SELECT * FROM company_settings WHERE deleted_at IS NULL LIMIT 1")
+    settings = cur.fetchone() or {}
+
+    applications = []
+    if _payments_tables_exist(cur):
+        cur.execute("""
+            SELECT amount, applied_date FROM payment_applications
+            WHERE invoice_id = %s ORDER BY id
+        """, (data['invoice_id'],))
+        applications = cur.fetchall()
+
+    balance = invoice_balance(cur, data['invoice_id'])
+    cur.close(); conn.close()
+
+    branding = COMPANY_BRANDING.get(company_key, {})
+    primary_hex = branding.get('color_primary', '#2C2C2C')
+    primary = colors.HexColor(primary_hex)
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter,
+                             rightMargin=0.6*inch, leftMargin=0.6*inch,
+                             topMargin=0.6*inch, bottomMargin=0.6*inch,
+                             pageCompression=0)  # uncompressed content streams; a one-page
+                                                  # invoice is tiny either way, and this keeps
+                                                  # the output diffable/greppable for testing
+    # ReportLab stamps CreationDate/ModDate/a fresh document ID by default,
+    # which would make two calls for the SAME hardened version produce
+    # different bytes purely from timestamps — defeating the "byte-for-byte
+    # reproducible" requirement. `invariant` fixes those to constant
+    # placeholder values so identical content really does produce identical
+    # bytes.
+    doc.invariant = 1
+    styles = getSampleStyleSheet()
+    normal = styles['Normal']
+    small  = ParagraphStyle('small', parent=normal, fontSize=8, textColor=colors.grey)
+    h2     = ParagraphStyle('h2', parent=styles['Heading2'], textColor=primary, fontSize=11)
+
+    elements = []
+
+    company_name = settings.get('legal_name') or settings.get('company_name') or branding.get('name', company_key)
+    company_lines = [f'<b>{company_name}</b>']
+    if settings.get('address'):
+        addr = settings['address']
+        if settings.get('address_2'):
+            addr += ', ' + settings['address_2']
+        company_lines.append(addr)
+    city_line = ', '.join(x for x in [settings.get('city'), settings.get('state')] if x)
+    if city_line or settings.get('zip'):
+        company_lines.append((city_line + ' ' + (settings.get('zip') or '')).strip())
+    if settings.get('phone'):
+        company_lines.append(settings['phone'])
+
+    rev_bit = f' Rev {data["revision_number"]}' if data['revision_number'] > 0 else ''
+    header_data = [[
+        Paragraph('<br/>'.join(company_lines), normal),
+        Paragraph(
+            f'<para alignment="right"><font size="22" color="{primary_hex}"><b>INVOICE</b></font><br/>'
+            f'{data["invoice_number"]}{rev_bit}</para>', normal
+        ),
+    ]]
+    header_table = Table(header_data, colWidths=[3.5*inch, 3.4*inch])
+    header_table.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'TOP')]))
+    elements.append(header_table)
+    elements.append(Spacer(1, 0.2*inch))
+
+    due_days = _parse_payment_terms_days(data.get('payment_terms'))
+    due_date = data['invoice_date'] + timedelta(days=due_days)
+
+    meta_rows = [['Invoice Date', str(data['invoice_date'])], ['Due Date', str(due_date)]]
+    if data.get('wtn_po_number'):
+        meta_rows.append(['PO / WTN', data['wtn_po_number']])
+
+    cust_lines = [f"<b>{data['customer_name']}</b>"]
+    if data.get('location_name') or data.get('location_address'):
+        if data.get('location_name'):
+            cust_lines.append(data['location_name'])
+        if data.get('location_address'):
+            cust_lines.append(data['location_address'])
+        loc_city_line = ', '.join(x for x in [data.get('location_city'), data.get('location_state')] if x)
+        if loc_city_line:
+            cust_lines.append(loc_city_line + (' ' + data['location_zip'] if data.get('location_zip') else ''))
+    elif data.get('customer_address'):
+        cust_lines.append(data['customer_address'])
+    if data.get('work_site_label'):
+        cust_lines.append(f"Site: {data['work_site_label']}")
+
+    info_data = [[
+        Paragraph('<br/>'.join(l for l in cust_lines if l), normal),
+        Table([[k, v] for k, v in meta_rows], colWidths=[1.1*inch, 1.6*inch],
+              style=TableStyle([('FONTSIZE', (0, 0), (-1, -1), 9), ('ALIGN', (1, 0), (1, -1), 'RIGHT')])),
+    ]]
+    info_table = Table(info_data, colWidths=[3.5*inch, 3.4*inch])
+    info_table.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'TOP')]))
+    elements.append(info_table)
+    elements.append(Spacer(1, 0.25*inch))
+
+    # ---- Line items ----
+    # Per-day equipment lines show their own day math ("Deployed ... - Retrieved
+    # ...") in the description rather than a registry unit name — each row is
+    # already one physical unit (the resolved_label ordinal handles "which
+    # one"), so there is no single grouped "N units" figure to show here; see
+    # docs/DECISIONS-MADE-DURING-BUILD.md for why this departs from the
+    # directive's literal "3 units x 4 days" example.
+    has_equipment_line = False
+    table_data = [['Description', 'Qty', 'Unit', 'Price', 'Total']]
+    for li in lines:
+        is_equipment = li['deployed_at'] is not None
+        if is_equipment:
+            has_equipment_line = True
+        label = li['resolved_label'] or live_labels.get(li['id']) or li['description'] or ''
+        desc_parts = [f'<font size="9">{label}</font>']
+        if is_equipment:
+            if li['retrieved_at']:
+                desc_parts.append(f'<font size="8" color="grey">Deployed {li["deployed_at"]} &ndash; Retrieved {li["retrieved_at"]}</font>')
+            else:
+                desc_parts.append(f'<font size="8" color="grey">Deployed {li["deployed_at"]} (in progress)</font>')
+        elif li['description'] and li['description'] != label:
+            desc_parts.append(f'<font size="8" color="grey">{li["description"]}</font>')
+        unit = 'day' if is_equipment else 'ea'
+        qty = li['quantity'] if li['quantity'] is not None else '—'
+        total_disp = f"${li['total']:.2f}" if li['total'] is not None else 'TBD'
+        table_data.append([
+            Paragraph('<br/>'.join(desc_parts), normal),
+            str(qty), unit, f"${li['unit_price']:.2f}", total_disp,
+        ])
+
+    line_table = Table(table_data, colWidths=[3.2*inch, 0.6*inch, 0.6*inch, 0.9*inch, 0.9*inch])
+    line_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), primary),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTSIZE', (0, 0), (-1, 0), 9),
+        ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+        ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#dddddd')),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('TOPPADDING', (0, 0), (-1, -1), 5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+    ]))
+    elements.append(line_table)
+    elements.append(Spacer(1, 0.15*inch))
+
+    # ---- Totals ----
+    totals_rows = [['Subtotal', f"${data['subtotal']:.2f}"]]
+    if data['total'] is not None:
+        tax_label = f"Tax ({data['tax_rate_pct'] or 0}%"
+        if data.get('tax_county'):
+            tax_label += f" — {data['tax_county']}"
+        tax_label += ')'
+        totals_rows.append([tax_label, f"${data['tax_total'] or 0:.2f}"])
+        totals_rows.append(['Total', f"${data['total']:.2f}"])
+        if applications:
+            paid_total = sum(float(a['amount']) for a in applications)
+            totals_rows.append(['Payments Applied', f"-${paid_total:.2f}"])
+        if balance is not None:
+            totals_rows.append(['Balance Due', f"${balance:.2f}"])
+
+    totals_table = Table(totals_rows, colWidths=[5.3*inch, 0.9*inch])
+    totals_table.setStyle(TableStyle([
+        ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+        ('LINEABOVE', (0, -1), (-1, -1), 0.75, colors.black),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+    ]))
+    elements.append(totals_table)
+    elements.append(Spacer(1, 0.25*inch))
+
+    if has_equipment_line and settings.get('extraction_explainer_text'):
+        elements.append(Paragraph('Drying &amp; Monitoring Process', h2))
+        elements.append(Paragraph(settings['extraction_explainer_text'], small))
+        elements.append(Spacer(1, 0.2*inch))
+
+    if data.get('notes_to_customer'):
+        elements.append(Paragraph(data['notes_to_customer'], normal))
+        elements.append(Spacer(1, 0.15*inch))
+
+    if settings.get('remit_to_text'):
+        elements.append(Paragraph('Remit To', h2))
+        elements.append(Paragraph(settings['remit_to_text'].replace('\n', '<br/>'), small))
+        elements.append(Spacer(1, 0.15*inch))
+
+    if settings.get('invoice_footer_text'):
+        elements.append(Spacer(1, 0.2*inch))
+        elements.append(Paragraph(settings['invoice_footer_text'].replace('\n', '<br/>'), small))
+
+    doc.build(elements)
+    return buf.getvalue()
+
+
+@app.route('/<company_key>/invoices/<int:invoice_id>/pdf')
+@login_required
+@company_access_required
+def invoice_pdf(company_key, invoice_id):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT current_version_id, invoice_number FROM invoices
+        WHERE id = %s AND deleted_at IS NULL
+    """, (invoice_id,))
+    inv = cur.fetchone()
+    cur.close(); conn.close()
+    if not inv or not inv['current_version_id']:
+        abort(404)
+    pdf_bytes = generate_invoice_pdf(company_key, inv['current_version_id'])
+    if pdf_bytes is None:
+        abort(404)
+    return Response(pdf_bytes, mimetype='application/pdf',
+                     headers={'Content-Disposition': f'inline; filename="{inv["invoice_number"]}.pdf"'})
+
+
+@app.route('/<company_key>/invoices/<int:invoice_id>/versions/<int:version_id>/pdf')
+@login_required
+@company_access_required
+def invoice_version_pdf(company_key, invoice_id, version_id):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT iv.id, i.invoice_number, iv.revision_number
+        FROM invoice_versions iv JOIN invoices i ON i.id = iv.invoice_id
+        WHERE iv.id = %s AND iv.invoice_id = %s AND iv.deleted_at IS NULL
+    """, (version_id, invoice_id))
+    row = cur.fetchone()
+    cur.close(); conn.close()
+    if not row:
+        abort(404)
+    pdf_bytes = generate_invoice_pdf(company_key, version_id)
+    if pdf_bytes is None:
+        abort(404)
+    filename = row['invoice_number'] + (f'-rev{row["revision_number"]}' if row['revision_number'] else '') + '.pdf'
+    return Response(pdf_bytes, mimetype='application/pdf',
+                     headers={'Content-Disposition': f'inline; filename="{filename}"'})
 
 # ============================================================================
 # Payments, applications, adjustments  (admin + manager + office)

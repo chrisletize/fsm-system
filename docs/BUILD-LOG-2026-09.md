@@ -278,3 +278,54 @@ elsewhere" flow (from payment detail or an invoice's Apply Existing Credit modal
 together cover the directive's dispositions without that extra UI.
 
 Proceeding to Increment 1.5 (invoice PDF).
+
+---
+
+## 2026-09-19 — Stage 1, Increment 1.5 — Invoice PDF
+
+**What:**
+- `reportlab==5.0.1` / `openpyxl==3.1.5` added to `requirements.txt`, pinned to the
+  versions actually installed in the statements stack's container (its own
+  `requirements.txt` has them unpinned — checked the real installed version rather
+  than trusting an unpinned requirements file). Required a `docker compose up -d
+  --build` (image rebuild), not a plain restart.
+- `generate_invoice_pdf(company_key, version_id)`: company block (from
+  `company_settings`, no logo — none exist yet, see D-026), INVOICE + number (+ Rev N),
+  invoice date, due date (parsed from the customer's `payment_terms`), customer +
+  service location + work-site label + PO/WTN, line table, subtotal/tax/total/
+  payments-applied/balance-due, water-extraction explainer paragraph when any
+  per-day-equipment line is present, notes-to-customer, remit-to, footer text.
+- New `invoices.work_site_label` (migration 012, alongside
+  `company_settings.extraction_explainer_text`) — snapshotted at invoice creation so
+  the byte-for-byte guarantee doesn't require reading `work_orders` (D-022).
+  `extraction_explainer_text` also exposed on `/settings/company`.
+- `GET /invoices/<id>/pdf` (current version) and
+  `GET /invoices/<id>/versions/<vid>/pdf` (any specific version — wired into the
+  revision history list for superseded versions). "Download PDF" on invoice detail.
+- `doc.invariant = 1` + `pageCompression=0` so a hardened version's PDF is genuinely
+  byte-identical across repeated renders, not just visually similar (D-025).
+
+**Migration:** 012 (`012_extraction_explainer_text.sql`, extended mid-increment before
+commit to also add `invoices.work_site_label` — see the file's own header for why),
+applied to all four DBs. Pre-migration backups in `~/db-backups/2026-09-19c/`.
+
+**Commit:** (pending — migration file, `requirements.txt`, `app.py`, two templates,
+smoke test, this entry, decisions log).
+
+**Smoke test:** `tests/smoke_invoice_pdf.py` — 22/22 checks. Due-date parsing for
+Net 30/15/Due-on-Receipt/unknown/blank; a Live version's PDF renders and is served
+correctly over HTTP; **the byte-for-byte claim is actually tested, not assumed** —
+hardens a version, renders it twice and diffs the bytes, then mutates the SOURCE
+catalog item's name AND the source work order's site label and re-renders, confirming
+the hardened PDF is unchanged and never shows the post-harden edit; confirms the
+extraction explainer appears and equipment lines show deployed/retrieved day math
+(never the internal registry unit name — created a throwaway equipment unit for this,
+since GAG's real equipment registry is genuinely empty in production); the
+version-scoped PDF route matches direct generation. All four prior smoke tests
+re-run clean as regressions.
+
+**Deferred:** no logo images (D-026, waiting on real files from Chris); PDF is
+generated on every request, never cached/stored (matches the directive's "store
+nothing on disk permanently").
+
+Proceeding to Increment 1.6 (statements, replacing the Phase 0 generator).

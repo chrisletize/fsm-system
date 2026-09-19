@@ -224,6 +224,53 @@ shouldn't do. The badge is on customer detail, invoice detail, and the work orde
 form (via the existing customer-context AJAX endpoint) — the three pages from that
 list that aren't about to be rebuilt wholesale.
 
+D-022 — [MODEL] Increment 1.5: `invoices.work_site_label` (migration 012) is a new
+snapshotted column, populated at invoice creation (and carried forward on reissue)
+from the source work order. The PDF spec requires showing the work-site label, but
+also requires a hardened/sent version's PDF to never read `work_orders` (so it stays
+byte-for-byte reproducible even if the WO is edited later). Since Increment 1.2/1.3
+never captured this anywhere on the invoice, closing the gap needed a new column —
+same reasoning as why `tax_county` already lives on `invoice_versions` rather than
+being live-joined from the service location.
+
+D-023 — [DEFAULTED] The directive's PDF spec says per-day equipment lines should show
+"the machine-day math in the description ('3 units × 4 days')". This assumes a data
+shape (one combined line covering N identical units) that this codebase doesn't have —
+the July 2 design (`docs/FIELDKIT_REUSABLE_BRICKS.md`) deliberately gives each physical
+unit its own line item row with its own `deployed_at`/`retrieved_at`, distinguished by
+ordinal (`resolved_label`: "Set Dehu 1", "Set Dehu 2", ...). Built the closest faithful
+equivalent for the ACTUAL per-row model instead: each equipment line's description
+shows its own day math ("Deployed 09/15 – Retrieved 09/19"), never a "3 units ×"
+grouped figure that would misrepresent per-unit lines with different day counts as
+one uniform block.
+
+D-024 — [DEFAULTED] The PDF's line-table "Unit" column shows a generic `day` (for
+per-day equipment lines, detected from `deployed_at IS NOT NULL` — no catalog lookup
+needed) or `ea` (everything else), rather than the catalog item's real
+`unit_of_measure` ("hour", "sq ft", etc.). `invoice_version_line_items` never
+snapshotted `unit_of_measure` in migration 010, and joining `catalog_items` to fetch
+it live would violate the "don't read the catalog for a hardened version" rule for
+this one cosmetic label. The number that actually matters (unit_price × quantity =
+total) is unaffected — this only trades away a label's precision, not correctness.
+
+D-025 — [MODEL] `generate_invoice_pdf()` sets `doc.invariant = 1` and
+`pageCompression=0` on the ReportLab document. Without `invariant`, ReportLab stamps a
+fresh `CreationDate`/`ModDate`/document ID into every PDF it builds, which would make
+two renders of the exact same hardened version produce different bytes purely from
+timestamps — directly undermining the "byte-for-byte reproducible" requirement this
+increment exists to satisfy. `pageCompression=0` leaves content streams uncompressed;
+verified this actually matters (the smoke test's text-presence assertions initially
+failed against compressed output) and the size cost is negligible for a one-page
+invoice.
+
+D-026 — [SCOPE] The PDF has no logo image. `COMPANY_BRANDING`'s `logo_url` values
+(`/static/img/getagrip-logo.png`, etc.) don't correspond to any real files — this
+repo's `static/` directory doesn't exist at all (confirmed) beyond an empty
+`static/img/` the Dockerfile creates at build time. Rather than write logo-loading
+code with a "file doesn't exist" fallback path that would never once execute its
+happy path in production today, the PDF header is text-only (company name/address/
+phone from `company_settings`) until Chris supplies actual logo files.
+
 ---
 
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:
