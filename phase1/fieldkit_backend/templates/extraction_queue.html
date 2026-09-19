@@ -56,7 +56,7 @@
             <tr class="{% if r.escalated %}escalated-row{% endif %}">
                 <td><input type="checkbox" name="wo_ids" value="{{ r.id }}"></td>
                 <td>
-                    <a href="/{{ company_key }}/workorders/{{ r.id }}">{{ r.work_order_number }}</a> — {{ r.customer_name }}
+                    <a href="/{{ company_key }}/workorders/{{ r.id }}">{{ r.work_order_number }}</a> — {{ r.customer_name or 'Internal Task' }}
                     {% if r.equipment_incomplete %}<div class="incomplete-flag">Equipment not confirmed</div>{% endif %}
                 </td>
                 <td>{{ r.day_count }}{% if r.escalated %} <span style="color:#c0392b;">⚠</span>{% endif %}</td>

@@ -121,10 +121,17 @@
     <h2>Customer &amp; Location</h2>
     <div class="form-grid">
         <div class="form-group">
-            <label>Customer <span class="hint">(required)</span></label>
+            <div class="check-row">
+                <input type="checkbox" name="is_internal_task" id="chkInternalTask"
+                       {% if wo and wo.is_internal_task %}checked{% endif %}>
+                <label for="chkInternalTask">Internal task (no customer — supply run, equipment maintenance, etc.)</label>
+            </div>
+        </div>
+        <div class="form-group" id="customerFieldGroup">
+            <label>Customer <span class="hint" id="customerRequiredHint">(required)</span></label>
 {{ restricted_combo_field('customer_id', customers,
-                   wo.customer_id if wo else (prefill_customer_id or none),
-                   (wo.customer_name + ' (' + wo.customer_type + ')') if wo else (prefill_customer_name or ''),
+                   wo.customer_id if wo and wo.customer_id else (prefill_customer_id or none),
+                   (wo.customer_name + ' (' + wo.customer_type + ')') if (wo and wo.customer_name) else (prefill_customer_name or ''),
                    'Type customer name…', True, 'customerCombo') }}
             <span id="creditBadge" style="display:none; background:#fdecea; color:#c0392b; border-radius:8px;
                   padding:.2rem .6rem; font-size:.78rem; font-weight:600; margin-top:.3rem; width:fit-content;"></span>
@@ -832,6 +839,20 @@
     descRegen.addEventListener('click', () => regenDescription(true));
     document.getElementById('chkGated').addEventListener('change', () => regenDescription());
     document.getElementById('chkFollowup').addEventListener('change', () => regenDescription());
+
+    // Internal task: no customer to bill, so the customer combo stops being
+    // required (directive §3.4's Misc Task replacement) and its field is
+    // visibly de-emphasized rather than removed, so the office can still
+    // pick a customer later if a task turns out not to be internal after all.
+    function applyInternalTaskState() {
+        const isInternal = document.getElementById('chkInternalTask').checked;
+        const combo = document.getElementById('customerCombo');
+        const group = document.getElementById('customerFieldGroup');
+        combo.dataset.required = isInternal ? 'false' : 'true';
+        group.style.opacity = isInternal ? '.5' : '1';
+        document.getElementById('customerRequiredHint').textContent = isInternal ? '(optional)' : '(required)';
+    }
+    document.getElementById('chkInternalTask').addEventListener('change', applyInternalTaskState);
     document.getElementById('specialNotes').addEventListener('input', () => regenDescription());
 
     // ========================================================================
@@ -920,6 +941,7 @@
         if ((IS_EDIT || PREFILL_CUSTOMER_CONTEXT) && customerHidden.value) {
             loadCustomerContext(customerHidden.value, true);
         }
+        applyInternalTaskState();
         recalc();
     });
 </script>

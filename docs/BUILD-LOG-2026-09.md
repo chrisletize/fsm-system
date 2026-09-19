@@ -785,3 +785,54 @@ everywhere). All 11 prior smoke tests re-run clean as regressions.
 not built yet.
 
 Proceeding to Increment 2.4 (replacements for the retired tag concept).
+
+---
+
+## 2026-09-19 — Stage 2, Increment 2.4 — Replacements for the retired tag concept
+
+**What:** Directive §3.4 maps 8 ServiceFusion tags to first-class fields/derived
+badges. Six of the eight were either already satisfied by prior work or explicitly
+assigned to a later increment in the directive's own table (D-061) — only two needed
+real code this pass:
+
+- **Misc Task** (`is_internal_task`): `work_orders.customer_id` is now nullable,
+  gated by a DB CHECK constraint (`customer_id IS NOT NULL OR is_internal_task`) so
+  the rule holds regardless of code path, not just in `_save_work_order`. Every
+  `JOIN customers` on `work_orders` across the codebase (11 sites) became a LEFT
+  JOIN — see D-062 for why this is safe. WO form gets an "Internal task" checkbox
+  that relaxes the customer combo's required-ness via JS
+  (`data-required` toggle, since the combo bypasses native HTML5 validation).
+  Internal tasks: show as "Internal Task" everywhere a customer name would normally
+  render, can't be invoiced (guarded with a clear error, banner hidden entirely), and
+  show a header badge on WO detail.
+- **New Customer badge**: derived (`NOT EXISTS` a prior Completed/Invoiced WO for the
+  same customer with an earlier `start_date`), shown on the dispatch board (block +
+  popover) and WO detail header, per the directive.
+
+**Migration:** 019 (`019_internal_tasks.sql`: `customer_id` nullable +
+`is_internal_task` + CHECK constraint), applied to all four DBs. Pre-migration
+backups in `~/db-backups/2026-09-19j/`.
+
+**Commit:** (pending — migration file, `app.py`, `workorder_form.html`,
+`workorder_detail.html`, `workorder_list.html`, `dispatch.html`, `daysheet.html`,
+`jobs_report.html`, `extraction_queue.html`, smoke test, this entry, decisions log,
+status doc).
+
+**Smoke test:** `tests/smoke_tag_replacements.py` — 21/21 checks. Covers: creating an
+internal task through the real form with no customer; it appearing correctly (as
+"Internal Task") in the WO list and on the dispatch board with a null
+`customer_name` in the JSON; the WO detail badge and the invoice banner correctly
+hidden; an invoice attempt correctly blocked with zero invoices created; the New
+Customer badge appearing on a customer's first-ever job and correctly NOT appearing
+on their second job once the first is Completed, verified both on WO detail and via
+the dispatch data endpoint. Cleanup verified zero residue. All 12 prior smoke tests
+re-run clean as regressions — confirming the 11-site LEFT JOIN conversion didn't
+change behavior for any existing (always-has-a-customer) WO.
+
+**Deferred:** Callback (§4.4) and Delinquent Account (`customer_flags`, §3.5) — both
+explicitly later increments per the directive's own table, not scope creep out of
+2.4.
+
+This closes out Stage 2's increments that don't require host-level changes. Increment
+2.5 (nightly/periodic jobs) needs a host crontab installed under sudo — flagging for
+Chris before proceeding, per the directive's own installation instructions.

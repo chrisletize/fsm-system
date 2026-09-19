@@ -123,9 +123,10 @@ function showPopover(block, anchorEl) {
     if (block.priority && block.priority !== 'Normal') badges.push(block.priority);
     if (block.has_equipment) badges.push('💧 Extraction');
     if (block.equipment_incomplete) badges.push('⚠️ Equipment not confirmed');
+    if (block.is_new_customer) badges.push('🆕 New Customer');
     pop.innerHTML = `
         <h4>${block.work_order_number}</h4>
-        <div class="row">${block.customer_name}</div>
+        <div class="row">${block.customer_name || 'Internal Task'}</div>
         <div class="row">Status: ${block.status}</div>
         ${badges.length ? `<div class="row">${badges.join(' · ')}</div>` : ''}
         ${block.techs && block.techs.length ? `<div class="row">Techs: ${block.techs.join(', ')}</div>` : '<div class="row">Unassigned</div>'}
@@ -200,9 +201,9 @@ function renderDay(data) {
             div.style.background = row.color;
             div.draggable = true;
             div.dataset.woId = b.id;
-            const badges = [b.priority !== 'Normal' ? b.priority[0] : '', b.has_equipment ? '💧' : ''].filter(Boolean).join(' ');
+            const badges = [b.priority !== 'Normal' ? b.priority[0] : '', b.has_equipment ? '💧' : '', b.is_new_customer ? '🆕' : ''].filter(Boolean).join(' ');
             div.innerHTML = `<div><strong>${b.work_order_number}</strong> ${badges ? '<span class="badges">' + badges + '</span>' : ''}</div>
-                              <div>${b.customer_name}</div>
+                              <div>${b.customer_name || 'Internal Task'}</div>
                               <div class="resize-handle"></div>`;
             div.addEventListener('click', e => { e.stopPropagation(); showPopover(b, div); });
             div.addEventListener('dragstart', e => {
@@ -236,7 +237,7 @@ function renderDay(data) {
     const unschEl = document.getElementById('unscheduledList');
     if (data.unscheduled.length) {
         unschEl.innerHTML = data.unscheduled.map(b =>
-            `<a class="unsch-chip" href="/${companyKey}/workorders/${b.id}">${b.work_order_number} — ${b.customer_name}</a>`
+            `<a class="unsch-chip" href="/${companyKey}/workorders/${b.id}">${b.work_order_number} — ${b.customer_name || 'Internal Task'}</a>`
         ).join('');
     } else {
         unschEl.innerHTML = '<span style="color:#aaa;font-size:.8rem;">None.</span>';

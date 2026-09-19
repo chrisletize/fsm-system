@@ -58,7 +58,7 @@
             {% for r in g.rows %}
             <tr>
                 <td>{{ r.time_display or 'No time set' }}</td>
-                <td><a href="/{{ company_key }}/workorders/{{ r.id }}">{{ r.customer_name }}</a></td>
+                <td><a href="/{{ company_key }}/workorders/{{ r.id }}">{{ r.customer_name or 'Internal Task' }}</a></td>
                 <td>{{ r.address_display }}
                     {% if r.address_display %}<div class="maps-link"><a href="https://www.google.com/maps/search/?api=1&query={{ r.address_display|urlencode }}" target="_blank">Map</a></div>{% endif %}
                 </td>

@@ -52,7 +52,7 @@
                 <td><a href="/{{ company_key }}/workorders/{{ r.id }}">{{ r.work_order_number }}</a></td>
                 <td>{{ r.start_date or '—' }}</td>
                 <td>{{ r.status }}</td>
-                <td>{{ r.customer_name }}</td>
+                <td>{{ r.customer_name or 'Internal Task' }}</td>
                 <td class="num">{% if r.invoiced_total is not none %}${{ '{:,.2f}'.format(r.invoiced_total) }}{% else %}—{% endif %}</td>
             </tr>
             {% else %}

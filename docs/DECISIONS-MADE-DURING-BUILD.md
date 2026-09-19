@@ -582,6 +582,43 @@ CHECK constraint but nothing in the app sets them yet (reserved for a future mob
 tech app per the design docs), so including them in a filter dropdown today would
 offer a choice that can never match a real row.
 
+D-061 — [SCOPE] Increment 2.4's row-by-row mapping in the directive has 8 entries;
+only two needed real new work. Callback (§4.4) and Delinquent Account (§3.5's
+`customer_flags`) are deferred — they're explicitly assigned to later increments in
+the directive's own table, not part of 2.4. Residential (already derived from
+`customer_type`, nothing to add), Estimate/No-Charge (`status='No Charge'` already
+built), Water Extraction (`is_extraction`, built in 2.2), and Requires Follow-Up
+(`description_followup` + the follow-up-WO link, both built pre-2.2/in-2.2) were
+already satisfied by prior work — confirmed, not re-implemented. Only Misc Task
+(`is_internal_task`) and the New Customer badge were net-new for this increment.
+
+D-062 — [MODEL] `work_orders.customer_id` is now nullable, gated by
+`is_internal_task` (migration 019's CHECK constraint: `customer_id IS NOT NULL OR
+is_internal_task = TRUE` — enforced at the DB level, not just in `_save_work_order`,
+so no future code path can silently create an orphaned customer-less WO without the
+flag). Every `JOIN customers c ON c.id = wo.customer_id` in the codebase (11 sites:
+WO list, WO search, WO detail, WO edit, dispatch board, extraction queue, pickup-list
+PDF, day sheet, job activity report) was converted to LEFT JOIN in the same change —
+an INNER JOIN would have silently dropped every internal-task WO from every list,
+board, and report it should still appear on. This is safe for every existing row
+(LEFT JOIN is a strict superset of INNER JOIN's result set when the joined column is
+never NULL, which is true for 100% of pre-existing WOs), confirmed by the full
+12-file regression suite passing unchanged.
+
+D-063 — [SCOPE] An internal task cannot be invoiced (guarded in
+`workorder_invoice_new` with a clear flash error) since there's no customer to bill —
+the "Generate invoice now?" banner is hidden entirely for `is_internal_task` WOs on
+the detail page rather than shown and then failing on click.
+
+D-064 — [MODEL] "New Customer" (directive: "customer has no Completed WO before this
+one") is computed as `NOT EXISTS(...status IN ('Completed','Invoiced') AND
+start_date < this WO's start_date)`, using `start_date` for "before" (the same
+chronological field every other feature in this build anchors on) rather than
+insertion order or `created_at`. An internal task (no customer) is never flagged.
+Shown on the dispatch board (badge in the popover and inline on the block) and WO
+detail (header badge) per the directive; NOT added to the WO list page, which the
+directive doesn't mention for this badge.
+
 ---
 
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:

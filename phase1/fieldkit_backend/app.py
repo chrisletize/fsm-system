@@ -2440,9 +2440,15 @@ def _save_work_order(company_key, wo_id):
     equipment_incomplete   = request.form.get('equipment_incomplete') == 'on'
     followup_tech_username = request.form.get('followup_tech_username', '').strip() or None
     extraction_action       = request.form.get('extraction_action') or None
+    is_internal_task        = request.form.get('is_internal_task') == 'on'
 
-    if not customer_id:
+    # Misc Task (directive §3.4, retired-tag replacement): internal work with no
+    # billable customer. customer_id is only optional when explicitly flagged --
+    # the DB CHECK constraint (migration 019) backs this up independently.
+    if not customer_id and not is_internal_task:
         return None, 'Pick a customer from the list.'
+    if is_internal_task:
+        customer_id = None
     if status not in WO_OFFICE_STATUSES:
         return None, 'Invalid status.'
     if priority not in WO_PRIORITIES:
@@ -2517,29 +2523,35 @@ def _save_work_order(company_key, wo_id):
     conn = get_db_connection(company_key)
     cur  = conn.cursor()
     try:
-        # Validate customer + location + contact belong together.
-        cur.execute("SELECT id, customer_type FROM customers WHERE id = %s AND deleted_at IS NULL",
-                    (customer_id,))
-        cust = cur.fetchone()
-        if not cust:
-            return None, 'Pick a customer from the list.'
+        # Validate customer + location + contact belong together. Skipped
+        # entirely for an internal task -- there's no customer to validate
+        # against (is_internal_task already forced customer_id to None above).
         tax_county = None
-        if service_location_id:
-            cur.execute("""
-                SELECT id, county FROM service_locations
-                WHERE id = %s AND customer_id = %s AND deleted_at IS NULL
-            """, (service_location_id, customer_id))
-            loc = cur.fetchone()
-            if not loc:
-                return None, 'Service location does not belong to that customer.'
-            tax_county = loc['county']
-        if primary_contact_id:
-            cur.execute("""
-                SELECT id FROM customer_contacts
-                WHERE id = %s AND customer_id = %s
-            """, (primary_contact_id, customer_id))
-            if not cur.fetchone():
-                return None, 'Contact does not belong to that customer.'
+        if not is_internal_task:
+            cur.execute("SELECT id, customer_type FROM customers WHERE id = %s AND deleted_at IS NULL",
+                        (customer_id,))
+            cust = cur.fetchone()
+            if not cust:
+                return None, 'Pick a customer from the list.'
+            if service_location_id:
+                cur.execute("""
+                    SELECT id, county FROM service_locations
+                    WHERE id = %s AND customer_id = %s AND deleted_at IS NULL
+                """, (service_location_id, customer_id))
+                loc = cur.fetchone()
+                if not loc:
+                    return None, 'Service location does not belong to that customer.'
+                tax_county = loc['county']
+            if primary_contact_id:
+                cur.execute("""
+                    SELECT id FROM customer_contacts
+                    WHERE id = %s AND customer_id = %s
+                """, (primary_contact_id, customer_id))
+                if not cur.fetchone():
+                    return None, 'Contact does not belong to that customer.'
+        else:
+            service_location_id = None
+            primary_contact_id = None
 
         # scheduled_start is maintained here (not a generated column — see migration
         # 017's header comment): the board's single sort/position field, combining
@@ -2562,8 +2574,9 @@ def _save_work_order(company_key, wo_id):
                      catalog_estimated_duration_hours, duration_overridden,
                      parent_work_order_id, is_extraction, equipment_incomplete,
                      followup_tech_username, extraction_started_at, extraction_status,
+                     is_internal_task,
                      created_by, updated_by)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 RETURNING id
             """, (wo_number, customer_id, service_location_id, primary_contact_id,
                   status, work_site_label, auto_description,
@@ -2574,6 +2587,7 @@ def _save_work_order(company_key, wo_id):
                   catalog_duration_hours, duration_overridden,
                   parent_work_order_id, is_extraction, equipment_incomplete,
                   followup_tech_username, extraction_started_at, extraction_status_value,
+                  is_internal_task,
                   username, username))
             wo_id = cur.fetchone()['id']
         else:
@@ -2605,6 +2619,7 @@ def _save_work_order(company_key, wo_id):
                     parent_work_order_id=%s, is_extraction=%s, equipment_incomplete=%s,
                     followup_tech_username=%s, extraction_started_at=%s,
                     extraction_status=COALESCE(%s, extraction_status),
+                    is_internal_task=%s,
                     updated_at=CURRENT_TIMESTAMP, updated_by=%s
                 WHERE id=%s AND deleted_at IS NULL
             """, (customer_id, service_location_id, primary_contact_id,
@@ -2617,6 +2632,7 @@ def _save_work_order(company_key, wo_id):
                   parent_work_order_id, is_extraction, equipment_incomplete,
                   followup_tech_username, extraction_started_at,
                   extraction_status_value,
+                  is_internal_task,
                   username, wo_id))
 
         # ---- Line items: update by id, insert new, soft-delete missing. ----
@@ -2737,7 +2753,7 @@ def workorder_list(company_key, branding, all_companies, company_access):
                   AND li.equipment_unit_id IS NOT NULL
                   AND li.retrieved_at IS NULL) AS accruing_count
         FROM work_orders wo
-        JOIN customers c ON c.id = wo.customer_id
+        LEFT JOIN customers c ON c.id = wo.customer_id
         WHERE {where}
         ORDER BY wo.start_date DESC NULLS LAST, wo.id DESC
         LIMIT 200
@@ -2745,7 +2761,7 @@ def workorder_list(company_key, branding, all_companies, company_access):
     workorders = cur.fetchall()
     cur.execute(f"""
         SELECT COUNT(*) AS count
-        FROM work_orders wo JOIN customers c ON c.id = wo.customer_id
+        FROM work_orders wo LEFT JOIN customers c ON c.id = wo.customer_id
         WHERE {where}
     """, params)
     total = cur.fetchone()['count']
@@ -2796,7 +2812,7 @@ def workorders_search(company_key):
                   AND li.equipment_unit_id IS NOT NULL
                   AND li.retrieved_at IS NULL)::int AS accruing_count
         FROM work_orders wo
-        JOIN customers c ON c.id = wo.customer_id
+        LEFT JOIN customers c ON c.id = wo.customer_id
         WHERE {where}
         ORDER BY wo.start_date DESC NULLS LAST, wo.id DESC
         LIMIT 200
@@ -2804,7 +2820,7 @@ def workorders_search(company_key):
     rows = cur.fetchall()
     cur.execute(f"""
         SELECT COUNT(*) AS count
-        FROM work_orders wo JOIN customers c ON c.id = wo.customer_id
+        FROM work_orders wo LEFT JOIN customers c ON c.id = wo.customer_id
         WHERE {where}
     """, params)
     total = cur.fetchone()['count']
@@ -2919,9 +2935,15 @@ def workorder_detail(company_key, wo_id, branding, all_companies, company_access
                sl.location_name, sl.address AS location_address,
                sl.city AS location_city, sl.state AS location_state,
                cc.first_name AS contact_first, cc.last_name AS contact_last,
-               cc.title AS contact_title
+               cc.title AS contact_title,
+               (wo.customer_id IS NOT NULL AND NOT EXISTS (
+                   SELECT 1 FROM work_orders wo2
+                   WHERE wo2.customer_id = wo.customer_id AND wo2.id != wo.id
+                     AND wo2.status IN ('Completed', 'Invoiced') AND wo2.deleted_at IS NULL
+                     AND wo2.start_date < wo.start_date
+               )) AS is_new_customer
         FROM work_orders wo
-        JOIN customers c ON c.id = wo.customer_id
+        LEFT JOIN customers c ON c.id = wo.customer_id
         LEFT JOIN service_locations sl ON sl.id = wo.service_location_id
         LEFT JOIN customer_contacts cc ON cc.id = wo.primary_contact_id
         WHERE wo.id = %s AND wo.deleted_at IS NULL
@@ -3076,7 +3098,7 @@ def workorder_edit(company_key, wo_id, branding, all_companies, company_access):
                to_char(wo.arrival_window_start, 'FMHH12:MI AM') AS arrival_window_start,
                wo.arrival_window_end::text AS arrival_window_end
         FROM work_orders wo
-        JOIN customers c ON c.id = wo.customer_id
+        LEFT JOIN customers c ON c.id = wo.customer_id
         WHERE wo.id = %s AND wo.deleted_at IS NULL
     """, (wo_id,))
     wo = cur.fetchone()
@@ -3242,9 +3264,15 @@ def _dispatch_board_data(company_key, target_date):
         SELECT wo.id, wo.work_order_number, wo.status, wo.priority,
                wo.scheduled_start, wo.estimated_duration_hours,
                wo.is_extraction, wo.equipment_incomplete,
-               c.property_name AS customer_name
+               c.property_name AS customer_name,
+               (wo.customer_id IS NOT NULL AND NOT EXISTS (
+                   SELECT 1 FROM work_orders wo2
+                   WHERE wo2.customer_id = wo.customer_id AND wo2.id != wo.id
+                     AND wo2.status IN ('Completed', 'Invoiced') AND wo2.deleted_at IS NULL
+                     AND wo2.start_date < wo.start_date
+               )) AS is_new_customer
         FROM work_orders wo
-        JOIN customers c ON c.id = wo.customer_id
+        LEFT JOIN customers c ON c.id = wo.customer_id
         WHERE wo.deleted_at IS NULL AND wo.start_date = %s
         ORDER BY wo.scheduled_start NULLS LAST, wo.id
     """, (target_date,))
@@ -3270,7 +3298,7 @@ def _dispatch_board_data(company_key, target_date):
             'id': w['id'], 'work_order_number': w['work_order_number'],
             'customer_name': w['customer_name'], 'status': w['status'],
             'priority': w['priority'], 'has_equipment': w['is_extraction'],
-            'equipment_incomplete': w['equipment_incomplete'],
+            'equipment_incomplete': w['equipment_incomplete'], 'is_new_customer': w['is_new_customer'],
             'techs': techs_by_wo.get(w['id'], []),
             'scheduled_start': w['scheduled_start'], 'duration_hours': duration,
         }
@@ -3457,7 +3485,7 @@ def extraction_queue(company_key, branding, all_companies, company_access):
                wo.followup_tech_username, wo.equipment_incomplete, wo.priority,
                c.property_name AS customer_name
         FROM work_orders wo
-        JOIN customers c ON c.id = wo.customer_id
+        LEFT JOIN customers c ON c.id = wo.customer_id
         WHERE wo.deleted_at IS NULL AND wo.status = 'Extraction Active'
         ORDER BY wo.extraction_started_at ASC NULLS LAST, wo.id
     """)
@@ -3635,7 +3663,7 @@ def extraction_pickup_list_pdf(company_key):
         SELECT wo.id, wo.work_order_number, wo.followup_tech_username,
                c.property_name AS customer_name
         FROM work_orders wo
-        JOIN customers c ON c.id = wo.customer_id
+        LEFT JOIN customers c ON c.id = wo.customer_id
         WHERE wo.deleted_at IS NULL AND wo.status = 'Extraction Active'
           AND wo.extraction_status = 'Ready for Pickup'
         ORDER BY c.property_name, wo.followup_tech_username NULLS LAST
@@ -3738,7 +3766,7 @@ def report_daysheet(company_key, branding, all_companies, company_access):
                COALESCE(sl.state, c.state) AS state,
                COALESCE(cc.office_phone, cc.mobile_phone) AS contact_phone
         FROM work_orders wo
-        JOIN customers c ON c.id = wo.customer_id
+        LEFT JOIN customers c ON c.id = wo.customer_id
         LEFT JOIN service_locations sl ON sl.id = wo.service_location_id
         LEFT JOIN customer_contacts cc ON cc.id = wo.primary_contact_id
         WHERE wo.deleted_at IS NULL AND wo.start_date = %s
@@ -3874,7 +3902,7 @@ def _jobs_report_query(company_key):
                c.property_name AS customer_name,
                i.id AS invoice_id, iv.total AS invoiced_total
         FROM work_orders wo
-        JOIN customers c ON c.id = wo.customer_id
+        LEFT JOIN customers c ON c.id = wo.customer_id
         LEFT JOIN invoices i ON i.work_order_id = wo.id AND i.deleted_at IS NULL
         LEFT JOIN invoice_versions iv ON iv.id = i.current_version_id
         WHERE {where}
@@ -4286,6 +4314,10 @@ def workorder_invoice_new(company_key, wo_id):
     if wo['status'] == 'No Charge':
         cur.close(); conn.close()
         flash('No-charge work orders are not invoiced.', 'error')
+        return redirect(f'/{company_key}/workorders/{wo_id}')
+    if not wo['customer_id']:
+        cur.close(); conn.close()
+        flash('Internal tasks have no customer to bill and cannot be invoiced.', 'error')
         return redirect(f'/{company_key}/workorders/{wo_id}')
     if wo['status'] != 'Completed':
         cur.close(); conn.close()

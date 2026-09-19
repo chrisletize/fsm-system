@@ -67,6 +67,12 @@
         {% if wo.priority != 'Normal' %}
         <span class="priority-pill priority-{{ wo.priority|lower }}">{{ wo.priority }}</span>
         {% endif %}
+        {% if wo.is_new_customer %}
+        <span class="badge" style="background:#e8f0fe; color:#1a56c4;">🆕 New Customer</span>
+        {% endif %}
+        {% if wo.is_internal_task %}
+        <span class="badge" style="background:#f1efe8; color:#5f5e5a;">Internal Task</span>
+        {% endif %}
     </h1>
     <div class="header-actions">
         <a href="/{{ company_key }}/workorders" class="btn btn-secondary">← Work Orders</a>
@@ -104,6 +110,8 @@
     <span>This work order has been invoiced.</span>
     <a href="/{{ company_key }}/invoices/{{ invoice_id }}" class="btn btn-primary" style="margin:0;">View Invoice</a>
 </div>
+{% elif wo.is_internal_task %}
+{# Internal tasks have no customer to bill — no invoice banner at all. #}
 {% elif wo.status == 'Completed' %}
 <div class="card" style="background:#eef2ff; border:1px solid #d6dcfb; margin-bottom:1.25rem;">
     <div style="margin-bottom:.6rem;">Generate invoice now?</div>
@@ -126,12 +134,16 @@
             <div class="field-grid">
                 <div class="field">
                     <div class="lbl">Customer</div>
-                    <div class="val">
+                    <div class="val {% if not wo.customer_id %}empty{% endif %}">
+                        {% if wo.customer_id %}
                         <a href="/{{ company_key }}/customers/{{ wo.customer_id }}"
                            style="color:{{ branding.color_primary }}; text-decoration:none;">
                             {{ wo.customer_name }}
                         </a>
                         <span style="color:#999; font-size:.85rem;">({{ wo.customer_type }})</span>
+                        {% else %}
+                        Internal Task — no customer
+                        {% endif %}
                     </div>
                 </div>
                 <div class="field">

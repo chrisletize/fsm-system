@@ -32,7 +32,8 @@ reporting until FieldKit's billing is complete.
 | Cutover import from Phase 0 | Not built — deferred by Chris (2026-09-19) until the site is ready for day-to-day testing. Investigation-only finding logged: the statements DB (`fsm_prod`) currently has zero invoice/tax rows for all four companies (D-038); needs resolving before this increment actually runs. |
 | Water extraction queue | Built (2.2, migration 018, `/extraction`): one-WO-lifecycle model (no cloning), daily log, Retrieved flow with per-day billing recompute, pickup-list PDF, follow-up-WO offer. |
 | Day sheet / hours / job activity reports | Built (2.3, `/reports`, `/reports/daysheet`, `/reports/hours`, `/reports/jobs`): printable per-tech schedule, honest "scheduled not actual" hours, job list + CSV export. No migration needed — all columns already existed. |
-| Recency report, tag replacements, nightly jobs, estimates, sales CRM, payment methods, dashboard stats | Not built |
+| Retired-tag replacements | Built (2.4, migration 019): `is_internal_task` (customer-less WOs for internal work, `customer_id` now nullable), derived "New Customer" badge on dispatch + WO detail. Callback and Delinquent Account explicitly deferred to §4.4/§3.5. |
+| Recency report, nightly jobs, estimates, sales CRM, payment methods, dashboard stats | Not built |
 
 This table matches `FIELDKIT_BUILD_DIRECTIVE_2026-09.md` §0.2 — confirmed by grepping
 the full route list out of `app.py` (3,248 lines) and querying row counts in all four
@@ -50,13 +51,15 @@ Stage 1's remaining exit criteria (tax report reconciling by hand, Michele's
 walkthrough) need real data/Michele's time, not more code.
 
 **Stage 2 — Finish scheduling**: Increments 2.1 (tech profiles + dispatch board,
-migration 017), 2.2 (water extraction queue + accrual engine, migration 018), and 2.3
-(day sheet/hours/jobs reports, no migration) complete. Found and fixed three bugs
-along the way, none of them introduced by the increment that caught them: D-043/D-044
-(2.1, pre-existing — user creation silently failed on every DB; the tech checklist
-always rendered empty for 3 of 4 companies) and D-057 (a 2.1 regression caught by
-2.3's smoke test — saving a WO with a manually-overridden duration 500'd). Next:
-Increment 2.4 (replacements for the retired tag concept).
+migration 017), 2.2 (water extraction queue + accrual engine, migration 018), 2.3
+(day sheet/hours/jobs reports, no migration), and 2.4 (retired-tag replacements,
+migration 019) complete. Found and fixed three bugs along the way, none of them
+introduced by the increment that caught them: D-043/D-044 (2.1, pre-existing — user
+creation silently failed on every DB; the tech checklist always rendered empty for 3
+of 4 companies) and D-057 (a 2.1 regression caught by 2.3's smoke test — saving a WO
+with a manually-overridden duration 500'd). Increment 2.5 (nightly/periodic jobs)
+needs a host crontab installed under sudo — awaiting Chris before proceeding, since
+that's a host-level change outside what this session can do on its own.
 
 Decisions Chris has already made for this build (delinquent threshold = 90 days past
 invoice date, FL tax left empty/exempt for Kleanit SF, SF-import receivables excluded
