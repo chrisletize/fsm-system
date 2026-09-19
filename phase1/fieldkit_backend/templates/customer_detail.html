@@ -431,9 +431,13 @@
 
 <!-- Invoices -->
 <div class="card" style="margin-bottom:1.25rem;">
-    <div class="section-title">
-        Invoices
-        {% if customer_invoices %}<span style="font-weight:400; text-transform:none; letter-spacing:0; color:#aaa; margin-left:0.4rem;">({{ customer_invoices|length }})</span>{% endif %}
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+        <div class="section-title" style="margin-bottom:0;">
+            Invoices
+            {% if customer_invoices %}<span style="font-weight:400; text-transform:none; letter-spacing:0; color:#aaa; margin-left:0.4rem;">({{ customer_invoices|length }})</span>{% endif %}
+        </div>
+        <a href="/{{ company_key }}/customers/{{ customer.id }}/statement" target="_blank"
+           class="btn btn-outline btn-sm">Download Statement</a>
     </div>
     {% if customer_invoices %}
     <table style="width:100%; border-collapse:collapse; font-size:.88rem;">

@@ -15,11 +15,12 @@ import math
 import os
 import re
 import io
+import zipfile
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
-from reportlab.lib.enums import TA_RIGHT
+from reportlab.lib.enums import TA_RIGHT, TA_CENTER
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 
 app = Flask(__name__)
@@ -4552,6 +4553,290 @@ def invoice_adjustment_delete(company_key, invoice_id, adjustment_id):
     conn.commit()
     cur.close(); conn.close()
     return redirect(f'/{company_key}/invoices/{invoice_id}')
+
+# ============================================================================
+# Statements  (admin + manager + office)
+#   Replaces the Phase 0 statement generator — Michele's customers already
+#   recognize that layout, so this deliberately echoes its visual language
+#   (scripts/generate_pdf_statement.py in ~/docker/statements) rather than
+#   inventing a new look: same title treatment, same customer-info box style,
+#   same per-invoice table shape, same payment-due notice.
+# ============================================================================
+
+def _aging_bucket_label(days):
+    """Same buckets the Phase 0 statement (and the future AR aging report,
+    Increment 1.8) use: Current (0-30) / 31-60 / 61-90 / 90+, aged from
+    invoice_date (Net 30 assumption per the directive's AR aging spec)."""
+    if days < 0:
+        return 'FUTURE'
+    elif days <= 30:
+        return 'CURRENT'
+    elif days <= 60:
+        return '31-60 DAYS'
+    elif days <= 90:
+        return '61-90 DAYS'
+    else:
+        return '90+ DAYS'
+
+
+def _sanitize_filename(name):
+    """Strip filesystem-unsafe characters — in particular the '*' Kleanit
+    property names sometimes carry (the Phase 0 FL-vs-Charlotte marker
+    convention) — and collapse whitespace to underscores."""
+    name = re.sub(r'[\\/*?:"<>|]', '', name or '')
+    name = re.sub(r'\s+', '_', name.strip())
+    return name or 'customer'
+
+
+def generate_statement_pdf(company_key, customer_id, as_of_date=None):
+    """All of one customer's open receivables with balance > 0, aged from
+    invoice_date into Current/31-60/61-90/90+, plus any unapplied credit
+    shown as a negative line with a note. Returns (pdf_bytes, customer_name),
+    or (None, None) if the customer doesn't exist."""
+    if as_of_date is None:
+        as_of_date = date.today()
+    elif isinstance(as_of_date, str):
+        as_of_date = datetime.strptime(as_of_date, '%Y-%m-%d').date()
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT id, property_name, address, address_2, city, state, zip, billing_email
+        FROM customers WHERE id = %s AND deleted_at IS NULL
+    """, (customer_id,))
+    customer = cur.fetchone()
+    if not customer:
+        cur.close(); conn.close()
+        return None, None
+
+    cur.execute("""
+        SELECT i.id, i.invoice_number, i.invoice_date, i.current_version_id
+        FROM invoices i
+        WHERE i.customer_id = %s AND i.deleted_at IS NULL AND i.receivable_state = 'open'
+        ORDER BY i.invoice_date
+    """, (customer_id,))
+
+    rows = []
+    aging_totals = {'CURRENT': 0.0, '31-60 DAYS': 0.0, '61-90 DAYS': 0.0, '90+ DAYS': 0.0}
+    for inv in cur.fetchall():
+        bal = invoice_balance(cur, inv['id'])
+        if bal is None or bal <= 0.005:
+            continue
+        gross = None
+        if inv['current_version_id']:
+            cur.execute("SELECT total, subtotal FROM invoice_versions WHERE id = %s", (inv['current_version_id'],))
+            v = cur.fetchone()
+            if v:
+                gross = float(v['total']) if v['total'] is not None else float(v['subtotal'])
+        days = (as_of_date - inv['invoice_date']).days
+        bucket = _aging_bucket_label(days)
+        aging_totals[bucket if bucket != 'FUTURE' else 'CURRENT'] = \
+            aging_totals.get(bucket if bucket != 'FUTURE' else 'CURRENT', 0) + bal
+        rows.append({
+            'number': inv['invoice_number'], 'date': inv['invoice_date'],
+            'gross': gross, 'due': bal, 'days': days, 'bucket': bucket,
+        })
+
+    unapplied_credit = customer_unapplied_credit(cur, customer_id)
+    if unapplied_credit > 0.005:
+        rows.append({
+            'number': 'CREDIT', 'date': None, 'gross': None, 'due': -unapplied_credit,
+            'days': None, 'bucket': 'Unapplied credit on account — contact the office to apply or refund',
+        })
+
+    total_due = sum(r['due'] for r in rows)
+
+    cur.execute("SELECT * FROM company_settings WHERE deleted_at IS NULL LIMIT 1")
+    settings = cur.fetchone() or {}
+    cur.close(); conn.close()
+
+    branding = COMPANY_BRANDING.get(company_key, {})
+    primary_hex = branding.get('color_primary', '#2C2C2C')
+    primary = colors.HexColor(primary_hex)
+    secondary = colors.HexColor(branding.get('color_secondary', '#F5F5DC'))
+    company_name = settings.get('legal_name') or settings.get('company_name') or branding.get('name', company_key)
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter,
+                             rightMargin=0.6*inch, leftMargin=0.6*inch,
+                             topMargin=0.6*inch, bottomMargin=0.6*inch,
+                             pageCompression=0)
+    doc.invariant = 1
+    styles = getSampleStyleSheet()
+
+    title_style = ParagraphStyle('title', parent=styles['Heading1'], fontSize=18,
+                                  textColor=primary, spaceAfter=6, alignment=TA_CENTER)
+    heading_style = ParagraphStyle('heading', parent=styles['Heading2'], fontSize=12,
+                                    textColor=primary, spaceAfter=12)
+    date_style = ParagraphStyle('date', parent=styles['Normal'], alignment=TA_RIGHT)
+    notice_style = ParagraphStyle('notice', parent=styles['Normal'], fontSize=11,
+                                   textColor=primary, alignment=TA_CENTER, spaceAfter=10)
+
+    elements = [
+        Paragraph(f'<b>{company_name}</b>', title_style),
+        Paragraph('ACCOUNT STATEMENT', title_style),
+        Spacer(1, 0.2*inch),
+        Paragraph(f'Statement Date: {as_of_date.strftime("%B %d, %Y")}', date_style),
+        Spacer(1, 0.3*inch),
+    ]
+
+    # ---- Customer info box (same visual shape as the Phase 0 statement) ----
+    customer_data = [['Customer Information'], ['Account Name:', customer['property_name']]]
+    if customer.get('address'):
+        addr = customer['address'] + (', ' + customer['address_2'] if customer.get('address_2') else '')
+        customer_data.append(['Address:', addr])
+        city_line = ', '.join(x for x in [customer.get('city'), customer.get('state')] if x)
+        customer_data.append(['', (city_line + ' ' + (customer.get('zip') or '')).strip()])
+    if customer.get('billing_email'):
+        customer_data.append(['Email:', customer['billing_email']])
+
+    customer_table = Table(customer_data, colWidths=[1.5*inch, 4.4*inch])
+    customer_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (1, 0), primary),
+        ('TEXTCOLOR', (0, 0), (1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (1, 0), 'CENTER'),
+        ('SPAN', (0, 0), (1, 0)),
+        ('FONTNAME', (0, 0), (1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (1, 0), 12),
+        ('BOTTOMPADDING', (0, 0), (1, 0), 12),
+        ('BACKGROUND', (0, 1), (1, -1), secondary),
+        ('GRID', (0, 0), (1, -1), 1, colors.black),
+        ('FONTNAME', (0, 1), (0, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 1), (1, -1), 10),
+        ('TOPPADDING', (0, 1), (1, -1), 6),
+        ('BOTTOMPADDING', (0, 1), (1, -1), 6),
+    ]))
+    elements.append(customer_table)
+    elements.append(Spacer(1, 0.25*inch))
+
+    # ---- Aging summary strip ----
+    aging_data = [
+        ['Current', '31-60 Days', '61-90 Days', '90+ Days'],
+        [f"${aging_totals['CURRENT']:,.2f}", f"${aging_totals['31-60 DAYS']:,.2f}",
+         f"${aging_totals['61-90 DAYS']:,.2f}", f"${aging_totals['90+ DAYS']:,.2f}"],
+    ]
+    aging_table = Table(aging_data, colWidths=[1.475*inch]*4)
+    aging_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), primary),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    elements.append(aging_table)
+    elements.append(Spacer(1, 0.3*inch))
+
+    # ---- Invoice details ----
+    elements.append(Paragraph('<b>INVOICE DETAILS</b>', heading_style))
+    invoice_data = [['Invoice #', 'Date', 'Original Amount', 'Amount Due', 'Days', 'Age']]
+    for r in rows:
+        invoice_data.append([
+            str(r['number']),
+            r['date'].strftime('%m/%d/%Y') if r['date'] else '—',
+            f"${r['gross']:,.2f}" if r['gross'] is not None else '—',
+            f"${r['due']:,.2f}",
+            str(r['days']) if r['days'] is not None else '—',
+            r['bucket'],
+        ])
+    invoice_data.append(['TOTAL', '', '', f"${total_due:,.2f}", '', ''])
+
+    invoice_table = Table(invoice_data, colWidths=[0.9*inch, 0.85*inch, 1.15*inch, 1.05*inch, 0.5*inch, 1.45*inch])
+    invoice_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), primary),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 9),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+        ('BACKGROUND', (0, 1), (-1, -2), secondary),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('ALIGN', (2, 1), (3, -1), 'RIGHT'),
+        ('ALIGN', (4, 1), (4, -1), 'CENTER'),
+        ('FONTSIZE', (0, 1), (-1, -2), 8.5),
+        ('TOPPADDING', (0, 1), (-1, -2), 4),
+        ('BOTTOMPADDING', (0, 1), (-1, -2), 4),
+        ('BACKGROUND', (0, -1), (-1, -1), primary),
+        ('TEXTCOLOR', (0, -1), (-1, -1), colors.whitesmoke),
+        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, -1), (-1, -1), 10.5),
+        ('SPAN', (0, -1), (2, -1)),
+        ('ALIGN', (0, -1), (0, -1), 'CENTER'),
+    ]))
+    elements.append(invoice_table)
+    elements.append(Spacer(1, 0.3*inch))
+
+    if total_due > 0.005:
+        elements.append(Paragraph('PAYMENT REQUIRED', notice_style))
+        elements.append(Paragraph(f'Please remit payment of <b>${total_due:,.2f}</b> to the address below.',
+                                   styles['Normal']))
+        elements.append(Spacer(1, 0.15*inch))
+
+    if settings.get('remit_to_text'):
+        elements.append(Paragraph('<b>Remit To</b>', heading_style))
+        elements.append(Paragraph(settings['remit_to_text'].replace('\n', '<br/>'), styles['Normal']))
+
+    doc.build(elements)
+    return buf.getvalue(), customer['property_name']
+
+
+@app.route('/<company_key>/customers/<int:customer_id>/statement')
+@login_required
+@company_access_required
+def customer_statement_pdf(company_key, customer_id):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    as_of = request.args.get('as_of', '').strip() or None
+    pdf_bytes, cust_name = generate_statement_pdf(company_key, customer_id, as_of)
+    if pdf_bytes is None:
+        abort(404)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("UPDATE customers SET last_statement_at = CURRENT_TIMESTAMP WHERE id = %s", (customer_id,))
+    conn.commit()
+    cur.close(); conn.close()
+    filename = f'{_sanitize_filename(cust_name)}_statement.pdf'
+    return Response(pdf_bytes, mimetype='application/pdf',
+                     headers={'Content-Disposition': f'inline; filename="{filename}"'})
+
+
+@app.route('/<company_key>/billing/statements', methods=['POST'])
+@login_required
+@company_access_required
+def billing_statements_batch(company_key):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    customer_ids = request.form.getlist('customer_ids')
+    as_of = request.form.get('as_of', '').strip() or None
+    if not customer_ids:
+        flash('Select at least one customer.', 'error')
+        return redirect(f'/{company_key}/billing')
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    buf = io.BytesIO()
+    generated = 0
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for cid in customer_ids:
+            pdf_bytes, cust_name = generate_statement_pdf(company_key, int(cid), as_of)
+            if pdf_bytes is None:
+                continue
+            filename = f'{_sanitize_filename(cust_name)}_statement_{(as_of or date.today().isoformat())}.pdf'
+            zf.writestr(filename, pdf_bytes)
+            cur.execute("UPDATE customers SET last_statement_at = CURRENT_TIMESTAMP WHERE id = %s", (int(cid),))
+            generated += 1
+    conn.commit()
+    cur.close(); conn.close()
+
+    if generated == 0:
+        flash('No statements were generated — none of the selected customers were found.', 'error')
+        return redirect(f'/{company_key}/billing')
+
+    buf.seek(0)
+    return Response(buf.getvalue(), mimetype='application/zip',
+                     headers={'Content-Disposition': f'attachment; filename="statements_{date.today().isoformat()}.zip"'})
 
 # ============================================================================
 # Billing — Michele's batch billing page

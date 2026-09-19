@@ -271,6 +271,32 @@ code with a "file doesn't exist" fallback path that would never once execute its
 happy path in production today, the PDF header is text-only (company name/address/
 phone from `company_settings`) until Chris supplies actual logo files.
 
+D-027 — [DEFAULTED] `customers.last_statement_at` is updated by BOTH the single-
+customer statement download (`/customers/<id>/statement`) and the batch ZIP route,
+not just the batch path the directive's §2.6 text explicitly mentions it under. A
+statement is a statement regardless of which button generated it, and the field's
+whole purpose (per §2.8's future billing page) is "when did this customer last get
+one" — same reasoning as D-021/D-012's pattern of extending an explicit requirement
+to its obvious sibling case.
+
+D-028 — [SCOPE] The v1 billing page (`billing.html`) gets the smallest possible
+addition for this increment: a second submit button on the EXISTING customer-checkbox
+form, using `formaction`/`formtarget` to post the same `customer_ids` selection to
+`/billing/statements` in a new tab instead of `/billing/export`. No redesign, no new
+layout — Increment 1.8 replaces this whole page regardless, so anything more elaborate
+here would be thrown away almost immediately. This is the same reasoning as D-021,
+applied to a case where SOME minimal UI genuinely has to exist now (a route nobody can
+reach is not a shipped feature) rather than skipping the page entirely.
+
+D-029 — [MODEL] A statement's aging and "open receivables with balance > 0" both use
+each invoice's CURRENT balance (`invoice_balance()`), not a balance reconstructed as
+of `as_of_date` by excluding later payments/adjustments. Matches how the Phase 0
+statement generator itself worked (`WHERE invoice_total_due > 0`, no point-in-time
+reconstruction) — `as_of_date` only controls the aging-bucket math (days since
+`invoice_date`) and the printed "Statement Date," not which payments count. Reprinting
+a past-dated statement today will reflect payments made since then; this matches
+existing Michele-facing behavior, not a regression.
+
 ---
 
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:

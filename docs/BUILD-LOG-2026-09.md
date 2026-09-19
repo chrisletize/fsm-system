@@ -329,3 +329,50 @@ generated on every request, never cached/stored (matches the directive's "store
 nothing on disk permanently").
 
 Proceeding to Increment 1.6 (statements, replacing the Phase 0 generator).
+
+---
+
+## 2026-09-19 — Stage 1, Increment 1.6 — Statements (replaces the Phase 0 generator)
+
+**What:**
+- `generate_statement_pdf(company_key, customer_id, as_of_date)`: every open receivable
+  with a current balance > 0, aged from `invoice_date` into Current/31-60/61-90/90+,
+  plus any unapplied credit as a negative line with a note. Deliberately echoes the
+  Phase 0 statement's visual language (read `scripts/generate_pdf_statement.py` in the
+  statements stack first) — same title treatment, same customer-info-box style, same
+  per-invoice table shape and TOTAL row, same "PAYMENT REQUIRED" notice — since
+  Michele's customers already recognize that layout.
+- `GET /customers/<id>/statement` (single PDF, sets `last_statement_at`) and
+  `POST /billing/statements` (ZIP of PDFs for selected customers, sanitized filenames
+  — no `*` from Kleanit's FL-marker naming convention). Wired the batch route into the
+  EXISTING v1 billing page's customer-checkbox form via `formaction`/`formtarget`
+  rather than redesigning the page — Increment 1.8 replaces it wholesale regardless
+  (D-028). "Download Statement" added to customer detail.
+- New `customers.last_statement_at` (migration 013), updated by both the single and
+  batch paths (D-027).
+
+**Migration:** 013 (`013_last_statement_at.sql`), applied to all four DBs. Pre-migration
+backups in `~/db-backups/2026-09-19d/`.
+
+**Commit:** (pending — migration file, `app.py`, `billing.html`, `customer_detail.html`,
+smoke test, this entry, decisions log).
+
+**Smoke test:** `tests/smoke_statements.py` — 23/23 checks, after fixing a bug **in the
+test itself** first: the first draft asserted the PDF contained the *work order*
+number (`ZZZ-STMT-0001`) instead of the *invoice* number, which is auto-generated
+independently (`GAG-2026-NNNN`) — so several checks were passing/failing for the wrong
+reason (one `not in` assertion was trivially true regardless of correctness). Caught
+by actually printing the real generated invoice numbers while debugging a failure
+rather than assuming the first plausible explanation; fixed the test to capture and
+assert against the real invoice number, not the WO number. Once fixed: mixed-aging
+statement (Current + 90+ buckets, PAYMENT REQUIRED notice), a fully-paid invoice is
+correctly excluded, unapplied credit shows as a negative line, `last_statement_at`
+is unset until a statement is actually served, the batch ZIP route produces a
+correctly-named single-entry zip and handles an empty selection without a 500, and
+the billing page renders with the new button. All five prior smoke tests re-run clean.
+
+**Deferred:** "Send Statements" (email delivery) is Increment 1.7. The full billing
+page redesign (aging summary cards, filters, "Open credits" panel) is Increment 1.8 —
+today's addition to `billing.html` is intentionally minimal (D-028).
+
+Proceeding to Increment 1.7 (email delivery).

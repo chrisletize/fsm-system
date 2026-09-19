@@ -154,6 +154,10 @@
                 <span class="selected-count">
                     <span id="selectedCount">0</span> selected
                 </span>
+                <button type="submit" formaction="/{{ company_key }}/billing/statements" formtarget="_blank"
+                        class="btn btn-outline" id="statementsBtn" disabled>
+                    Generate Statements
+                </button>
                 <button type="submit" class="btn btn-primary" id="exportBtn" disabled>
                     Export CSV
                 </button>
@@ -268,11 +272,13 @@ const selectAll     = document.getElementById('selectAll');
 const checks        = document.querySelectorAll('.customer-check');
 const countDisplay  = document.getElementById('selectedCount');
 const exportBtn     = document.getElementById('exportBtn');
+const statementsBtn = document.getElementById('statementsBtn');
 
 function updateCount() {
     const n = document.querySelectorAll('.customer-check:checked').length;
     countDisplay.textContent = n;
     exportBtn.disabled = n === 0;
+    statementsBtn.disabled = n === 0;
     // Highlight selected rows
     checks.forEach(cb => {
         cb.closest('tr').classList.toggle('selected', cb.checked);
