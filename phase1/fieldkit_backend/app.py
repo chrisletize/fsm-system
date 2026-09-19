@@ -64,6 +64,19 @@ COMPANY_BRANDING = {
     },
 }
 
+# Companies that don't do water extraction work (Get a Grip is bathtub/surface
+# resurfacing only) -- the extraction queue, dispatch's extraction badge inputs,
+# and the WO form's "Deploy Equipment" / Water Extraction section are all hidden
+# for these. Chris, 2026-09-19: extraction had been built for all four companies;
+# GAG never actually does this work, so it's excluded here rather than left
+# reachable-but-unused. See docs/DECISIONS-MADE-DURING-BUILD.md.
+COMPANIES_WITHOUT_EXTRACTION = {'getagrip'}
+
+# Templates check this directly (has_extraction(company_key)) rather than every
+# route threading one more kwarg through with_branding + every render_template
+# call -- this is the one place that mapping needs to reach the template layer.
+app.jinja_env.globals['has_extraction'] = lambda company_key: company_key not in COMPANIES_WITHOUT_EXTRACTION
+
 NC_COUNTIES = [
     'Alamance','Alexander','Alleghany','Anson','Ashe','Avery','Beaufort',
     'Bertie','Bladen','Brunswick','Buncombe','Burke','Cabarrus','Caldwell',
@@ -3493,6 +3506,8 @@ def _extraction_day_count(started_at):
 def extraction_queue(company_key, branding, all_companies, company_access):
     if session.get('user_role') not in ('admin', 'manager', 'office'):
         abort(403)
+    if company_key in COMPANIES_WITHOUT_EXTRACTION:
+        abort(404)
     conn = get_db_connection(company_key)
     cur  = conn.cursor()
     cur.execute("""
@@ -3559,6 +3574,8 @@ def extraction_log(company_key, wo_id):
     """Row actions: Mark Ready / Needs More Time / Missed Today."""
     if session.get('user_role') not in ('admin', 'manager', 'office'):
         abort(403)
+    if company_key in COMPANIES_WITHOUT_EXTRACTION:
+        abort(404)
     new_status = request.form.get('extraction_status')
     if new_status not in EXTRACTION_LOG_STATUSES:
         abort(400)
@@ -3588,6 +3605,8 @@ def extraction_log_all(company_key):
     so the office's daily habit still has a target — directive §3.2)."""
     if session.get('user_role') not in ('admin', 'manager', 'office'):
         abort(403)
+    if company_key in COMPANIES_WITHOUT_EXTRACTION:
+        abort(404)
     selected = [int(x) for x in request.form.getlist('wo_ids') if x.strip()]
     username = session.get('username')
     conn = get_db_connection(company_key)
@@ -3621,6 +3640,8 @@ def extraction_retrieve(company_key, wo_id):
     picks this up on its own, same as any other Completed WO)."""
     if session.get('user_role') not in ('admin', 'manager', 'office'):
         abort(403)
+    if company_key in COMPANIES_WITHOUT_EXTRACTION:
+        abort(404)
     username = session.get('username')
     conn = get_db_connection(company_key)
     cur  = conn.cursor()
@@ -3672,6 +3693,8 @@ def extraction_retrieve(company_key, wo_id):
 def extraction_pickup_list_pdf(company_key):
     if session.get('user_role') not in ('admin', 'manager', 'office'):
         abort(403)
+    if company_key in COMPANIES_WITHOUT_EXTRACTION:
+        abort(404)
     conn = get_db_connection(company_key)
     cur  = conn.cursor()
     cur.execute("""

@@ -485,11 +485,13 @@
             </a>
             {% endif %}
 
-            {% if session.user_role in ('admin', 'manager', 'office') %}
+            {% if session.user_role in ('admin', 'manager', 'office') and has_extraction(company_key) %}
             <a href="/{{ company_key }}/extraction"
                class="subnav-link {% if '/extraction' in current_path %}active{% endif %}">
                 Extraction
             </a>
+            {% endif %}
+            {% if session.user_role in ('admin', 'manager', 'office') %}
             <a href="/{{ company_key }}/reports"
                class="subnav-link {% if '/reports' in current_path %}active{% endif %}">
                 Reports

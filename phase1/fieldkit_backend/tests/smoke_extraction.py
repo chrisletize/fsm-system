@@ -2,7 +2,10 @@
 Smoke test: Increment 2.2 — water extraction queue + accrual engine.
 
 Drives the real Flask routes (test client, forged admin session) against live
-getagrip. Everything created is hard-deleted in a `finally` block. Run inside
+kleanit_charlotte — NOT getagrip: Get a Grip doesn't do water extraction work
+(Chris, 2026-09-19) and /extraction 404s there by design (see
+COMPANIES_WITHOUT_EXTRACTION in app.py and smoke_extraction_company_gate.py).
+Everything created is hard-deleted in a `finally` block. Run inside
 the app container:
 
     docker compose exec -T app python tests/smoke_extraction.py
@@ -24,7 +27,7 @@ def check(label, condition, extra=""):
 
 
 def main():
-    conn = get_db_connection('getagrip')
+    conn = get_db_connection('kleanit_charlotte')
     cur = conn.cursor()
     wo_ids, customer_ids, equipment_unit_ids = [], [], []
 
@@ -33,7 +36,7 @@ def main():
         sess['user_id'] = 1
         sess['username'] = 'smoketest'
         sess['user_role'] = 'admin'
-        sess['company_access'] = ['getagrip']
+        sess['company_access'] = ['kleanit_charlotte']
 
     try:
         cur.execute("""
@@ -61,7 +64,7 @@ def main():
             'kind': 'eq', 'equipment_unit_id': equipment_unit_id,
             'deployed_at': deployed_date, 'retrieved_at': '',
         }])
-        r = client.post('/getagrip/workorders/new', data={
+        r = client.post('/kleanit_charlotte/workorders/new', data={
             'customer_id': str(customer_id), 'status': 'Scheduled', 'priority': 'Normal',
             'start_date': deployed_date, 'arrival_window_start': '9:00 AM',
             'line_items_json': line_items, 'duration_overridden': 'false',
@@ -75,7 +78,7 @@ def main():
         check("is_extraction auto-set true (equipment line present, no checkbox)", cur.fetchone()['is_extraction'] is True)
 
         print("smoke_extraction: complete + 'Yes - Start Extraction' -> Extraction Active, backdated start")
-        r = client.post(f'/getagrip/workorders/{wo_id}/edit', data={
+        r = client.post(f'/kleanit_charlotte/workorders/{wo_id}/edit', data={
             'customer_id': str(customer_id), 'status': 'Completed', 'priority': 'Normal',
             'start_date': deployed_date, 'arrival_window_start': '9:00 AM',
             'line_items_json': line_items,
@@ -95,20 +98,20 @@ def main():
               wo['extraction_started_at'].isoformat() == deployed_date)
 
         print("smoke_extraction: dispatch board shows the extraction droplet badge")
-        r = client.get(f'/getagrip/dispatch/data?date={deployed_date}')
+        r = client.get(f'/kleanit_charlotte/dispatch/data?date={deployed_date}')
         data = r.get_json()
         block = next((b for b in data['blocks'] if b['id'] == wo_id), None)
         check("WO appears on the dispatch board that date", block is not None)
         check("has_equipment (is_extraction) true on the block", block and block['has_equipment'] is True)
 
         print("smoke_extraction: extraction queue page + day count")
-        r = client.get('/getagrip/extraction')
+        r = client.get('/kleanit_charlotte/extraction')
         check(f"queue page renders ({r.status_code})", r.status_code == 200)
         check("queue shows the WO", b'SMOKE Extraction Co' in r.data)
         check("queue shows day 4 (started 3 days ago, +1)", b'>4<' in r.data or b'4' in r.data)
 
         print("smoke_extraction: row action -> Needs More Time, writes daily log")
-        r = client.post(f'/getagrip/extraction/{wo_id}/log', data={'extraction_status': 'Needs More Time'})
+        r = client.post(f'/kleanit_charlotte/extraction/{wo_id}/log', data={'extraction_status': 'Needs More Time'})
         check(f"log action responds 302 ({r.status_code})", r.status_code == 302)
         cur.execute("SELECT extraction_status FROM work_orders WHERE id = %s", (wo_id,))
         check("extraction_status updated", cur.fetchone()['extraction_status'] == 'Needs More Time')
@@ -119,13 +122,13 @@ def main():
         check("daily log row written for today", cur.fetchone()['extraction_status'] == 'Needs More Time')
 
         print("smoke_extraction: batch 'Log today's status for all'")
-        r = client.post('/getagrip/extraction/log-all', data={'wo_ids': [str(wo_id)]}, follow_redirects=False)
+        r = client.post('/kleanit_charlotte/extraction/log-all', data={'wo_ids': [str(wo_id)]}, follow_redirects=False)
         check(f"log-all responds 302 ({r.status_code})", r.status_code == 302)
 
         print("smoke_extraction: Mark Ready + pickup list PDF")
-        r = client.post(f'/getagrip/extraction/{wo_id}/log', data={'extraction_status': 'Ready for Pickup'})
+        r = client.post(f'/kleanit_charlotte/extraction/{wo_id}/log', data={'extraction_status': 'Ready for Pickup'})
         check(f"mark ready responds 302 ({r.status_code})", r.status_code == 302)
-        r = client.get('/getagrip/extraction/pickup-list.pdf')
+        r = client.get('/kleanit_charlotte/extraction/pickup-list.pdf')
         check(f"pickup list PDF responds 200 ({r.status_code})", r.status_code == 200)
         check("pickup list mimetype is pdf", r.mimetype == 'application/pdf')
         check("pickup list contains the customer name (pageCompression=0)", b'SMOKE Extraction Co' in r.data)
@@ -138,7 +141,7 @@ def main():
         """, (wo_id,))
         open_line = cur.fetchone()
         retrieve_date = date.today().isoformat()
-        r = client.post(f'/getagrip/extraction/{wo_id}/retrieve', data={
+        r = client.post(f'/kleanit_charlotte/extraction/{wo_id}/retrieve', data={
             f'retrieved_{open_line["id"]}': retrieve_date,
         }, follow_redirects=False)
         check(f"retrieve responds 302 ({r.status_code})", r.status_code == 302)
@@ -162,12 +165,12 @@ def main():
         check("status history row written for the close", cur.fetchone()['n'] == 1)
 
         print("smoke_extraction: WO detail offers 'Create Follow-Up Cleaning Work Order'")
-        r = client.get(f'/getagrip/workorders/{wo_id}')
+        r = client.get(f'/kleanit_charlotte/workorders/{wo_id}')
         check(f"WO detail renders ({r.status_code})", r.status_code == 200)
         check("follow-up offer button present", b'Create Follow-Up Cleaning Work Order' in r.data)
 
         print("smoke_extraction: follow-up WO prefill flow")
-        r = client.get(f'/getagrip/workorders/{wo_id}/followup-new', follow_redirects=False)
+        r = client.get(f'/kleanit_charlotte/workorders/{wo_id}/followup-new', follow_redirects=False)
         check(f"followup-new redirects ({r.status_code})", r.status_code == 302)
         location = r.headers['Location']
         check(f"redirect carries parent_id + customer_id + followup=1 ({location})",
@@ -186,7 +189,7 @@ def main():
         line_items_std_only = json.dumps([{
             'kind': 'std', 'catalog_item_id': std_catalog_id, 'description': '', 'quantity': '1', 'unit_price': '50.00',
         }])
-        r = client.post('/getagrip/workorders/new', data={
+        r = client.post('/kleanit_charlotte/workorders/new', data={
             'customer_id': str(customer_id), 'status': 'Scheduled', 'priority': 'Normal',
             'start_date': date.today().isoformat(), 'line_items_json': line_items_std_only,
             'duration_overridden': 'false', 'equipment_incomplete': 'on',
@@ -203,7 +206,7 @@ def main():
             {'kind': 'std', 'catalog_item_id': std_catalog_id, 'description': '', 'quantity': '1', 'unit_price': '50.00'},
             {'kind': 'eq', 'equipment_unit_id': equipment_unit_id, 'deployed_at': date.today().isoformat(), 'retrieved_at': ''},
         ])
-        r = client.post(f'/getagrip/workorders/{wo_id2}/edit', data={
+        r = client.post(f'/kleanit_charlotte/workorders/{wo_id2}/edit', data={
             'customer_id': str(customer_id), 'status': 'Scheduled', 'priority': 'Normal',
             'start_date': date.today().isoformat(), 'line_items_json': line_items_with_eq,
             'duration_overridden': 'false', 'equipment_incomplete': 'on',  # still checked in the form...

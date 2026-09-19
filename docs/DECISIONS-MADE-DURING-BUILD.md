@@ -673,6 +673,38 @@ identical either way since `letize` is the user both approaches would run jobs a
 can be moved to `/etc/cron.d` later if `sudo` becomes available, for a more
 discoverable/version-controlled location.
 
+D-071 — [CONFIRMED, Chris 2026-09-19] Water extraction was built for all four
+companies through Increment 2.2, but Get a Grip (bathtub/surface resurfacing) never
+actually does this work. Chris caught it post-build and asked for it to be removed
+from GAG specifically. Implemented as a `COMPANIES_WITHOUT_EXTRACTION = {'getagrip'}`
+set (`app.py`) plus a `has_extraction(company_key)` Jinja global, rather than deleting
+any extraction code or schema — the feature is fully intact and unchanged for the
+other three companies, just unreachable for this one:
+- `/extraction` and its four sub-routes 404 for getagrip (checked after the existing
+  role check, before any DB work).
+- The nav link is hidden (`has_extraction(company_key)` guard in `base.html`).
+- The WO form's "Deploy Equipment" button and the whole Water Extraction card are
+  hidden for getagrip; a JS null-guard was added where the extraction-start-prompt
+  submit handler previously assumed `#chkExtraction` always exists in the DOM (it
+  doesn't, for a company without the card) — this would otherwise have broken WO
+  form submission entirely for getagrip the moment the card was hidden. Found and
+  fixed before shipping, not after.
+- GAG's two unused `per_day_equipment` catalog items ("Ozone", "Ozone Treatment" — 0
+  equipment units ever registered, 0 extraction jobs ever created) were deactivated
+  (`is_active = FALSE`) per Chris's explicit choice among leave-alone/convert-to-
+  standard/deactivate — data kept, not deleted, and no longer reachable anywhere now
+  that "Deploy Equipment" is hidden for this company anyway.
+- `jobs.py`'s nightly extraction upkeep was left company-agnostic rather than special-
+  cased to skip getagrip — it already queries `WHERE is_extraction = TRUE`, which is
+  now permanently empty for GAG (no path to ever set it), so the no-op is structural,
+  not a maintained exception.
+
+New test `smoke_extraction_company_gate.py` covers the gating itself (404s, nav/UI
+absence for getagrip; unaffected for the other three; Ozone items deactivated).
+`smoke_extraction.py` (Increment 2.2's original test) was switched from getagrip to
+kleanit_charlotte, since the feature it tests no longer exists for the company it
+was originally written against.
+
 ---
 
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:

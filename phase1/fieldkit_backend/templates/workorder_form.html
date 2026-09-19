@@ -286,7 +286,9 @@
     <div id="liRows"><div class="li-empty" id="liEmpty">No line items yet — add a service or deploy equipment.</div></div>
     <div class="li-actions">
         <button type="button" class="btn-add" onclick="addStdRow()">+ Add Service</button>
+        {% if has_extraction(company_key) %}
         <button type="button" class="btn-add" onclick="addEqRow()">+ Deploy Equipment</button>
+        {% endif %}
     </div>
     <div class="li-summary">
         <span style="color:#888;">Subtotal</span>
@@ -295,6 +297,7 @@
     <div class="li-accrue-note" id="liAccrueNote"></div>
 </div>
 
+{% if has_extraction(company_key) %}
 <!-- ============================ Extraction ============================ -->
 <div class="card">
     <h2>Water Extraction</h2>
@@ -332,6 +335,7 @@
         {% endif %}
     </div>
 </div>
+{% endif %}
 
 <!-- ============================ Assigned Techs ============================ -->
 <div class="card">
@@ -882,8 +886,11 @@
         // saving (directive §3.2): the WO stays one row either way, but
         // "Completed" for a still-drying job is wrong — it should become
         // Extraction Active instead unless the office explicitly says no.
+        // The whole Water Extraction card (and #chkExtraction with it) is
+        // absent from the DOM for companies without extraction (D-0xx).
         const statusSelect = document.getElementById('statusSelect');
-        const isExtraction = document.getElementById('chkExtraction').checked;
+        const chkExtraction = document.getElementById('chkExtraction');
+        const isExtraction = chkExtraction ? chkExtraction.checked : false;
         const actionHidden = document.getElementById('extractionActionHidden');
         if (statusSelect.value === 'Completed' && isExtraction && !actionHidden.value) {
             e.preventDefault();

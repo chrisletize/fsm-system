@@ -30,7 +30,7 @@ reporting until FieldKit's billing is complete.
 | Compliance portals | Built (1.8, migration 015): `customer_compliance_portals` table, enrollment/edit/toggle UI, auto-assign-on-harden, `/compliance` review page with accept/reject + generic `.xlsx` export (real per-portal templates still pending from Chris/Michele). |
 | NC cash-basis tax report | Built (1.10, migration 016, `/reports/tax`): cash-basis by county, state/county/transit split incl. Mecklenburg's 1% additional-county line, refund handling, Excel + PDF export. Untested against real data (none exists yet). |
 | Cutover import from Phase 0 | Not built — deferred by Chris (2026-09-19) until the site is ready for day-to-day testing. Investigation-only finding logged: the statements DB (`fsm_prod`) currently has zero invoice/tax rows for all four companies (D-038); needs resolving before this increment actually runs. |
-| Water extraction queue | Built (2.2, migration 018, `/extraction`): one-WO-lifecycle model (no cloning), daily log, Retrieved flow with per-day billing recompute, pickup-list PDF, follow-up-WO offer. |
+| Water extraction queue | Built (2.2, migration 018, `/extraction`): one-WO-lifecycle model (no cloning), daily log, Retrieved flow with per-day billing recompute, pickup-list PDF, follow-up-WO offer. **Not available for Get a Grip** (bathtub/surface resurfacing — never does this work; gated post-build 2026-09-19, D-071). Fully intact for the other three companies. |
 | Day sheet / hours / job activity reports | Built (2.3, `/reports`, `/reports/daysheet`, `/reports/hours`, `/reports/jobs`): printable per-tech schedule, honest "scheduled not actual" hours, job list + CSV export. No migration needed — all columns already existed. |
 | Retired-tag replacements | Built (2.4 + 2.5, migrations 019/020): `is_internal_task` (customer-less WOs), derived "New Customer" badge, and (once `customer_flags` existed) the Delinquent Account badge on customer detail/WO form/dispatch board. Callback still deferred to §4.4. |
 | Scheduled jobs | Built (2.5, migration 020, `phase1/fieldkit_backend/jobs.py`): nightly customer_flags/extraction upkeep, uninvoiced alert, EOD digest, weekly sales report placeholder. Per-company master on/off switch (`company_settings.scheduled_alerts_enabled`, `/settings/company`) — **off for all four companies**; cron installed and live (computing/logging) but sends no real email until switched on. See `docs/DEPLOYMENT/cron-jobs.md`. |
@@ -73,6 +73,12 @@ customer detail, WO form, dispatch board, and billing page.
 
 Awaiting Chris's direction: Stage 3 (estimates, ratings, sales CRM, callbacks) or a
 pause for real-world testing with Michele.
+
+**Post-Stage-2 correction (2026-09-19):** water extraction was built for all four
+companies, but Get a Grip never actually does this work — Chris caught it after
+review. Gated off for getagrip specifically (`COMPANIES_WITHOUT_EXTRACTION` in
+`app.py`): `/extraction` 404s, nav link/WO-form UI hidden, two unused catalog items
+deactivated. Nothing removed for the other three companies. See D-071.
 
 Decisions Chris has already made for this build (delinquent threshold = 90 days past
 invoice date, FL tax left empty/exempt for Kleanit SF, SF-import receivables excluded

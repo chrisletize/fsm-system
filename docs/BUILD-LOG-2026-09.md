@@ -922,3 +922,41 @@ skipped with a logged reason, not silently dropped.
 
 This closes out Stage 2 in full. Awaiting Chris's direction on what's next — Stage 3
 (estimates, ratings, sales CRM, callbacks) or a pause for real-world testing.
+
+---
+
+## 2026-09-19 — Post-Stage-2 correction: remove water extraction from Get a Grip
+
+Chris caught this after reviewing the build: extraction was built for all four
+companies through 2.2, but Get a Grip (bathtub/surface resurfacing) never does this
+work. Not a new increment — a scoped correction.
+
+**What:**
+- `COMPANIES_WITHOUT_EXTRACTION = {'getagrip'}` (`app.py`) + a `has_extraction`
+  Jinja global. `/extraction` and its 4 sub-routes now 404 for getagrip; the nav link,
+  the WO form's "Deploy Equipment" button, and the whole Water Extraction card are
+  hidden. Nothing deleted — the feature is untouched for the other three companies.
+- Found and fixed a real bug while doing this: the WO form's submit handler assumed
+  `#chkExtraction` always exists in the DOM to check whether to show the
+  start-extraction prompt. Hiding the card for getagrip would have made that
+  `getElementById(...).checked` throw and silently break WO form submission
+  entirely for this company. Null-guarded before shipping.
+- Per Chris's choice (asked directly rather than guessed): GAG's two unused
+  `per_day_equipment` catalog items ("Ozone", "Ozone Treatment" — 0 equipment units,
+  0 extraction jobs, ever) were deactivated, not deleted or converted.
+
+**Migration:** none — this is UI/routing gating + one `UPDATE catalog_items SET
+is_active = FALSE` on getagrip only, not a schema change.
+
+**Commit:** (pending — `app.py`, `base.html`, `workorder_form.html`, new smoke test,
+`smoke_extraction.py` switched to kleanit_charlotte, this entry, decisions log,
+status doc).
+
+**Smoke test:** `tests/smoke_extraction_company_gate.py` — 21/21 checks: the 404s,
+nav/UI absence for getagrip, the other three companies fully unaffected, and the
+Ozone catalog items confirmed deactivated. `smoke_extraction.py` (2.2's original
+test) was switched from getagrip to kleanit_charlotte — the feature it exercises no
+longer exists for the company it was written against — and re-verified 33/33. Full
+15-file regression suite re-run clean.
+
+Decisions: D-071 in `docs/DECISIONS-MADE-DURING-BUILD.md`.
