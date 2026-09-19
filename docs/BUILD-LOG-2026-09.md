@@ -666,3 +666,74 @@ built); the richer two-button duration-warning banner (D-048); per-line
 `estimated_minutes` override UI (addendum mentions it as possible, not required).
 
 Proceeding to Increment 2.2 (water extraction queue + accrual engine).
+
+---
+
+## 2026-09-19 — Stage 2, Increment 2.2 — Water extraction queue + accrual engine
+
+**What:** One work order per extraction job, from set-up through retrieval — the WO
+stays one row the whole time, nothing is cloned (directive §3.2, supersedes design v2
+§8's clone-forward model).
+
+- **Migration 018**: `work_orders` gains `is_extraction`, `extraction_started_at`,
+  `extraction_closed_at`, `followup_tech_username`, `equipment_incomplete`. New
+  `extraction_daily_log` table (`UNIQUE(work_order_id, log_date)`). Most of the
+  schema this increment needed (`extraction_status`, `extraction_day_count`,
+  `parent_work_order_id`, `description_followup`, the `'Extraction Active'` status
+  value) already existed from an earlier increment — confirmed via `\d work_orders`
+  before writing the migration, so only the genuinely-missing columns were added.
+- WO form: a Water Extraction card (extraction checkbox, equipment-not-confirmed
+  checkbox, follow-up tech picker). `is_extraction` auto-sets TRUE the moment an
+  equipment line is present in a save; `equipment_incomplete` auto-clears the moment a
+  save includes >=1 equipment line, regardless of the checkbox (D-051/D-052).
+  Completing a WO that's `is_extraction` triggers an in-page "Set equipment as active?"
+  banner (two real buttons, not a native confirm — D-053) that either starts extraction
+  (`status='Extraction Active'`, `extraction_status='Drying'`,
+  `extraction_started_at` = earliest deployed_at if backdated, else today) or closes
+  normally.
+- **Queue page** `/<company>/extraction`: summary cards (active/ready/missed-today/
+  day-5+-escalated), table with day count (computed live — D-054, since §3.5's nightly
+  job doesn't exist yet), row actions (Mark Ready / Needs More Time / Missed Today,
+  each upserting `extraction_daily_log`), "Log Today's Status for All" batch action,
+  "Generate Pickup List for Tomorrow" PDF grouped by property then follow-up tech.
+- **Retrieved**: a modal (reusing the base.html modal brick) lists open per-day lines
+  with a per-line retrieved-date input (defaults to today, blank = still open —
+  partial retrieval keeps the job active); when none remain open,
+  `extraction_status='Equipment Retrieved'`, `extraction_closed_at`,
+  `status='Completed'` — the existing "Generate invoice now?" banner on WO detail
+  picks this up automatically, no new invoice-prompt code needed.
+- **Follow-up cleaning WO**: offered on WO detail once retrieved. Pre-fills the
+  customer/location/site label on a genuinely NEW work order by reusing WO-edit's own
+  customer-context JS load (D-055) — not a copy of the extraction job, since a cleaning
+  follow-up needs its own line items and schedule.
+- Dispatch board's droplet badge now reads the real `is_extraction` column (was a live
+  equipment-line-existence heuristic in 2.1, before this column existed) and adds an
+  ⚠️ equipment-not-confirmed badge to the popover.
+- Nav: Extraction link for admin/manager/office.
+
+**Migration:** 018 (`018_extraction_queue.sql`), applied to all four DBs. Pre-migration
+backups in `~/db-backups/2026-09-19i/`.
+
+**Commit:** (pending — migration file, `app.py`, `extraction_queue.html` (new),
+`base.html`, `workorder_form.html`, `workorder_detail.html`, smoke test, this entry,
+decisions log, status doc).
+
+**Smoke test:** `tests/smoke_extraction.py` — 33/33 checks. Covers: is_extraction
+auto-set on a fresh equipment-line WO; the full start-extraction transition including
+a backdated `extraction_started_at`; the dispatch board's droplet badge now sourced
+from the real column; the queue page and its live day count; all three row log
+actions and the daily-log upsert; the batch log-all action; the pickup-list PDF
+(byte-searched for the customer name); the full Retrieved flow (per-line date,
+recomputed quantity/total matching the existing per-day billing formula, close to
+Completed, status history row); the follow-up-WO offer and its full prefill chain
+(redirect params, customer combo, parent hidden field, Follow-Up Visit checkbox); and
+equipment_incomplete auto-clearing even when the checkbox stays checked in the same
+submission that adds the line. Cleanup verified zero residue. All 10 prior smoke
+tests re-run clean as regressions.
+
+**Deferred:** day-5+ escalation email notification (needs §3.5's nightly job/alert
+email, not built yet — the queue page's own escalation count/highlight IS built and
+live). `extraction_day_count`'s stored column still isn't written by anything (kept
+for when §3.5 lands).
+
+Proceeding to Increment 2.3 (day sheet, hours report, job activity report).

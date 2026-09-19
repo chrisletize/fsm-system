@@ -17,6 +17,7 @@ import re
 import io
 import zipfile
 import base64
+from urllib.parse import urlencode
 from openpyxl import Workbook
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
@@ -2434,6 +2435,11 @@ def _save_work_order(company_key, wo_id):
     est_duration        = _opt_num(request.form.get('estimated_duration_hours'))
     duration_overridden = request.form.get('duration_overridden') == 'true'
     assigned_techs      = request.form.getlist('assigned_techs')
+    parent_work_order_id = _opt_num(request.form.get('parent_work_order_id'))
+    is_extraction_checkbox = request.form.get('is_extraction') == 'on'
+    equipment_incomplete   = request.form.get('equipment_incomplete') == 'on'
+    followup_tech_username = request.form.get('followup_tech_username', '').strip() or None
+    extraction_action       = request.form.get('extraction_action') or None
 
     if not customer_id:
         return None, 'Pick a customer from the list.'
@@ -2479,6 +2485,32 @@ def _save_work_order(company_key, wo_id):
                 f'Catalog estimate is {catalog_duration_hours:g}h, scheduled is '
                 f'{est_duration:g}h — non-blocking, just flagging the gap.'
             )
+
+    # Extraction (directive §3.2). is_extraction auto-sets TRUE the moment any
+    # per_day_equipment line is present in THIS save -- editable off again only
+    # once no equipment lines remain (the checkbox alone can't turn it off while
+    # one's still on the WO, since that would hide a real extraction job).
+    has_eq_line = any(l['equipment_unit_id'] for l in lines)
+    is_extraction = is_extraction_checkbox or has_eq_line
+    # equipment_incomplete auto-clears the moment this save includes >=1
+    # equipment line -- "confirming" the equipment, per the directive, regardless
+    # of what the checkbox said (the office-side stand-in for the mobile flow).
+    if has_eq_line:
+        equipment_incomplete = False
+
+    extraction_started_at = None
+    extraction_status_value = None
+    if status == 'Completed' and is_extraction and extraction_action == 'start':
+        deployed_dates = []
+        for l in lines:
+            if l.get('deployed_at'):
+                deployed_dates.append(datetime.strptime(l['deployed_at'], '%Y-%m-%d').date())
+        today = date.today()
+        extraction_started_at = min([today] + deployed_dates) if deployed_dates else today
+        extraction_status_value = 'Drying'
+        status = 'Extraction Active'
+        if not followup_tech_username and assigned_techs:
+            followup_tech_username = assigned_techs[0]
 
     username = session.get('username')
     conn = get_db_connection(company_key)
@@ -2527,8 +2559,10 @@ def _save_work_order(company_key, wo_id):
                      start_date, end_date, arrival_window_start, arrival_window_end,
                      estimated_duration_hours, scheduled_start,
                      catalog_estimated_duration_hours, duration_overridden,
+                     parent_work_order_id, is_extraction, equipment_incomplete,
+                     followup_tech_username, extraction_started_at, extraction_status,
                      created_by, updated_by)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 RETURNING id
             """, (wo_number, customer_id, service_location_id, primary_contact_id,
                   status, work_site_label, auto_description,
@@ -2537,16 +2571,24 @@ def _save_work_order(company_key, wo_id):
                   start_date, end_date, arrival_start, arrival_end,
                   est_duration, scheduled_start,
                   catalog_duration_hours, duration_overridden,
+                  parent_work_order_id, is_extraction, equipment_incomplete,
+                  followup_tech_username, extraction_started_at, extraction_status_value,
                   username, username))
             wo_id = cur.fetchone()['id']
         else:
             cur.execute("""
-                SELECT status FROM work_orders WHERE id = %s AND deleted_at IS NULL
+                SELECT status, extraction_started_at FROM work_orders WHERE id = %s AND deleted_at IS NULL
             """, (wo_id,))
             existing = cur.fetchone()
             if not existing:
                 return None, 'Work order not found.'
             prev_status = existing['status']
+            # extraction_started_at is sticky once set -- only this save's
+            # explicit 'start' transition (extraction_started_at truthy above)
+            # may set it; any other save on an already-active job must not
+            # clobber it back to whatever this branch computed (None).
+            if extraction_started_at is None:
+                extraction_started_at = existing['extraction_started_at']
             cur.execute("""
                 UPDATE work_orders
                 SET customer_id=%s, service_location_id=%s, primary_contact_id=%s,
@@ -2559,6 +2601,9 @@ def _save_work_order(company_key, wo_id):
                     arrival_window_start=%s, arrival_window_end=%s,
                     estimated_duration_hours=%s, scheduled_start=%s,
                     catalog_estimated_duration_hours=%s, duration_overridden=%s,
+                    parent_work_order_id=%s, is_extraction=%s, equipment_incomplete=%s,
+                    followup_tech_username=%s, extraction_started_at=%s,
+                    extraction_status=COALESCE(%s, extraction_status),
                     updated_at=CURRENT_TIMESTAMP, updated_by=%s
                 WHERE id=%s AND deleted_at IS NULL
             """, (customer_id, service_location_id, primary_contact_id,
@@ -2568,6 +2613,9 @@ def _save_work_order(company_key, wo_id):
                   start_date, end_date, arrival_start, arrival_end,
                   est_duration, scheduled_start,
                   catalog_duration_hours, duration_overridden,
+                  parent_work_order_id, is_extraction, equipment_incomplete,
+                  followup_tech_username, extraction_started_at,
+                  extraction_status_value,
                   username, wo_id))
 
         # ---- Line items: update by id, insert new, soft-delete missing. ----
@@ -2935,12 +2983,19 @@ def workorder_detail(company_key, wo_id, branding, all_companies, company_access
             row = cur.fetchone()
             nxt = row['reissued_as_invoice_id'] if row else None
 
+    has_followup_child = False
+    if wo['is_extraction']:
+        cur.execute("SELECT id FROM work_orders WHERE parent_work_order_id = %s AND deleted_at IS NULL LIMIT 1", (wo_id,))
+        has_followup_child = cur.fetchone() is not None
+
     cur.close(); conn.close()
+    extraction_day_count = _extraction_day_count(wo['extraction_started_at'])
     return render_template('workorder_detail.html',
         branding=branding, company_key=company_key,
         company_access=company_access, all_companies=all_companies,
         wo=wo, site_label=label, line_items=line_items, subtotal=subtotal,
         accruing=accruing, techs=techs, history=history, invoice_id=invoice_id,
+        extraction_day_count=extraction_day_count, has_followup_child=has_followup_child,
     )
 
 @app.route('/<company_key>/workorders/new', methods=['GET', 'POST'])
@@ -2960,6 +3015,22 @@ def workorder_new(company_key, branding, all_companies, company_access):
     # Prefill from the dispatch board: clicking an empty timeline slot links here
     # with ?tech=&date=&time= (directive §3.1).
     prefill_tech = request.args.get('tech', '').strip()
+
+    # Prefill from "Create follow-up cleaning work order" (directive §3.2).
+    prefill_customer_id = _opt_num(request.args.get('customer_id'))
+    prefill_customer_name = None
+    if prefill_customer_id:
+        conn = get_db_connection(company_key)
+        cur = conn.cursor()
+        cur.execute("SELECT property_name, customer_type FROM customers WHERE id = %s AND deleted_at IS NULL",
+                    (prefill_customer_id,))
+        c = cur.fetchone()
+        cur.close(); conn.close()
+        if c:
+            prefill_customer_name = f"{c['property_name']} ({c['customer_type']})"
+        else:
+            prefill_customer_id = None
+
     return render_template('workorder_form.html',
         branding=branding, company_key=company_key,
         company_access=company_access, all_companies=all_companies,
@@ -2971,6 +3042,12 @@ def workorder_new(company_key, branding, all_companies, company_access):
         site_labels=WORK_SITE_LABELS,
         prefill_date=request.args.get('date', '').strip(),
         prefill_time=request.args.get('time', '').strip(),
+        prefill_customer_id=prefill_customer_id,
+        prefill_customer_name=prefill_customer_name,
+        prefill_service_location_id=_opt_num(request.args.get('service_location_id')),
+        prefill_work_site_label=request.args.get('work_site_label', '').strip(),
+        prefill_parent_id=_opt_num(request.args.get('parent_id')),
+        prefill_followup=request.args.get('followup') == '1',
     )
 
 @app.route('/<company_key>/workorders/<int:wo_id>/edit', methods=['GET', 'POST'])
@@ -3163,12 +3240,8 @@ def _dispatch_board_data(company_key, target_date):
     cur.execute("""
         SELECT wo.id, wo.work_order_number, wo.status, wo.priority,
                wo.scheduled_start, wo.estimated_duration_hours,
-               c.property_name AS customer_name,
-               EXISTS(
-                   SELECT 1 FROM work_order_line_items li
-                   WHERE li.work_order_id = wo.id AND li.deleted_at IS NULL
-                     AND li.equipment_unit_id IS NOT NULL
-               ) AS has_equipment
+               wo.is_extraction, wo.equipment_incomplete,
+               c.property_name AS customer_name
         FROM work_orders wo
         JOIN customers c ON c.id = wo.customer_id
         WHERE wo.deleted_at IS NULL AND wo.start_date = %s
@@ -3195,7 +3268,8 @@ def _dispatch_board_data(company_key, target_date):
         block = {
             'id': w['id'], 'work_order_number': w['work_order_number'],
             'customer_name': w['customer_name'], 'status': w['status'],
-            'priority': w['priority'], 'has_equipment': w['has_equipment'],
+            'priority': w['priority'], 'has_equipment': w['is_extraction'],
+            'equipment_incomplete': w['equipment_incomplete'],
             'techs': techs_by_wo.get(w['id'], []),
             'scheduled_start': w['scheduled_start'], 'duration_hours': duration,
         }
@@ -3350,6 +3424,278 @@ def dispatch_resize(company_key):
     if abs(hours - catalog_hours) > 0.25:
         warning = f'Catalog estimate is {catalog_hours:g}h, scheduled is {hours:g}h — non-blocking, just flagging the gap.'
     return jsonify({'ok': True, 'warning': warning, 'duration_hours': hours})
+
+
+# ============================================================================
+# Water extraction queue  (admin + manager + office; Increment 2.2)
+# ============================================================================
+
+EXTRACTION_LOG_STATUSES = ('Ready for Pickup', 'Needs More Time', 'Missed Today')
+EXTRACTION_ESCALATION_DAY = 5
+
+def _extraction_day_count(started_at):
+    """directive: 'computed by the nightly job (§3.5) and on read' -- §3.5
+    doesn't exist yet, so this increment always computes it live rather than
+    trust a column nothing is writing yet."""
+    if not started_at:
+        return None
+    return (date.today() - started_at).days + 1
+
+
+@app.route('/<company_key>/extraction')
+@login_required
+@company_access_required
+@with_branding
+def extraction_queue(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT wo.id, wo.work_order_number, wo.extraction_status, wo.extraction_started_at,
+               wo.followup_tech_username, wo.equipment_incomplete, wo.priority,
+               c.property_name AS customer_name
+        FROM work_orders wo
+        JOIN customers c ON c.id = wo.customer_id
+        WHERE wo.deleted_at IS NULL AND wo.status = 'Extraction Active'
+        ORDER BY wo.extraction_started_at ASC NULLS LAST, wo.id
+    """)
+    active = cur.fetchall()
+
+    wo_ids = [w['id'] for w in active]
+    open_lines_by_wo = {}
+    if wo_ids:
+        cur.execute("""
+            SELECT id, work_order_id, description, deployed_at
+            FROM work_order_line_items
+            WHERE work_order_id = ANY(%s) AND deleted_at IS NULL
+              AND equipment_unit_id IS NOT NULL AND retrieved_at IS NULL
+            ORDER BY deployed_at
+        """, (wo_ids,))
+        for row in cur.fetchall():
+            open_lines_by_wo.setdefault(row['work_order_id'], []).append(dict(row))
+    cur.close(); conn.close()
+
+    techs_by_username = {t['username']: t['full_name'] for t in _company_techs(company_key)}
+    today = date.today()
+
+    rows = []
+    for w in active:
+        day_count = _extraction_day_count(w['extraction_started_at'])
+        rows.append({
+            'id': w['id'], 'work_order_number': w['work_order_number'],
+            'customer_name': w['customer_name'], 'extraction_status': w['extraction_status'],
+            'day_count': day_count, 'escalated': (day_count or 0) >= EXTRACTION_ESCALATION_DAY,
+            'followup_tech_username': w['followup_tech_username'] or '',
+            'followup_tech_name': techs_by_username.get(w['followup_tech_username'], w['followup_tech_username'] or '—'),
+            'equipment_incomplete': w['equipment_incomplete'],
+            'open_lines': open_lines_by_wo.get(w['id'], []),
+            'priority': w['priority'],
+        })
+
+    summary = {
+        'active': len(rows),
+        'ready': sum(1 for r in rows if r['extraction_status'] == 'Ready for Pickup'),
+        'missed_today': sum(1 for r in rows if r['extraction_status'] == 'Missed Today'),
+        'escalated': sum(1 for r in rows if r['escalated']),
+    }
+
+    return render_template('extraction_queue.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        rows=rows, summary=summary, today=today,
+        log_statuses=EXTRACTION_LOG_STATUSES,
+    )
+
+
+@app.route('/<company_key>/extraction/<int:wo_id>/log', methods=['POST'])
+@login_required
+@company_access_required
+def extraction_log(company_key, wo_id):
+    """Row actions: Mark Ready / Needs More Time / Missed Today."""
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    new_status = request.form.get('extraction_status')
+    if new_status not in EXTRACTION_LOG_STATUSES:
+        abort(400)
+    username = session.get('username')
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        UPDATE work_orders SET extraction_status = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s AND deleted_at IS NULL AND status = 'Extraction Active'
+    """, (new_status, username, wo_id))
+    cur.execute("""
+        INSERT INTO extraction_daily_log (work_order_id, log_date, extraction_status, tech_username, created_by)
+        VALUES (%s, CURRENT_DATE, %s, %s, %s)
+        ON CONFLICT (work_order_id, log_date) DO UPDATE
+        SET extraction_status = EXCLUDED.extraction_status, tech_username = EXCLUDED.tech_username
+    """, (wo_id, new_status, username, username))
+    conn.commit(); cur.close(); conn.close()
+    return redirect(f'/{company_key}/extraction')
+
+
+@app.route('/<company_key>/extraction/log-all', methods=['POST'])
+@login_required
+@company_access_required
+def extraction_log_all(company_key):
+    """Batch 'Log today's status for all' — writes today's daily-log row with
+    each WO's CURRENT status (a no-op on the status itself; the button exists
+    so the office's daily habit still has a target — directive §3.2)."""
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    selected = [int(x) for x in request.form.getlist('wo_ids') if x.strip()]
+    username = session.get('username')
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    where = "status = 'Extraction Active' AND deleted_at IS NULL"
+    params = []
+    if selected:
+        where += " AND id = ANY(%s)"
+        params.append(selected)
+    cur.execute(f"SELECT id, extraction_status FROM work_orders WHERE {where}", params)
+    for w in cur.fetchall():
+        cur.execute("""
+            INSERT INTO extraction_daily_log (work_order_id, log_date, extraction_status, tech_username, created_by)
+            VALUES (%s, CURRENT_DATE, %s, %s, %s)
+            ON CONFLICT (work_order_id, log_date) DO UPDATE
+            SET extraction_status = EXCLUDED.extraction_status, tech_username = EXCLUDED.tech_username
+        """, (w['id'], w['extraction_status'], username, username))
+    conn.commit(); cur.close(); conn.close()
+    flash('Logged today\'s status for all active jobs.', 'success')
+    return redirect(f'/{company_key}/extraction')
+
+
+@app.route('/<company_key>/extraction/<int:wo_id>/retrieve', methods=['POST'])
+@login_required
+@company_access_required
+def extraction_retrieve(company_key, wo_id):
+    """Sets retrieved_at on the submitted open per-day lines (per-line date,
+    blank = still open -- a partial retrieval keeps the WO active). When no
+    open lines remain: extraction_status='Equipment Retrieved',
+    extraction_closed_at, status='Completed' (the invoice-prompt banner
+    picks this up on its own, same as any other Completed WO)."""
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    username = session.get('username')
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT id FROM work_order_line_items
+        WHERE work_order_id = %s AND deleted_at IS NULL
+          AND equipment_unit_id IS NOT NULL AND retrieved_at IS NULL
+    """, (wo_id,))
+    open_line_ids = [r['id'] for r in cur.fetchall()]
+    for lid in open_line_ids:
+        retrieved_date = request.form.get(f'retrieved_{lid}', '').strip()
+        if retrieved_date:
+            cur.execute("""
+                UPDATE work_order_line_items
+                SET retrieved_at = %s, quantity = GREATEST((%s::date - deployed_at), 1),
+                    total = GREATEST((%s::date - deployed_at), 1) * unit_price,
+                    updated_at = CURRENT_TIMESTAMP, updated_by = %s
+                WHERE id = %s
+            """, (retrieved_date, retrieved_date, retrieved_date, username, lid))
+
+    cur.execute("""
+        SELECT count(*) AS n FROM work_order_line_items
+        WHERE work_order_id = %s AND deleted_at IS NULL
+          AND equipment_unit_id IS NOT NULL AND retrieved_at IS NULL
+    """, (wo_id,))
+    still_open = cur.fetchone()['n']
+
+    if still_open == 0:
+        cur.execute("""
+            UPDATE work_orders
+            SET extraction_status = 'Equipment Retrieved', extraction_closed_at = CURRENT_DATE,
+                status = 'Completed', updated_at = CURRENT_TIMESTAMP, updated_by = %s
+            WHERE id = %s
+        """, (username, wo_id))
+        cur.execute("""
+            INSERT INTO work_order_status_history (work_order_id, status, changed_by, notes)
+            VALUES (%s, 'Completed', %s, 'Equipment retrieved — extraction closed')
+        """, (wo_id, username))
+        flash('Equipment retrieved — job marked Completed.', 'success')
+    else:
+        flash(f'Retrieved. {still_open} unit(s) still deployed — job stays active.', 'success')
+    conn.commit(); cur.close(); conn.close()
+    return redirect(f'/{company_key}/extraction')
+
+
+@app.route('/<company_key>/extraction/pickup-list.pdf')
+@login_required
+@company_access_required
+def extraction_pickup_list_pdf(company_key):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT wo.id, wo.work_order_number, wo.followup_tech_username,
+               c.property_name AS customer_name
+        FROM work_orders wo
+        JOIN customers c ON c.id = wo.customer_id
+        WHERE wo.deleted_at IS NULL AND wo.status = 'Extraction Active'
+          AND wo.extraction_status = 'Ready for Pickup'
+        ORDER BY c.property_name, wo.followup_tech_username NULLS LAST
+    """)
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    techs_by_username = {t['username']: t['full_name'] for t in _company_techs(company_key)}
+
+    branding = COMPANY_BRANDING.get(company_key, {})
+    primary = colors.HexColor(branding.get('color_primary', '#2C2C2C'))
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter, pageCompression=0,
+                             rightMargin=0.6*inch, leftMargin=0.6*inch, topMargin=0.6*inch, bottomMargin=0.6*inch)
+    doc.invariant = 1
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle('title', parent=styles['Heading1'], fontSize=16, textColor=primary,
+                                  spaceAfter=12, alignment=TA_CENTER)
+    elements = [
+        Paragraph(f"{branding.get('name', company_key)} — Pickup List for Tomorrow", title_style),
+        Paragraph(date.today().strftime('%B %d, %Y'), ParagraphStyle('d', parent=styles['Normal'], alignment=TA_CENTER, spaceAfter=14)),
+    ]
+    data = [['Property', 'Work Order #', 'Follow-up Tech']]
+    for r in rows:
+        tech_name = techs_by_username.get(r['followup_tech_username'], r['followup_tech_username'] or '—')
+        data.append([r['customer_name'], r['work_order_number'], tech_name])
+    t = Table(data, repeatRows=1)
+    t.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), primary), ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#dddddd')), ('FONTSIZE', (0, 0), (-1, -1), 9),
+    ]))
+    elements.append(t)
+    doc.build(elements)
+    return Response(buf.getvalue(), mimetype='application/pdf',
+                     headers={'Content-Disposition': 'attachment; filename="pickup_list.pdf"'})
+
+
+@app.route('/<company_key>/workorders/<int:wo_id>/followup-new')
+@login_required
+@company_access_required
+def workorder_followup_new(company_key, wo_id):
+    """'Create follow-up cleaning work order' offer after Retrieved (directive
+    §3.2) — redirects into the normal new-WO form pre-filled with the parent
+    WO's customer/location/site label, tagged as a follow-up."""
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT customer_id, service_location_id, work_site_label
+        FROM work_orders WHERE id = %s AND deleted_at IS NULL
+    """, (wo_id,))
+    wo = cur.fetchone()
+    cur.close(); conn.close()
+    if not wo:
+        abort(404)
+    params = {'parent_id': wo_id, 'followup': '1', 'customer_id': wo['customer_id']}
+    if wo['service_location_id']:
+        params['service_location_id'] = wo['service_location_id']
+    if wo['work_site_label']:
+        params['work_site_label'] = wo['work_site_label']
+    return redirect(f'/{company_key}/workorders/new?' + urlencode(params))
 
 
 # ============================================================================

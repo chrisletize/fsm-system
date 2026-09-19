@@ -502,6 +502,53 @@ established for these lines (D-016 era). Applied identically client-side (JS) an
 server-side (`_save_work_order`) so the live preview and the saved value never
 disagree.
 
+D-051 — [MODEL] `is_extraction` can only be auto-set TRUE by the presence of an
+equipment line in the current save; the checkbox alone can't turn it OFF while an
+equipment line remains on the WO (that would hide a real extraction job from the
+queue/board). Once every equipment line is removed, the checkbox's own value takes
+over. This reads "editable" (directive's own word) as "editable within the bounds of
+what's actually on the WO," not "can contradict the data."
+
+D-052 — [MODEL] `equipment_incomplete` auto-clears the moment a save includes >=1
+equipment line, REGARDLESS of what the checkbox says in that same submission (a
+checked-but-ignored checkbox, not a validation error) — the directive's own wording
+("clearing it requires the equipment lines to be confirmed... any edit that saves >=1
+per-day line clears it") reads as an unconditional rule, not something the office can
+override by leaving the box checked. Verified by the smoke test submitting the
+checkbox as checked in the very save that adds the line, confirming it clears anyway.
+
+D-053 — [SCOPE] The "Set equipment as active?" prompt (directive: "[Yes — Start
+Extraction] [No — Close Normally]") is a same-page banner with two real buttons, not a
+native `confirm()` dialog — matches the two distinct labels the directive specifies,
+which a plain confirm/cancel can't express. Intercepts the form's submit event only
+when status is being changed to Completed on an `is_extraction` WO and no choice has
+been recorded yet (`extraction_action` hidden field empty); either button re-submits
+with that field set, letting the normal save path do the rest.
+
+D-054 — [SCOPE] `extraction_day_count` is computed live on every read (WO detail, the
+queue page) rather than trusted from the stored column of the same name (which
+predates this increment and nothing writes to yet — Increment 2.5's nightly job is
+what the directive actually assigns that column to). This matches the directive's own
+"computed by the nightly job and on read" wording for the "on read" half; the "nightly
+job" half is out of scope until §3.5.
+
+D-055 — [SCOPE] "Create Follow-Up Cleaning Work Order" pre-fills the customer combo
+and, when present, the service location, work site label, and Follow-Up Visit
+checkbox — reusing the exact customer-context JS load that WO-edit mode already
+performs (`loadCustomerContext(id, true)`), just triggered on a NEW-WO page instead of
+an edit. It does NOT pre-fill line items, techs, or scheduling — the office picks a
+fresh cleaning service and time, which is the actual point of a follow-up (a
+different job, at the same site, not a copy of the extraction job).
+
+D-056 — [DEFAULTED] Starting an extraction with no assigned techs on the WO leaves
+`followup_tech_username` NULL rather than guessing; when at least one tech IS
+assigned, `followup_tech_username` defaults to the first assigned tech (directive:
+"default = lead tech" — this build doesn't yet surface a distinct "lead" flag in the
+WO form's tech checklist, only `work_order_techs.is_lead_tech` at the schema level
+with nothing setting it differently from "first assigned," so "first assigned" and
+"lead" are the same thing today). The office can always override via the Extraction
+card's Follow-Up Tech dropdown.
+
 ---
 
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:

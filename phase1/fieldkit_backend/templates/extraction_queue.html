@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Extraction Queue — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; flex-wrap:wrap; gap:.75rem; }
+    .page-header h1 { font-size:1.6rem; color:{{ branding.color_primary }}; }
+    .summary-bar { display:flex; gap:1rem; margin-bottom:1.25rem; flex-wrap:wrap; }
+    .summary-card { background:white; border:1px solid #eee; border-radius:8px; padding:1rem 1.4rem; min-width:140px; }
+    .summary-card .num { font-size:1.6rem; font-weight:700; color:{{ branding.color_primary }}; }
+    .summary-card .lbl { font-size:.78rem; color:#888; text-transform:uppercase; letter-spacing:.04em; }
+    .summary-card.escalated .num { color:#c0392b; }
+    table { width:100%; border-collapse:collapse; font-size:.88rem; }
+    th { text-align:left; padding:.6rem .8rem; border-bottom:2px solid #eee; font-size:.72rem; text-transform:uppercase;
+         letter-spacing:.4px; color:#888; background:#fafafa; }
+    td { padding:.6rem .8rem; border-bottom:1px solid #f5f5f5; vertical-align:middle; }
+    .escalated-row { background:#fdecea; }
+    .incomplete-flag { color:#c0392b; font-weight:600; font-size:.78rem; }
+    .action-btns form { display:inline; }
+    .action-btns button { font-size:.76rem; padding:.3rem .6rem; border-radius:4px; border:1px solid #ddd; background:#f7f7f7; cursor:pointer; margin-right:.2rem; }
+    .toolbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:.75rem; }
+    .btn { display:inline-block; padding:.5rem 1rem; border-radius:4px; text-decoration:none; font-size:.85rem; cursor:pointer; border:none; }
+    .btn-outline { background:white; color:{{ branding.color_primary }}; border:1px solid {{ branding.color_primary }}; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    #retrieveModal .modal-box { max-width:480px; }
+    #retrieveModal .line-row { display:flex; justify-content:space-between; align-items:center; gap:.6rem; margin-bottom:.6rem; }
+    #retrieveModal input[type=date] { padding:.35rem .5rem; border:1px solid #ddd; border-radius:4px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Extraction Queue — {{ branding.name }}</h1>
+    <a class="btn btn-outline" href="/{{ company_key }}/extraction/pickup-list.pdf">Generate Pickup List for Tomorrow</a>
+</div>
+
+<div class="summary-bar">
+    <div class="summary-card"><div class="num">{{ summary.active }}</div><div class="lbl">Active Units</div></div>
+    <div class="summary-card"><div class="num">{{ summary.ready }}</div><div class="lbl">Ready for Pickup</div></div>
+    <div class="summary-card"><div class="num">{{ summary.missed_today }}</div><div class="lbl">Missed Today</div></div>
+    <div class="summary-card escalated"><div class="num">{{ summary.escalated }}</div><div class="lbl">Day 5+ Escalations</div></div>
+</div>
+
+<form method="POST" action="/{{ company_key }}/extraction/log-all" id="logAllForm">
+<div class="card">
+    <div class="toolbar">
+        <span style="font-size:.85rem; color:#888;">{{ rows|length }} active unit{{ 's' if rows|length != 1 }}</span>
+        <button type="submit" class="btn btn-outline">Log Today's Status for All</button>
+    </div>
+    <table>
+        <thead>
+            <tr><th></th><th>Unit / Customer</th><th>Days Active</th><th>Last Status</th><th>Follow-up Tech</th><th>Actions</th></tr>
+        </thead>
+        <tbody>
+            {% for r in rows %}
+            <tr class="{% if r.escalated %}escalated-row{% endif %}">
+                <td><input type="checkbox" name="wo_ids" value="{{ r.id }}"></td>
+                <td>
+                    <a href="/{{ company_key }}/workorders/{{ r.id }}">{{ r.work_order_number }}</a> — {{ r.customer_name }}
+                    {% if r.equipment_incomplete %}<div class="incomplete-flag">Equipment not confirmed</div>{% endif %}
+                </td>
+                <td>{{ r.day_count }}{% if r.escalated %} <span style="color:#c0392b;">⚠</span>{% endif %}</td>
+                <td>{{ r.extraction_status or '—' }}</td>
+                <td>{{ r.followup_tech_name }}</td>
+                <td class="action-btns">
+                    <form method="POST" action="/{{ company_key }}/extraction/{{ r.id }}/log">
+                        <input type="hidden" name="extraction_status" value="Ready for Pickup">
+                        <button type="submit">Mark Ready</button>
+                    </form>
+                    <form method="POST" action="/{{ company_key }}/extraction/{{ r.id }}/log">
+                        <input type="hidden" name="extraction_status" value="Needs More Time">
+                        <button type="submit">Needs More Time</button>
+                    </form>
+                    <form method="POST" action="/{{ company_key }}/extraction/{{ r.id }}/log">
+                        <input type="hidden" name="extraction_status" value="Missed Today">
+                        <button type="submit">Missed Today</button>
+                    </form>
+                    <button type="button" onclick="openRetrieve({{ r.id }}, {{ r.open_lines|tojson }})">Retrieved</button>
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" style="text-align:center; color:#aaa; padding:2rem;">No active extraction jobs.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+</form>
+
+<div class="modal-overlay" id="retrieveModal">
+    <div class="modal-box">
+        <h3>Retrieve Equipment</h3>
+        <form method="POST" id="retrieveForm">
+            <div id="retrieveLines"></div>
+            <div class="form-actions" style="margin-top:1rem;">
+                <button type="submit" class="btn btn-primary">Save</button>
+                <button type="button" class="btn btn-outline" onclick="closeModal('retrieveModal')">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function openRetrieve(woId, openLines) {
+    const form = document.getElementById('retrieveForm');
+    form.action = `/{{ company_key }}/extraction/${woId}/retrieve`;
+    const container = document.getElementById('retrieveLines');
+    const today = new Date().toISOString().slice(0, 10);
+    if (openLines.length === 0) {
+        container.innerHTML = '<p>No open equipment lines — this will close the job.</p>';
+    } else {
+        container.innerHTML = openLines.map(l =>
+            `<div class="line-row"><span>${l.description || 'Unit'} (deployed ${l.deployed_at})</span>
+             <input type="date" name="retrieved_${l.id}" value="${today}"></div>`
+        ).join('');
+    }
+    openModal('retrieveModal');
+}
+</script>
+{% endblock %}

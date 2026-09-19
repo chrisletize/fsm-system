@@ -113,6 +113,8 @@
 <input type="hidden" name="description_occ_vac" id="occVacHidden" value="{{ wo.description_occ_vac or '' if wo else '' }}">
 <input type="hidden" name="description_am_pm" id="amPmHidden" value="{{ wo.description_am_pm or '' if wo else '' }}">
 <input type="hidden" name="duration_overridden" id="durationOverriddenHidden" value="{{ 'true' if wo and wo.duration_overridden else 'false' }}">
+<input type="hidden" name="extraction_action" id="extractionActionHidden" value="">
+<input type="hidden" name="parent_work_order_id" value="{{ wo.parent_work_order_id if wo and wo.parent_work_order_id else (prefill_parent_id or '') }}">
 
 <!-- ============================ Customer & Location ============================ -->
 <div class="card">
@@ -121,8 +123,8 @@
         <div class="form-group">
             <label>Customer <span class="hint">(required)</span></label>
 {{ restricted_combo_field('customer_id', customers,
-                   wo.customer_id if wo else none,
-                   (wo.customer_name + ' (' + wo.customer_type + ')') if wo else '',
+                   wo.customer_id if wo else (prefill_customer_id or none),
+                   (wo.customer_name + ' (' + wo.customer_type + ')') if wo else (prefill_customer_name or ''),
                    'Type customer name…', True, 'customerCombo') }}
             <span id="creditBadge" style="display:none; background:#fdecea; color:#c0392b; border-radius:8px;
                   padding:.2rem .6rem; font-size:.78rem; font-weight:600; margin-top:.3rem; width:fit-content;"></span>
@@ -142,7 +144,7 @@
         <div class="form-group">
             <label id="siteLabel">Work Site</label>
             <input type="text" name="work_site_label" id="siteInput"
-                   value="{{ wo.work_site_label or '' if wo else '' }}"
+                   value="{{ wo.work_site_label or '' if wo else (prefill_work_site_label or '') }}"
                    placeholder="" autocomplete="off">
             <div class="dupe-banner" id="dupeBanner"></div>
         </div>
@@ -249,7 +251,7 @@
         <div class="form-group">
             <div class="check-row">
                 <input type="checkbox" name="description_followup" id="chkFollowup"
-                       {% if wo and wo.description_followup %}checked{% endif %}>
+                       {% if (wo and wo.description_followup) or (not wo and prefill_followup) %}checked{% endif %}>
                 <label for="chkFollowup">Follow-Up Visit</label>
             </div>
         </div>
@@ -282,6 +284,44 @@
         <span class="amount" id="liSubtotal">$0.00</span>
     </div>
     <div class="li-accrue-note" id="liAccrueNote"></div>
+</div>
+
+<!-- ============================ Extraction ============================ -->
+<div class="card">
+    <h2>Water Extraction</h2>
+    <div class="form-grid">
+        <div class="form-group">
+            <div class="check-row">
+                <input type="checkbox" name="is_extraction" id="chkExtraction"
+                       {% if wo and wo.is_extraction %}checked{% endif %}>
+                <label for="chkExtraction">Water extraction job</label>
+            </div>
+            <span class="hint">Auto-checked when equipment is deployed below; editable.</span>
+        </div>
+        <div class="form-group">
+            <div class="check-row">
+                <input type="checkbox" name="equipment_incomplete" id="chkEquipIncomplete"
+                       {% if wo and wo.equipment_incomplete %}checked{% endif %}>
+                <label for="chkEquipIncomplete">Equipment not yet confirmed</label>
+            </div>
+            <span class="hint">Clears automatically once an equipment line is saved.</span>
+        </div>
+        <div class="form-group">
+            <label>Follow-Up Tech <span class="hint">(daily check-ins while active)</span></label>
+            <select name="followup_tech_username">
+                <option value="">— none —</option>
+                {% for t in techs %}
+                <option value="{{ t.username }}" {% if wo and wo.followup_tech_username == t.username %}selected{% endif %}>{{ t.full_name or t.username }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        {% if wo and wo.is_extraction %}
+        <div class="form-group">
+            <label>Extraction Status</label>
+            <div class="hint">{{ wo.extraction_status or '—' }}{% if wo.extraction_started_at %} — started {{ wo.extraction_started_at }}{% endif %}</div>
+        </div>
+        {% endif %}
+    </div>
 </div>
 
 <!-- ============================ Assigned Techs ============================ -->
@@ -337,10 +377,15 @@
     const companyKey  = "{{ company_key }}";
     const WO_ID       = {{ wo.id if wo else 'null' }};
     const IS_EDIT     = WO_ID !== null;
+    // A follow-up WO offer (directive §3.2, "Create follow-up cleaning work
+    // order") pre-fills the customer/location even on a NEW WO — reuse the
+    // exact same customer-context load edit mode already does.
+    const PREFILL_CUSTOMER_CONTEXT = {{ 'true' if prefill_customer_id else 'false' }};
     const CATALOG     = {{ catalog_std|tojson }};
     const EQUIPMENT   = {{ equipment|tojson }};
     const INIT_LINES  = {{ line_items|tojson }};
-    const INIT_LOCATION = {{ wo.service_location_id if wo and wo.service_location_id else 'null' }};
+    const INIT_LOCATION = {{ wo.service_location_id if wo and wo.service_location_id
+                             else (prefill_service_location_id if prefill_service_location_id else 'null') }};
     const INIT_CONTACT  = {{ wo.primary_contact_id if wo and wo.primary_contact_id else 'null' }};
     const INIT_OCCVAC   = "{{ wo.description_occ_vac or '' if wo else '' }}";
     const INIT_AMPM     = "{{ wo.description_am_pm or '' if wo else '' }}";
@@ -804,8 +849,46 @@
             alert('A work order needs at least one line item.');
             return;
         }
+
+        // Marking an extraction job Completed offers a fork instead of just
+        // saving (directive §3.2): the WO stays one row either way, but
+        // "Completed" for a still-drying job is wrong — it should become
+        // Extraction Active instead unless the office explicitly says no.
+        const statusSelect = document.getElementById('statusSelect');
+        const isExtraction = document.getElementById('chkExtraction').checked;
+        const actionHidden = document.getElementById('extractionActionHidden');
+        if (statusSelect.value === 'Completed' && isExtraction && !actionHidden.value) {
+            e.preventDefault();
+            showExtractionPrompt();
+            return;
+        }
+
         document.getElementById('lineItemsJson').value = JSON.stringify(lines);
     });
+
+    function showExtractionPrompt() {
+        let banner = document.getElementById('extractionPromptBanner');
+        if (!banner) {
+            banner = document.createElement('div');
+            banner.id = 'extractionPromptBanner';
+            banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#fff8e1;border-bottom:2px solid #ffe082;' +
+                'padding:1rem;text-align:center;z-index:100;box-shadow:0 2px 8px rgba(0,0,0,.15);';
+            banner.innerHTML = 'Set equipment as active? ' +
+                '<button type="button" id="extractStartBtn" class="btn btn-primary" style="margin:0 .5rem;">Yes — Start Extraction</button>' +
+                '<button type="button" id="extractCloseBtn" class="btn btn-secondary" style="margin:0;">No — Close Normally</button>';
+            document.body.prepend(banner);
+            document.getElementById('extractStartBtn').addEventListener('click', () => submitExtractionAction('start'));
+            document.getElementById('extractCloseBtn').addEventListener('click', () => submitExtractionAction('close'));
+        }
+        banner.style.display = 'block';
+    }
+
+    function submitExtractionAction(action) {
+        document.getElementById('extractionActionHidden').value = action;
+        const { lines } = serializeLines();
+        document.getElementById('lineItemsJson').value = JSON.stringify(lines);
+        document.getElementById('woForm').submit();
+    }
 
     function confirmDelete() {
         if (confirm('Delete this work order? It can be restored by an admin within one year.')) {
@@ -832,8 +915,9 @@
             }
         });
 
-        // Editing: load the customer's locations/contacts and restore selections.
-        if (IS_EDIT && customerHidden.value) {
+        // Editing (or a follow-up-WO prefill): load the customer's
+        // locations/contacts and restore selections.
+        if ((IS_EDIT || PREFILL_CUSTOMER_CONTEXT) && customerHidden.value) {
             loadCustomerContext(customerHidden.value, true);
         }
         recalc();

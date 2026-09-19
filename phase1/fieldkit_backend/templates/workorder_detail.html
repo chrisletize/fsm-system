@@ -77,6 +77,28 @@
     </div>
 </div>
 
+{% if wo.equipment_incomplete %}
+<div class="card" style="background:#fdecea; border:1px solid #f3b8b3; color:#a32d2d; margin-bottom:1.25rem;">
+    Equipment not yet confirmed for this job.
+</div>
+{% endif %}
+
+{% if wo.is_extraction and wo.status == 'Extraction Active' %}
+<div class="card" style="background:#e6f6f5; border:1px solid #b7e4e0; margin-bottom:1.25rem;">
+    <strong>Extraction active</strong> — {{ wo.extraction_status or 'Drying' }}, day {{ extraction_day_count }}
+    {% if extraction_day_count and extraction_day_count >= 5 %}<span style="color:#a32d2d; font-weight:600;"> (escalated)</span>{% endif %}
+    started {{ wo.extraction_started_at }}.
+    <a href="/{{ company_key }}/extraction" style="margin-left:.5rem;">View queue</a>
+</div>
+{% endif %}
+
+{% if wo.is_extraction and wo.status == 'Completed' and wo.extraction_closed_at and not has_followup_child %}
+<div class="card" style="background:#eef2ff; border:1px solid #d6dcfb; margin-bottom:1.25rem;">
+    <span>Equipment retrieved.</span>
+    <a href="/{{ company_key }}/workorders/{{ wo.id }}/followup-new" class="btn btn-primary" style="margin-left:.5rem;">Create Follow-Up Cleaning Work Order</a>
+</div>
+{% endif %}
+
 {% if invoice_id %}
 <div class="card" style="background:#eef2ff; border:1px solid #d6dcfb; display:flex; justify-content:space-between; align-items:center; margin-bottom:1.25rem;">
     <span>This work order has been invoiced.</span>

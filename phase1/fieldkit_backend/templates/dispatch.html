@@ -122,6 +122,7 @@ function showPopover(block, anchorEl) {
     const badges = [];
     if (block.priority && block.priority !== 'Normal') badges.push(block.priority);
     if (block.has_equipment) badges.push('💧 Extraction');
+    if (block.equipment_incomplete) badges.push('⚠️ Equipment not confirmed');
     pop.innerHTML = `
         <h4>${block.work_order_number}</h4>
         <div class="row">${block.customer_name}</div>
