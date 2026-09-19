@@ -77,4 +77,4 @@ is the authoritative work plan for this build; where it disagrees with an older 
 doc, the directive wins (disagreements are catalogued in
 `docs/FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md`).
 
-*Last commit at time of writing: `1ad67d8` (2026-09-19).*
+*Last commit at time of writing: `e7a9c27` (2026-09-19).*
