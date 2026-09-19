@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Reports — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header h1 { font-size:1.75rem; color:{{ branding.color_primary }}; margin-bottom:1.25rem; }
+    .report-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:1rem; }
+    .report-card { background:white; border:1px solid #eee; border-radius:8px; padding:1.25rem; text-decoration:none; color:inherit; display:block; }
+    .report-card:hover { border-color:{{ branding.color_primary }}; }
+    .report-card h3 { font-size:1rem; color:{{ branding.color_primary }}; margin-bottom:.4rem; }
+    .report-card p { font-size:.82rem; color:#888; }
+    .report-card.disabled { opacity:.5; cursor:not-allowed; pointer-events:none; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header"><h1>Reports — {{ branding.name }}</h1></div>
+
+<div class="report-grid">
+    <a class="report-card" href="/{{ company_key }}/reports/tax"><h3>NC Cash-Basis Tax Report</h3><p>By county, state/county/transit split.</p></a>
+    <a class="report-card" href="/{{ company_key }}/reports/aging"><h3>A/R Aging</h3><p>Open receivables by bucket.</p></a>
+    <a class="report-card" href="/{{ company_key }}/reports/daysheet"><h3>Day Sheet</h3><p>Printable per-tech schedule.</p></a>
+    <a class="report-card" href="/{{ company_key }}/reports/hours"><h3>Hours</h3><p>Scheduled hours, jobs, extraction checks per tech.</p></a>
+    <a class="report-card" href="/{{ company_key }}/reports/jobs"><h3>Job Activity</h3><p>Job list with totals, CSV export.</p></a>
+    <div class="report-card disabled"><h3>Recency</h3><p>Coming in a later increment (directive §4.3).</p></div>
+</div>
+{% endblock %}

@@ -490,6 +490,10 @@
                class="subnav-link {% if '/extraction' in current_path %}active{% endif %}">
                 Extraction
             </a>
+            <a href="/{{ company_key }}/reports"
+               class="subnav-link {% if '/reports' in current_path %}active{% endif %}">
+                Reports
+            </a>
             {% endif %}
 
             {% if session.user_role in ('admin', 'manager', 'office') %}

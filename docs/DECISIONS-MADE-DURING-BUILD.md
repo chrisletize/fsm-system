@@ -549,6 +549,39 @@ with nothing setting it differently from "first assigned," so "first assigned" a
 "lead" are the same thing today). The office can always override via the Extraction
 card's Follow-Up Tech dropdown.
 
+D-057 — [BUG FIX, introduced in 2.1, caught by 2.3's smoke test] `_save_work_order`'s
+duration-warning check (`abs(est_duration - catalog_duration_hours) > 0.25`) crashed
+with a 500 whenever a WO was saved with `duration_overridden=true` AND a real
+`estimated_duration_hours` value submitted — `_opt_num()` returns the raw form STRING,
+not a float, and nothing converted it before the subtraction. Increment 2.1's own
+smoke test never hit this path (it only exercised `duration_overridden=false` on
+create, and the dispatch `/resize` endpoint parses its own float separately), so it
+shipped in `4a33861` and stayed live through `1ad67d8` until 2.3's report fixtures —
+which needed distinct, explicit hours per WO — tripped it. Fixed with an explicit
+`float(est_duration)` before the comparison. Confirmed via the regression suite that
+no other route was affected.
+
+D-058 — [SCOPE] `/reports` (the landing page) links to Recency even though that report
+doesn't exist until directive §4.3 — shown as a disabled card ("Coming in a later
+increment") rather than omitted, since the directive explicitly lists it among this
+page's links. Matches the build's practice of not silently dropping a directive-named
+item just because it isn't built yet.
+
+D-059 — [MODEL] The hours report's "extraction checks" count is computed live per
+(tech, day) by checking whether an `is_extraction` WO's active window
+(`extraction_started_at`..`extraction_closed_at` or today) covers that day — not from
+a stored per-day row, since nothing clones the WO per day (§3.2's model). This mirrors
+the dispatch board's own live "show every Extraction Active WO on the follow-up tech's
+row every day" rule from the same section.
+
+D-060 — [SCOPE] Job activity report's status filter dropdown includes
+`WO_OFFICE_STATUSES` plus `Extraction Active` and `Invoiced` — both real statuses the
+app sets automatically (extraction start, invoice creation) that aren't in the
+office-settable set. `On The Way`/`In Progress` are left out: they exist in the DB
+CHECK constraint but nothing in the app sets them yet (reserved for a future mobile
+tech app per the design docs), so including them in a filter dropdown today would
+offer a choice that can never match a real row.
+
 ---
 
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:

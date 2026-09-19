@@ -737,3 +737,51 @@ live). `extraction_day_count`'s stored column still isn't written by anything (k
 for when §3.5 lands).
 
 Proceeding to Increment 2.3 (day sheet, hours report, job activity report).
+
+---
+
+## 2026-09-19 — Stage 2, Increment 2.3 — Day sheet, hours report, job activity report
+
+**What:**
+- `/<company>/reports` landing page linking tax, aging, day sheet, hours, jobs (and a
+  disabled Recency card — that report doesn't exist until §4.3, D-058).
+- `/<company>/reports/daysheet?date=&tech=`: printable, grouped by tech (ordered by
+  `scheduled_start`), one section per tech with `page-break-after` for print, a
+  multi-tech WO appearing under every assigned tech's section, an Unassigned group,
+  time/customer/address (with an on-screen-only Google Maps link)/work site/job
+  description/tech notes/status/contact phone. "All techs" (no filter) prints all
+  sections.
+- `/<company>/reports/hours?from=&to=`: per tech per day — scheduled hours
+  (Σ `estimated_duration_hours`), jobs count, completed count, and extraction checks
+  (computed live from each active job's start/close window, D-059 — nothing clones the
+  WO per day so there's no stored per-day row to count). An `actual_duration_hours`
+  column renders as an honest blank em dash until the mobile tech app exists.
+- `/<company>/reports/jobs?from=&to=&status=&tech=&customer=`: job activity list +
+  totals (count, invoiced total via `invoices`/`invoice_versions`), CSV export.
+  Status filter includes `Extraction Active`/`Invoiced` alongside the office-settable
+  statuses (D-060).
+
+**Bug found and fixed (introduced in 2.1, not this increment):** D-057 —
+`_save_work_order`'s duration-warning comparison crashed with a 500 on
+`duration_overridden=true` + a real duration value, because `_opt_num()` returns a
+string and nothing cast it to float before subtracting. Shipped in `4a33861`, stayed
+live through `1ad67d8` (neither 2.1 nor 2.2's own smoke tests happened to exercise
+that exact combination), caught when 2.3's report fixtures needed distinct explicit
+hours per WO. Fixed; confirmed via the full regression suite.
+
+**Commit:** (pending — `app.py`, four new templates, `base.html` nav link, smoke test,
+this entry, decisions log, status doc). No migration this increment — every column
+used already existed.
+
+**Smoke test:** `tests/smoke_reports.py` — 23/23 checks. Covers: day sheet grouping
+(a multi-tech WO appears under both techs' sections; the tech filter narrows to one);
+the hours report rendering with the honest "Scheduled Hours" / blank "Actual Hours"
+labels; the job activity report's tech filter, invoiced-total column (a live invoice
+created mid-test), and CSV export; the reports landing page linking to all five live
+reports. Cleanup verified zero residue across all four DBs (tech fixtures replicate
+everywhere). All 11 prior smoke tests re-run clean as regressions.
+
+**Deferred:** nothing from this increment's own scope; Recency (§4.3) intentionally
+not built yet.
+
+Proceeding to Increment 2.4 (replacements for the retired tag concept).

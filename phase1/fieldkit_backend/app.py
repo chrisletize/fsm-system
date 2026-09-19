@@ -2480,6 +2480,7 @@ def _save_work_order(company_key, wo_id):
     if not duration_overridden:
         est_duration = catalog_duration_hours
     elif est_duration is not None:
+        est_duration = float(est_duration)  # _opt_num returns a string
         if abs(est_duration - catalog_duration_hours) > 0.25:  # +-15 minutes
             duration_warning = (
                 f'Catalog estimate is {catalog_duration_hours:g}h, scheduled is '
@@ -3696,6 +3697,230 @@ def workorder_followup_new(company_key, wo_id):
     if wo['work_site_label']:
         params['work_site_label'] = wo['work_site_label']
     return redirect(f'/{company_key}/workorders/new?' + urlencode(params))
+
+
+# ============================================================================
+# Day sheet, hours, job activity reports  (admin + manager + office; Increment 2.3)
+# ============================================================================
+
+@app.route('/<company_key>/reports')
+@login_required
+@company_access_required
+@with_branding
+def reports_landing(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    return render_template('reports_landing.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+    )
+
+
+@app.route('/<company_key>/reports/daysheet')
+@login_required
+@company_access_required
+@with_branding
+def report_daysheet(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    target_date = request.args.get('date') or date.today().isoformat()
+    tech_filter = request.args.get('tech', '').strip()
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT wo.id, wo.work_order_number, wo.status,
+               to_char(wo.scheduled_start, 'HH12:MI AM') AS time_display,
+               wo.work_site_label, wo.auto_description, wo.notes_for_techs,
+               c.property_name AS customer_name,
+               COALESCE(sl.address, c.address) AS address,
+               COALESCE(sl.city, c.city) AS city,
+               COALESCE(sl.state, c.state) AS state,
+               COALESCE(cc.office_phone, cc.mobile_phone) AS contact_phone
+        FROM work_orders wo
+        JOIN customers c ON c.id = wo.customer_id
+        LEFT JOIN service_locations sl ON sl.id = wo.service_location_id
+        LEFT JOIN customer_contacts cc ON cc.id = wo.primary_contact_id
+        WHERE wo.deleted_at IS NULL AND wo.start_date = %s
+        ORDER BY wo.scheduled_start ASC NULLS LAST, wo.id
+    """, (target_date,))
+    wos = cur.fetchall()
+
+    wo_ids = [w['id'] for w in wos]
+    techs_by_wo = {}
+    if wo_ids:
+        cur.execute("SELECT work_order_id, username FROM work_order_techs WHERE work_order_id = ANY(%s)", (wo_ids,))
+        for row in cur.fetchall():
+            techs_by_wo.setdefault(row['work_order_id'], []).append(row['username'])
+    cur.close(); conn.close()
+
+    techs_by_username = {t['username']: t['full_name'] for t in _company_techs(company_key)}
+    groups = {}
+    for w in wos:
+        row = dict(w)
+        row['address_display'] = ', '.join(filter(None, [row['address'], row['city'], row['state']]))
+        assigned = techs_by_wo.get(w['id'], []) or ['']
+        for uname in assigned:
+            if tech_filter and uname != tech_filter:
+                continue
+            label = techs_by_username.get(uname, uname) if uname else 'Unassigned'
+            groups.setdefault((uname, label), []).append(row)
+
+    tech_groups = [{'username': u, 'label': l, 'rows': rows} for (u, l), rows in sorted(groups.items(), key=lambda kv: kv[0][1])]
+
+    return render_template('daysheet.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        target_date=target_date, tech_filter=tech_filter,
+        tech_groups=tech_groups, all_techs=_company_techs(company_key),
+    )
+
+
+@app.route('/<company_key>/reports/hours')
+@login_required
+@company_access_required
+@with_branding
+def report_hours(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    today = date.today()
+    date_from = request.args.get('from') or today.isoformat()
+    date_to = request.args.get('to') or today.isoformat()
+    d_from = datetime.strptime(date_from, '%Y-%m-%d').date()
+    d_to = datetime.strptime(date_to, '%Y-%m-%d').date()
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT wt.username, wo.start_date, count(*) AS jobs,
+               count(*) FILTER (WHERE wo.status IN ('Completed', 'Invoiced')) AS completed,
+               COALESCE(SUM(wo.estimated_duration_hours), 0) AS scheduled_hours
+        FROM work_orders wo
+        JOIN work_order_techs wt ON wt.work_order_id = wo.id
+        WHERE wo.deleted_at IS NULL AND wo.start_date BETWEEN %s AND %s
+        GROUP BY wt.username, wo.start_date
+    """, (date_from, date_to))
+    job_rows = cur.fetchall()
+
+    # Extraction "checks" -- directive: the dispatch board shows every
+    # Extraction Active WO on the follow-up tech's row every day until
+    # closed. There's no per-day row for this (nothing is cloned), so it's
+    # counted live: for each day in range, an active job counts as one check
+    # for its follow-up tech on that day.
+    cur.execute("""
+        SELECT followup_tech_username, extraction_started_at, extraction_closed_at
+        FROM work_orders
+        WHERE deleted_at IS NULL AND is_extraction = TRUE AND followup_tech_username IS NOT NULL
+          AND extraction_started_at IS NOT NULL AND extraction_started_at <= %s
+          AND (extraction_closed_at IS NULL OR extraction_closed_at >= %s)
+    """, (date_to, date_from))
+    extraction_rows = cur.fetchall()
+    cur.close(); conn.close()
+
+    checks = {}
+    d = d_from
+    while d <= d_to:
+        for e in extraction_rows:
+            started = e['extraction_started_at']
+            closed = e['extraction_closed_at']
+            if started <= d and (closed is None or closed >= d):
+                checks[(e['followup_tech_username'], d)] = checks.get((e['followup_tech_username'], d), 0) + 1
+        d += timedelta(days=1)
+
+    techs_by_username = {t['username']: t['full_name'] for t in _company_techs(company_key)}
+    rows = []
+    for r in job_rows:
+        rows.append({
+            'username': r['username'], 'tech_name': techs_by_username.get(r['username'], r['username']),
+            'date': r['start_date'], 'scheduled_hours': float(r['scheduled_hours']),
+            'jobs': r['jobs'], 'completed': r['completed'],
+            'extraction_checks': checks.get((r['username'], r['start_date']), 0),
+        })
+    rows.sort(key=lambda r: (r['tech_name'], r['date']))
+
+    return render_template('hours_report.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        rows=rows, date_from=date_from, date_to=date_to,
+    )
+
+
+def _jobs_report_query(company_key):
+    date_from = request.args.get('from', '').strip()
+    date_to = request.args.get('to', '').strip()
+    status_filter = request.args.get('status', '').strip()
+    tech_filter = request.args.get('tech', '').strip()
+    customer_filter = request.args.get('customer', '').strip()
+
+    conditions = ["wo.deleted_at IS NULL"]
+    params = []
+    if date_from:
+        conditions.append("wo.start_date >= %s"); params.append(date_from)
+    if date_to:
+        conditions.append("wo.start_date <= %s"); params.append(date_to)
+    if status_filter:
+        conditions.append("wo.status = %s"); params.append(status_filter)
+    if tech_filter:
+        conditions.append("EXISTS (SELECT 1 FROM work_order_techs wt WHERE wt.work_order_id = wo.id AND wt.username = %s)")
+        params.append(tech_filter)
+    if customer_filter:
+        conditions.append("c.property_name ILIKE %s"); params.append(f'%{customer_filter}%')
+    where = " AND ".join(conditions)
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute(f"""
+        SELECT wo.id, wo.work_order_number, wo.start_date, wo.status,
+               c.property_name AS customer_name,
+               i.id AS invoice_id, iv.total AS invoiced_total
+        FROM work_orders wo
+        JOIN customers c ON c.id = wo.customer_id
+        LEFT JOIN invoices i ON i.work_order_id = wo.id AND i.deleted_at IS NULL
+        LEFT JOIN invoice_versions iv ON iv.id = i.current_version_id
+        WHERE {where}
+        ORDER BY wo.start_date DESC NULLS LAST, wo.id DESC
+        LIMIT 1000
+    """, params)
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    return rows, {'from': date_from, 'to': date_to, 'status': status_filter, 'tech': tech_filter, 'customer': customer_filter}
+
+
+@app.route('/<company_key>/reports/jobs')
+@login_required
+@company_access_required
+@with_branding
+def report_jobs(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    rows, filters = _jobs_report_query(company_key)
+    totals = {
+        'count': len(rows),
+        'invoiced_total': sum(float(r['invoiced_total']) for r in rows if r['invoiced_total'] is not None),
+    }
+    return render_template('jobs_report.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        rows=rows, totals=totals, filters=filters,
+        statuses=WO_OFFICE_STATUSES + ('Extraction Active', 'Invoiced'),
+    )
+
+
+@app.route('/<company_key>/reports/jobs/export.csv')
+@login_required
+@company_access_required
+def report_jobs_export_csv(company_key):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    rows, _ = _jobs_report_query(company_key)
+    lines = ['Work Order #,Date,Status,Customer,Invoiced Total']
+    for r in rows:
+        total = f"{float(r['invoiced_total']):.2f}" if r['invoiced_total'] is not None else ''
+        customer = (r['customer_name'] or '').replace('"', '""')
+        lines.append(f'{r["work_order_number"]},{r["start_date"] or ""},{r["status"]},"{customer}",{total}')
+    csv_text = '\n'.join(lines) + '\n'
+    return Response(csv_text, mimetype='text/csv',
+                     headers={'Content-Disposition': 'attachment; filename="job_activity.csv"'})
 
 
 # ============================================================================
