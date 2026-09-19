@@ -228,10 +228,20 @@
             {% endif %}
 
             {% if ver and ver.state == 'Hardened' %}
+                {% if not resend_configured %}
+                <p class="muted" style="font-size:.82rem;">Email sending is not configured on this server.</p>
+                {% elif not email_recipients %}
+                <p class="muted" style="font-size:.82rem;">
+                    This customer has no billing contact set up to receive invoices.
+                    <a href="/{{ company_key }}/customers/{{ inv.customer_id }}/contacts/new" style="color:{{ branding.color_primary }};">Add a billing contact</a>
+                </p>
+                {% else %}
+                <button type="button" class="btn btn-primary" onclick="openModal('sendInvoiceModal')">Send Email</button>
+                {% endif %}
             <form class="action-form" method="POST" action="/{{ company_key }}/invoices/{{ inv.id }}/send"
-                  onsubmit="return confirm('Mark this invoice Sent?');">
-                <input type="text" name="sent_to_emails" placeholder="Recipient email(s), optional">
-                <button type="submit" class="btn btn-primary">Send</button>
+                  onsubmit="return confirm('Mark this invoice Sent WITHOUT emailing it? Use this only if it was already delivered some other way.');"
+                  style="margin-top:.4rem;">
+                <button type="submit" class="btn btn-outline" style="font-size:.8rem;">Mark Sent (no email)</button>
             </form>
             {% endif %}
 
@@ -272,6 +282,37 @@
         </div>
     </div>
 </div>
+
+{% if email_recipients %}
+<!-- Send Email modal -->
+<div class="modal-overlay" id="sendInvoiceModal">
+    <div class="modal-box" style="max-width:520px;">
+        <button type="button" class="modal-close" onclick="closeModal('sendInvoiceModal')">✕</button>
+        <h3>Send Invoice</h3>
+        <form method="POST" action="/{{ company_key }}/invoices/{{ inv.id }}/send-email"
+              onsubmit="return confirm('Send this invoice by email now?');">
+            <div style="font-size:.85rem; font-weight:600; margin-bottom:.3rem;">Recipients</div>
+            {% for email in email_recipients %}
+            <label style="display:block; font-size:.88rem; margin-bottom:.3rem;">
+                <input type="checkbox" name="recipients" value="{{ email }}" checked> {{ email }}
+            </label>
+            {% endfor %}
+            <label style="font-size:.85rem; font-weight:600; display:block; margin-top:.6rem;">Additional addresses <span class="muted" style="font-weight:400;">(comma-separated)</span>
+                <input type="text" name="extra_emails" style="width:100%; padding:.5rem .6rem; border:1px solid #ddd; border-radius:4px; margin-top:.3rem;">
+            </label>
+            <label style="font-size:.85rem; font-weight:600; display:block; margin-top:.6rem;">Subject
+                <input type="text" name="subject" value="{{ default_subject }}" style="width:100%; padding:.5rem .6rem; border:1px solid #ddd; border-radius:4px; margin-top:.3rem;">
+            </label>
+            <label style="font-size:.85rem; font-weight:600; display:block; margin-top:.6rem;">Message
+                <textarea name="body" rows="5" style="width:100%; padding:.5rem .6rem; border:1px solid #ddd; border-radius:4px; margin-top:.3rem; font-family:inherit;">{{ default_body }}</textarea>
+            </label>
+            <div style="margin-top:1.25rem;">
+                <button type="submit" class="btn btn-primary">Send</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
 
 <!-- Record Payment modal -->
 <div class="modal-overlay" id="recordPaymentModal">

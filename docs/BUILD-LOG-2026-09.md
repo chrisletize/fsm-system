@@ -376,3 +376,63 @@ page redesign (aging summary cards, filters, "Open credits" panel) is Increment 
 today's addition to `billing.html` is intentionally minimal (D-028).
 
 Proceeding to Increment 1.7 (email delivery).
+
+---
+
+## 2026-09-19 — Stage 1, Increment 1.7 — Email delivery (invoices & statements)
+
+**Safety note first:** `RESEND_API_KEY` is a real, live key in this environment, and
+real customer contact emails exist in the database (checked before writing any code).
+Built `_send_email_via_resend()` as the ONE function that ever calls the Resend API,
+specifically so it's a single, easy point to monkey-patch in tests — see D-032 and the
+smoke test's own safety-first docstring. No real email was sent at any point while
+building or testing this increment (verified — the mock counts every call it
+intercepts).
+
+**What:**
+- Reuses the existing Resend integration (`send_reset_email`'s pattern) rather than a
+  parallel one. `_send_email_via_resend()`: from name / reply-to / BCC from
+  `company_settings`, PDF attached as base64, never raises (returns `(message_id,
+  error)` — a failed send must never 500 a request).
+- `_resolve_email_recipients()` (accepts_billing for invoices, accepts_statements for
+  statements), `_render_email_template()` ({customer}/{number}/{total}/{balance}),
+  `_send_invoice_email()` / `_send_statement_email()` (resolve → render → send → log
+  → only on success, transition/update), all writing to the new `email_log` table
+  regardless of outcome.
+- Send-dialog modals on invoice detail (recipient checkboxes, extra addresses,
+  editable subject/body) and customer detail (statement equivalent). A customer with
+  no billing/statement contact shows a blocked message with a link to add one, instead
+  of an empty dialog. Kept the old no-email "Mark Sent" action alongside the new real
+  send — see D-030.
+- `POST /billing/send-statements`: batch send with a sent/failed/skipped-no-contact
+  summary page, wired into the same billing-page checkbox form as the other batch
+  actions.
+- `invoice_email_template` / `statement_email_template` exposed on `/settings/company`.
+- If `RESEND_API_KEY` is unset, `_send_email_via_resend` returns a clean error instead
+  of raising, and the UI hides the Send button behind a "not configured" note rather
+  than showing a dead action.
+
+**Migration:** 014 (`014_email_log.sql`: `email_log` table +
+`company_settings.invoice_email_template`/`statement_email_template`), applied to all
+four DBs. Pre-migration backups in `~/db-backups/2026-09-19e/`.
+
+**Commit:** (pending — migration file, `app.py`, four templates, smoke test, this
+entry, decisions log).
+
+**Smoke test:** `tests/smoke_email_delivery.py` — 31/31 checks, all against a
+monkey-patched Resend + throwaway `.invalid`-address fixtures (0 real sends, confirmed
+by counting intercepted calls). Covers: missing-API-key returns a clean error without
+ever reaching the mock; a successful send calls Resend exactly once with the right
+recipient/attachment/reply-to/BCC, writes `email_log` status='sent', and transitions
+the invoice to Sent; no-recipient blocks with zero Resend calls and zero state change;
+**a failed send (simulated Resend exception) logs status='failed' with the error text
+and leaves the invoice Hardened** — this caught a real bug first (D-031: the failure
+path's `email_log` row was being rolled back along with the rest of the failed
+transaction, silently defeating the whole point of logging failures); single and
+batch statement sends, including the batch summary correctly separating sent vs.
+skipped-no-contact. All six prior smoke tests re-run clean.
+
+**Deferred:** nothing significant — this closes out the directive's explicit email
+requirements for Stage 1's core cycle.
+
+Proceeding to Increment 1.8 (billing page full rebuild, A/R aging report, compliance).

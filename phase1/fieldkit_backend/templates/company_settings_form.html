@@ -160,6 +160,18 @@
             <textarea name="extraction_explainer_text" rows="3">{{ settings.extraction_explainer_text if settings and settings.extraction_explainer_text else '' }}</textarea>
         </div>
 
+        <div class="subhead">Email Templates <span style="font-weight:400; text-transform:none; letter-spacing:0;">— {customer}, {number}, {total}, {balance} placeholders</span></div>
+
+        <div class="form-group full">
+            <label>Invoice Email Body</label>
+            <textarea name="invoice_email_template" rows="4">{{ settings.invoice_email_template if settings and settings.invoice_email_template else '' }}</textarea>
+        </div>
+
+        <div class="form-group full">
+            <label>Statement Email Body</label>
+            <textarea name="statement_email_template" rows="4">{{ settings.statement_email_template if settings and settings.statement_email_template else '' }}</textarea>
+        </div>
+
     </div>
 
     <div class="form-actions">

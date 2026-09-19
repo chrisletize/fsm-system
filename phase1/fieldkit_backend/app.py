@@ -16,6 +16,7 @@ import os
 import re
 import io
 import zipfile
+import base64
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -548,6 +549,15 @@ def customer_detail(company_key, customer_id, branding, all_companies, company_a
     cur.execute("SELECT id, name FROM payment_methods WHERE deleted_at IS NULL ORDER BY sort_order")
     payment_methods = cur.fetchall()
 
+    statement_recipients = _resolve_email_recipients(cur, customer_id, 'statement')
+    default_statement_subject = default_statement_body = ''
+    if statement_recipients:
+        cur.execute("SELECT * FROM company_settings WHERE deleted_at IS NULL LIMIT 1")
+        settings_row = cur.fetchone() or {}
+        default_statement_subject = f"Statement from {settings_row.get('company_name') or company_key}"
+        default_statement_body = _render_email_template(
+            settings_row.get('statement_email_template'), customer['property_name'], '', None, None)
+
     cur.close(); conn.close()
 
     return render_template('customer_detail.html',
@@ -558,6 +568,8 @@ def customer_detail(company_key, customer_id, branding, all_companies, company_a
         nc_counties=NC_COUNTIES, jobs=jobs, customer_invoices=customer_invoices,
         customer_payments=customer_payments, unapplied_credit=unapplied_credit,
         payment_methods=payment_methods, today=date.today().isoformat(),
+        statement_recipients=statement_recipients, resend_configured=bool(RESEND_API_KEY),
+        default_statement_subject=default_statement_subject, default_statement_body=default_statement_body,
     )
 
 # ============================================================================
@@ -1463,6 +1475,8 @@ def _save_company_settings(company_key):
         'remit_to_text':         request.form.get('remit_to_text', '').strip() or None,
         'invoice_footer_text':   request.form.get('invoice_footer_text', '').strip() or None,
         'extraction_explainer_text': request.form.get('extraction_explainer_text', '').strip() or None,
+        'invoice_email_template':   request.form.get('invoice_email_template', '').strip() or None,
+        'statement_email_template': request.form.get('statement_email_template', '').strip() or None,
     }
 
     username = session.get('username')
@@ -1475,6 +1489,7 @@ def _save_company_settings(company_key):
             alert_email=%s, default_tax_county=%s, tax_exempt_by_default=%s,
             state_base_rate=%s, business_hours_start=%s, business_hours_end=%s,
             remit_to_text=%s, invoice_footer_text=%s, extraction_explainer_text=%s,
+            invoice_email_template=%s, statement_email_template=%s,
             updated_at=CURRENT_TIMESTAMP, updated_by=%s
         WHERE deleted_at IS NULL
     """, (fields['company_name'], fields['legal_name'], fields['address'], fields['address_2'],
@@ -1483,7 +1498,8 @@ def _save_company_settings(company_key):
           fields['default_tax_county'], fields['tax_exempt_by_default'], fields['state_base_rate'],
           fields['business_hours_start'], fields['business_hours_end'],
           fields['remit_to_text'], fields['invoice_footer_text'],
-          fields['extraction_explainer_text'], username))
+          fields['extraction_explainer_text'], fields['invoice_email_template'],
+          fields['statement_email_template'], username))
     conn.commit(); cur.close(); conn.close()
     return None
 
@@ -3507,6 +3523,18 @@ def invoice_detail(company_key, invoice_id, branding, all_companies, company_acc
     cur.execute("SELECT id, name FROM payment_methods WHERE deleted_at IS NULL ORDER BY sort_order")
     payment_methods = cur.fetchall()
 
+    # Send-dialog context — only meaningful once Hardened (the only state Send
+    # is offered from).
+    email_recipients, default_subject, default_body = [], '', ''
+    if ver and ver['state'] == 'Hardened':
+        email_recipients = _resolve_email_recipients(cur, inv['customer_id'], 'invoice')
+        cur.execute("SELECT * FROM company_settings WHERE deleted_at IS NULL LIMIT 1")
+        settings_row = cur.fetchone() or {}
+        default_subject = f"Invoice {inv['invoice_number']} from {settings_row.get('company_name') or company_key}"
+        default_body = _render_email_template(
+            settings_row.get('invoice_email_template'), inv['customer_name'],
+            inv['invoice_number'], ver['total'], balance)
+
     cur.close(); conn.close()
     return render_template('invoice_detail.html',
         branding=branding, company_key=company_key,
@@ -3516,6 +3544,8 @@ def invoice_detail(company_key, invoice_id, branding, all_companies, company_acc
         applications=applications, adjustments=adjustments,
         unapplied_credit=unapplied_credit, credit_payments=credit_payments,
         next_unpaid_id=next_unpaid_id, payment_methods=payment_methods,
+        email_recipients=email_recipients, default_subject=default_subject,
+        default_body=default_body, resend_configured=bool(RESEND_API_KEY),
     )
 
 
@@ -4898,6 +4928,7 @@ def billing(company_key, branding, all_companies, company_access):
         company_access=company_access, all_companies=all_companies,
         ready=ready, no_billing=no_billing,
         ready_count=len(ready), no_billing_count=len(no_billing),
+        resend_configured=bool(RESEND_API_KEY),
     )
 
 
@@ -5427,6 +5458,281 @@ def reset_password(token):
     return render_template('reset_password.html',
         token=token, state='success',
         full_name=row['full_name'], error=None,
+    )
+
+# ============================================================================
+# Invoice & statement email delivery  (admin + manager + office)
+#   Reuses the existing Resend integration above (send_reset_email). The
+#   actual network call is isolated in _send_email_via_resend() so tests can
+#   monkey-patch _resend.Emails.send and never touch the network — real
+#   customer email addresses live in this database, so nothing here may ever
+#   fire for real outside an explicit user action against production.
+# ============================================================================
+
+def _resolve_email_recipients(cur, customer_id, kind):
+    """kind: 'invoice' -> accepts_billing contacts, 'statement' -> accepts_statements."""
+    col = 'accepts_billing' if kind == 'invoice' else 'accepts_statements'
+    cur.execute(f"""
+        SELECT office_email FROM customer_contacts
+        WHERE customer_id = %s AND deleted_at IS NULL AND {col} = TRUE
+          AND office_email IS NOT NULL AND office_email <> ''
+        ORDER BY is_primary DESC, last_name
+    """, (customer_id,))
+    return [r['office_email'] for r in cur.fetchall()]
+
+
+def _render_email_template(template, customer_name, number, total, balance):
+    tmpl = template or 'Hi {customer}, please find attached {number}.'
+    return (tmpl.replace('{customer}', customer_name or '')
+                .replace('{number}', number or '')
+                .replace('{total}', f'${total:.2f}' if total is not None else '')
+                .replace('{balance}', f'${balance:.2f}' if balance is not None else ''))
+
+
+def _log_email(cur, kind, related_id, to_emails, subject, message_id, status, error, username):
+    cur.execute("""
+        INSERT INTO email_log (kind, related_id, to_emails, subject, resend_message_id, status, error, sent_by)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+    """, (kind, related_id, ', '.join(to_emails) if isinstance(to_emails, list) else to_emails,
+          subject, message_id, status, error, username))
+
+
+def _send_email_via_resend(to_emails, subject, html_body, attachment_bytes=None,
+                            attachment_filename=None, reply_to=None, from_name=None, bcc=None):
+    """The ONE place that calls the Resend API. Isolated so smoke tests can
+    monkey-patch _resend.Emails.send and guarantee nothing ever reaches the
+    network. Returns (message_id, error) — error is a human string, never an
+    exception (a failed send must never 500 a request)."""
+    if not RESEND_API_KEY:
+        return None, 'Email sending is not configured (RESEND_API_KEY is not set).'
+    payload = {
+        'from': f'{from_name} <{RESEND_FROM}>' if from_name else RESEND_FROM,
+        'to': to_emails,
+        'subject': subject,
+        'html': html_body,
+    }
+    if reply_to:
+        payload['reply_to'] = reply_to
+    if bcc:
+        payload['bcc'] = [bcc] if isinstance(bcc, str) else bcc
+    if attachment_bytes is not None:
+        payload['attachments'] = [{
+            'filename': attachment_filename or 'attachment.pdf',
+            'content': base64.b64encode(attachment_bytes).decode('ascii'),
+        }]
+    try:
+        result = _resend.Emails.send(payload)
+        return (result.get('id') if isinstance(result, dict) else None), None
+    except Exception as e:
+        print(f"RESEND ERROR: {type(e).__name__}: {e}", flush=True)
+        return None, str(e)
+
+
+def _send_invoice_email(cur, company_key, invoice_id, extra_emails, subject_override, body_override, username):
+    """Resolves recipients (accepts_billing contacts + extra addresses from
+    the send dialog), renders subject/body, sends via Resend with the PDF
+    attached, logs to email_log, and — only on a successful send — transitions
+    the invoice to Sent. Returns (ok, error_or_recipients)."""
+    cur.execute("""
+        SELECT i.*, c.property_name AS customer_name
+        FROM invoices i JOIN customers c ON c.id = i.customer_id
+        WHERE i.id = %s AND i.deleted_at IS NULL
+    """, (invoice_id,))
+    inv = cur.fetchone()
+    if not inv:
+        return False, 'Invoice not found.'
+    cur.execute("SELECT * FROM invoice_versions WHERE id = %s", (inv['current_version_id'],))
+    ver = cur.fetchone()
+    if not ver or ver['state'] != 'Hardened':
+        return False, f'Invoice must be Hardened to send (currently {ver["state"] if ver else "no version"}).'
+
+    recipients = list(dict.fromkeys(_resolve_email_recipients(cur, inv['customer_id'], 'invoice') + (extra_emails or [])))
+    if not recipients:
+        return False, 'NO_BILLING_CONTACT'
+
+    cur.execute("SELECT * FROM company_settings WHERE deleted_at IS NULL LIMIT 1")
+    settings = cur.fetchone() or {}
+    balance = invoice_balance(cur, invoice_id)
+
+    default_subject = f"Invoice {inv['invoice_number']} from {settings.get('company_name') or company_key}"
+    subject = subject_override or default_subject
+    body = body_override or _render_email_template(
+        settings.get('invoice_email_template'), inv['customer_name'], inv['invoice_number'],
+        ver['total'], balance)
+
+    pdf_bytes = generate_invoice_pdf(company_key, ver['id'])
+    message_id, err = _send_email_via_resend(
+        recipients, subject, body.replace('\n', '<br/>'),
+        attachment_bytes=pdf_bytes, attachment_filename=f"{inv['invoice_number']}.pdf",
+        reply_to=settings.get('email_reply_to'), from_name=settings.get('email_from_name'),
+        bcc=settings.get('email_reply_to'))
+
+    _log_email(cur, 'invoice', invoice_id, recipients, subject, message_id,
+               'failed' if err else 'sent', err, username)
+    if err:
+        return False, err
+
+    ok, reason, extra = transition_invoice(cur, company_key, invoice_id, 'Sent', username,
+                                            notes=', '.join(recipients))
+    return ok, (reason if not ok else recipients)
+
+
+def _send_statement_email(cur, company_key, customer_id, extra_emails, subject_override, body_override, username, as_of=None):
+    """Same shape as _send_invoice_email for statements. Returns (ok, error_or_recipients)."""
+    cur.execute("SELECT property_name FROM customers WHERE id = %s AND deleted_at IS NULL", (customer_id,))
+    cust = cur.fetchone()
+    if not cust:
+        return False, 'Customer not found.'
+
+    recipients = list(dict.fromkeys(_resolve_email_recipients(cur, customer_id, 'statement') + (extra_emails or [])))
+    if not recipients:
+        return False, 'NO_BILLING_CONTACT'
+
+    cur.execute("SELECT * FROM company_settings WHERE deleted_at IS NULL LIMIT 1")
+    settings = cur.fetchone() or {}
+
+    pdf_bytes, cust_name = generate_statement_pdf(company_key, customer_id, as_of)
+    if pdf_bytes is None:
+        return False, 'Could not generate the statement.'
+
+    default_subject = f"Statement from {settings.get('company_name') or company_key}"
+    subject = subject_override or default_subject
+    body = body_override or _render_email_template(settings.get('statement_email_template'), cust_name, '', None, None)
+
+    message_id, err = _send_email_via_resend(
+        recipients, subject, body.replace('\n', '<br/>'),
+        attachment_bytes=pdf_bytes, attachment_filename=f"{_sanitize_filename(cust_name)}_statement.pdf",
+        reply_to=settings.get('email_reply_to'), from_name=settings.get('email_from_name'),
+        bcc=settings.get('email_reply_to'))
+
+    _log_email(cur, 'statement', customer_id, recipients, subject, message_id,
+               'failed' if err else 'sent', err, username)
+    if err:
+        return False, err
+
+    cur.execute("UPDATE customers SET last_statement_at = CURRENT_TIMESTAMP WHERE id = %s", (customer_id,))
+    return True, recipients
+
+
+def _parse_extra_emails(raw):
+    """Free-typed extra addresses from a send dialog textarea — comma or
+    newline separated, trimmed, empties dropped. No format validation beyond
+    that; a typo'd address just bounces at Resend and shows up in email_log."""
+    if not raw:
+        return []
+    parts = re.split(r'[,\n]', raw)
+    return [p.strip() for p in parts if p.strip()]
+
+
+@app.route('/<company_key>/invoices/<int:invoice_id>/send-email', methods=['POST'])
+@login_required
+@company_access_required
+def invoice_send_email(company_key, invoice_id):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    extra_emails = _parse_extra_emails(request.form.get('extra_emails', ''))
+    checked = set(request.form.getlist('recipients'))
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("SELECT customer_id FROM invoices WHERE id = %s AND deleted_at IS NULL", (invoice_id,))
+    inv = cur.fetchone()
+    if not inv:
+        cur.close(); conn.close()
+        abort(404)
+    resolved = _resolve_email_recipients(cur, inv['customer_id'], 'invoice')
+    # Only the boxes the office actually left checked go out, plus anything
+    # freshly typed into the extra-addresses field.
+    use_recipients = [e for e in resolved if e in checked] + extra_emails
+
+    ok, result = _send_invoice_email(cur, company_key, invoice_id, use_recipients,
+                                      request.form.get('subject', '').strip() or None,
+                                      request.form.get('body', '').strip() or None,
+                                      session.get('username'))
+    if ok:
+        conn.commit()
+        flash(f"Invoice sent to {', '.join(result)}.", 'success')
+    else:
+        # Commit, not rollback: a failed-send attempt still writes an
+        # email_log row (status='failed') that must persist — that's the
+        # whole point of logging failures, not just successes. The
+        # NO_BILLING_CONTACT path never wrote anything, so this is a no-op.
+        conn.commit()
+        if result == 'NO_BILLING_CONTACT':
+            flash('No billing contact selected — add one or check a recipient.', 'error')
+        else:
+            flash(f'Send failed: {result}', 'error')
+    cur.close(); conn.close()
+    return redirect(f'/{company_key}/invoices/{invoice_id}')
+
+
+@app.route('/<company_key>/customers/<int:customer_id>/send-statement', methods=['POST'])
+@login_required
+@company_access_required
+def customer_send_statement(company_key, customer_id):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    extra_emails = _parse_extra_emails(request.form.get('extra_emails', ''))
+    checked = set(request.form.getlist('recipients'))
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    resolved = _resolve_email_recipients(cur, customer_id, 'statement')
+    use_recipients = [e for e in resolved if e in checked] + extra_emails
+
+    ok, result = _send_statement_email(cur, company_key, customer_id, use_recipients,
+                                        request.form.get('subject', '').strip() or None,
+                                        request.form.get('body', '').strip() or None,
+                                        session.get('username'))
+    if ok:
+        conn.commit()
+        flash(f"Statement sent to {', '.join(result)}.", 'success')
+    else:
+        # See the analogous comment in invoice_send_email — commit so a
+        # failed-send's email_log row persists.
+        conn.commit()
+        if result == 'NO_BILLING_CONTACT':
+            flash('No statement contact selected — add one or check a recipient.', 'error')
+        else:
+            flash(f'Send failed: {result}', 'error')
+    cur.close(); conn.close()
+    return redirect(f'/{company_key}/customers/{customer_id}')
+
+
+@app.route('/<company_key>/billing/send-statements', methods=['POST'])
+@login_required
+@company_access_required
+@with_branding
+def billing_send_statements(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    customer_ids = request.form.getlist('customer_ids')
+    if not customer_ids:
+        flash('Select at least one customer.', 'error')
+        return redirect(f'/{company_key}/billing')
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    sent, failed, skipped = [], [], []
+    for cid in customer_ids:
+        cid = int(cid)
+        cur.execute("SELECT property_name FROM customers WHERE id = %s AND deleted_at IS NULL", (cid,))
+        cust = cur.fetchone()
+        name = cust['property_name'] if cust else f'#{cid}'
+        recipients = _resolve_email_recipients(cur, cid, 'statement')
+        if not recipients:
+            skipped.append(name)
+            continue
+        ok, result = _send_statement_email(cur, company_key, cid, [], None, None, session.get('username'))
+        if ok:
+            sent.append((name, result))
+        else:
+            failed.append((name, result))
+    conn.commit()
+    cur.close(); conn.close()
+
+    return render_template('billing_send_summary.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        sent=sent, failed=failed, skipped=skipped,
     )
 
 # ============================================================================

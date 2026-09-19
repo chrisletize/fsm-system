@@ -297,6 +297,38 @@ reconstruction) — `as_of_date` only controls the aging-bucket math (days since
 a past-dated statement today will reflect payments made since then; this matches
 existing Michele-facing behavior, not a regression.
 
+D-030 — [UX] The invoice detail sidebar keeps TWO ways to reach Sent once Hardened:
+the new "Send Email" dialog (real Resend send, primary/big button) and a small
+secondary "Mark Sent (no email)" action that just calls `transition_invoice()`
+directly with no email attempt — this is the same route Increment 1.3 already built.
+Kept deliberately rather than replaced: Michele sometimes hands a PDF to a customer in
+person or sends it through some channel outside FieldKit, and the directive's own
+§2.5 philosophy ("PDF download as the manual fallback") implies the system shouldn't
+force every Sent transition through email. Also avoids breaking five earlier smoke
+tests that call the plain `/send` route as setup for other scenarios.
+
+D-031 — [MODEL, bug caught by smoke testing] `invoice_send_email` and
+`customer_send_statement` originally called `conn.rollback()` on a failed send —
+which also rolled back the `email_log` row that `_send_invoice_email`/
+`_send_statement_email` had just written for that failure, silently defeating the
+entire point of logging failed sends (the schema's `status` CHECK literally has
+`'sent'`/`'failed'` as its two values). Fixed to `conn.commit()` on both branches: the
+NO_BILLING_CONTACT path never wrote anything (a no-op commit), and the failed-send
+path's `email_log` row is exactly what should persist. Caught by
+`smoke_email_delivery.py` asserting the failure log row actually exists, not just that
+the route didn't 500.
+
+D-032 — [MODEL] Testing safety for this increment specifically: `RESEND_API_KEY` is a
+real, live key in this environment and real customer contact emails exist in this
+database (confirmed before writing any code). `smoke_email_delivery.py` monkey-patches
+`_resend.Emails.send` for its entire run (restored in `finally` even on failure) AND,
+as defense in depth on top of that, only ever uses a freshly-created throwaway
+customer/contact with a `.invalid`-TLD address (RFC 2606 — reserved, guaranteed
+non-deliverable), never a real customer's real contact. The test explicitly asserts
+"Resend was NOT called" / "was called exactly N times" at each step, not just that
+routes returned the expected status code — this is the pattern any future test
+touching `_send_email_via_resend` or the send routes must follow.
+
 ---
 
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:

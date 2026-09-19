@@ -436,9 +436,19 @@
             Invoices
             {% if customer_invoices %}<span style="font-weight:400; text-transform:none; letter-spacing:0; color:#aaa; margin-left:0.4rem;">({{ customer_invoices|length }})</span>{% endif %}
         </div>
-        <a href="/{{ company_key }}/customers/{{ customer.id }}/statement" target="_blank"
-           class="btn btn-outline btn-sm">Download Statement</a>
+        <div style="display:flex; gap:.5rem;">
+            <a href="/{{ company_key }}/customers/{{ customer.id }}/statement" target="_blank"
+               class="btn btn-outline btn-sm">Download Statement</a>
+            {% if resend_configured and statement_recipients %}
+            <button type="button" class="btn btn-outline btn-sm" onclick="openModal('sendStatementModal')">Send Statement</button>
+            {% endif %}
+        </div>
     </div>
+    {% if resend_configured and not statement_recipients %}
+    <p style="color:#aaa; font-size:.8rem; margin-top:-.4rem; margin-bottom:.75rem;">
+        No statement contact set up — <a href="/{{ company_key }}/customers/{{ customer.id }}/contacts/new" style="color:{{ branding.color_primary }};">add one</a> to enable emailing.
+    </p>
+    {% endif %}
     {% if customer_invoices %}
     <table style="width:100%; border-collapse:collapse; font-size:.88rem;">
         <thead>
@@ -507,6 +517,37 @@
         <button type="button" class="btn btn-outline btn-sm" onclick="openModal('recordPaymentModal')">+ Record Payment</button>
     </div>
 </div>
+
+{% if statement_recipients %}
+<!-- Send Statement modal -->
+<div class="modal-overlay" id="sendStatementModal">
+    <div class="modal-box" style="max-width:520px;">
+        <button type="button" class="modal-close" onclick="closeModal('sendStatementModal')">✕</button>
+        <h3>Send Statement</h3>
+        <form method="POST" action="/{{ company_key }}/customers/{{ customer.id }}/send-statement"
+              onsubmit="return confirm('Send this statement by email now?');">
+            <div style="font-size:.85rem; font-weight:600; margin-bottom:.3rem;">Recipients</div>
+            {% for email in statement_recipients %}
+            <label style="display:block; font-size:.88rem; margin-bottom:.3rem;">
+                <input type="checkbox" name="recipients" value="{{ email }}" checked> {{ email }}
+            </label>
+            {% endfor %}
+            <label style="font-size:.85rem; font-weight:600; display:block; margin-top:.6rem;">Additional addresses <span style="color:#aaa; font-weight:400;">(comma-separated)</span>
+                <input type="text" name="extra_emails" style="width:100%; padding:.5rem .6rem; border:1px solid #ddd; border-radius:4px; margin-top:.3rem;">
+            </label>
+            <label style="font-size:.85rem; font-weight:600; display:block; margin-top:.6rem;">Subject
+                <input type="text" name="subject" value="{{ default_statement_subject }}" style="width:100%; padding:.5rem .6rem; border:1px solid #ddd; border-radius:4px; margin-top:.3rem;">
+            </label>
+            <label style="font-size:.85rem; font-weight:600; display:block; margin-top:.6rem;">Message
+                <textarea name="body" rows="5" style="width:100%; padding:.5rem .6rem; border:1px solid #ddd; border-radius:4px; margin-top:.3rem; font-family:inherit;">{{ default_statement_body }}</textarea>
+            </label>
+            <div style="margin-top:1.25rem;">
+                <button type="submit" class="btn btn-primary">Send</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
 
 <!-- Record Payment modal -->
 <div class="modal-overlay" id="recordPaymentModal">

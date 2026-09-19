@@ -158,6 +158,13 @@
                         class="btn btn-outline" id="statementsBtn" disabled>
                     Generate Statements
                 </button>
+                {% if resend_configured %}
+                <button type="submit" formaction="/{{ company_key }}/billing/send-statements"
+                        class="btn btn-outline" id="sendStatementsBtn" disabled
+                        onclick="return confirm('Email statements to every selected customer with a statement contact on file?');">
+                    Send Statements
+                </button>
+                {% endif %}
                 <button type="submit" class="btn btn-primary" id="exportBtn" disabled>
                     Export CSV
                 </button>
@@ -273,12 +280,14 @@ const checks        = document.querySelectorAll('.customer-check');
 const countDisplay  = document.getElementById('selectedCount');
 const exportBtn     = document.getElementById('exportBtn');
 const statementsBtn = document.getElementById('statementsBtn');
+const sendStatementsBtn = document.getElementById('sendStatementsBtn');
 
 function updateCount() {
     const n = document.querySelectorAll('.customer-check:checked').length;
     countDisplay.textContent = n;
     exportBtn.disabled = n === 0;
     statementsBtn.disabled = n === 0;
+    if (sendStatementsBtn) sendStatementsBtn.disabled = n === 0;
     // Highlight selected rows
     checks.forEach(cb => {
         cb.closest('tr').classList.toggle('selected', cb.checked);

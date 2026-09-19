@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Statements Sent — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header h1 { font-size:1.6rem; color:{{ branding.color_primary }}; margin-bottom:1.5rem; }
+    .section-title { font-size:.75rem; font-weight:700; text-transform:uppercase; letter-spacing:.6px;
+                      color:#888; margin-bottom:.75rem; padding-bottom:.5rem; border-bottom:1px solid #eee; }
+    .result-row { padding:.5rem 0; border-bottom:1px solid #f5f5f5; font-size:.9rem; }
+    .result-row .meta { color:#aaa; font-size:.82rem; }
+    .badge { display:inline-block; padding:.15rem .55rem; border-radius:8px; font-size:.76rem; font-weight:500; }
+    .badge-sent { background:#e8f5e9; color:#2e7d32; }
+    .badge-failed { background:#fdecea; color:#c0392b; }
+    .badge-skipped { background:#f5f5f5; color:#777; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Statements Sent</h1>
+</div>
+
+<div class="card">
+    <div class="section-title">Sent ({{ sent|length }})</div>
+    {% for name, recipients in sent %}
+    <div class="result-row">
+        <span class="badge badge-sent">Sent</span> <strong>{{ name }}</strong>
+        <div class="meta">{{ recipients|join(', ') }}</div>
+    </div>
+    {% else %}
+    <p style="color:#aaa;">None.</p>
+    {% endfor %}
+</div>
+
+<div class="card">
+    <div class="section-title">Failed ({{ failed|length }})</div>
+    {% for name, error in failed %}
+    <div class="result-row">
+        <span class="badge badge-failed">Failed</span> <strong>{{ name }}</strong>
+        <div class="meta">{{ error }}</div>
+    </div>
+    {% else %}
+    <p style="color:#aaa;">None.</p>
+    {% endfor %}
+</div>
+
+<div class="card">
+    <div class="section-title">Skipped — No Statement Contact ({{ skipped|length }})</div>
+    {% for name in skipped %}
+    <div class="result-row">
+        <span class="badge badge-skipped">Skipped</span> <strong>{{ name }}</strong>
+    </div>
+    {% else %}
+    <p style="color:#aaa;">None.</p>
+    {% endfor %}
+</div>
+
+<a href="/{{ company_key }}/billing" style="color:{{ branding.color_primary }};">← Back to Billing</a>
+{% endblock %}
