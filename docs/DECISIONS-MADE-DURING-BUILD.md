@@ -805,6 +805,36 @@ statement in the same uncommitted transaction, not just the one that failed — 
 a from-scratch verification pass (`SELECT` for stray rows, not just "did it crash")
 after adding any new table that a shared job function writes to.
 
+D-084 — Increment 3.3 (Recency report + history import). Bucket boundaries
+(`days>=30&&<60`→1-2mo, `>=60&&<183`→3-6mo, `>=183&&<365`→6-12mo, `>=365`→12+mo,
+`<30` excluded entirely) copied verbatim from the Phase 0 statements site's own
+`recency_report.html`/`app.py`, not re-derived, so the two sites' numbers never
+diverge for the same customer during the transition period. Last-service date is
+`GREATEST()` of `MAX(work_orders.start_date)` (statuses Completed/Invoiced/
+Extraction Active) and `MAX(customer_job_dates.job_date)` — the latter is a new
+table (migration 023) that exists solely to hold pre-cutover ServiceFusion job
+history that has no corresponding FieldKit work order. `import_job_dates.py`
+matches statements customers to FieldKit customers by normalized (lowercased,
+punctuation-stripped, whitespace-collapsed) `property_name`/`customer_name`
+WITHIN each company's own database — exact match only, no fuzzy matching, same
+discipline as the Increment 1.9 cutover-import design — and never creates a
+FieldKit customer; unmatched statements customers are logged to a CSV instead.
+
+Ran the real dry run today (2026-09-20) via a temporary
+`docker network connect statements_default fieldkit-prod-app-1` bridge
+(disconnected again immediately after, per the script's own docstring — no
+route/table/permission changes needed on either side, so nothing else to log).
+Confirmed result matches D-038's earlier finding that the statements DB only has
+job history for Get a Grip (`company_id=2`): **258 customers matched, 2,859 job
+date rows would be inserted, 38 unmatched customer names** (list in
+`/tmp/unmatched_job_dates_getagrip.csv`, mostly management-company/property
+accounts whose ServiceFusion name doesn't exactly match the FieldKit
+`property_name` on file, plus a few individual names that look like duplicate/
+personal contacts rather than a distinct billable property). Nothing was
+written — `--commit` was not passed and, per Chris's 2026-09-19 standing
+instruction, must not be until he's reviewed these counts and the unmatched-name
+list and says to proceed.
+
 ---
 
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:

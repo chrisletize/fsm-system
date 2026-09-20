@@ -36,7 +36,8 @@ reporting until FieldKit's billing is complete.
 | Scheduled jobs | Built (2.5, migration 020, `phase1/fieldkit_backend/jobs.py`): nightly customer_flags/extraction upkeep, uninvoiced alert, EOD digest, weekly sales report placeholder. Per-company master on/off switch (`company_settings.scheduled_alerts_enabled`, `/settings/company`) — **off for all four companies**; cron installed and live (computing/logging) but sends no real email until switched on. See `docs/DEPLOYMENT/cron-jobs.md`. |
 | Estimates | Built (3.1, migration 021, `/estimates`): Draft/Sent/Approved/Declined/Converted lifecycle, PDF + email send, convert-to-WO, public request form at `/request/<company>` (no login, honeypot + rate limit), requests queue. Permissions: admin/manager/salesperson. |
 | Customer ratings | Built (3.2, migration 022): nightly A–F grade (payment timeliness + cancellation rate + job volume), manager override, badges on customer detail/WO form/estimate form/dispatch popover. Currently all grade A across all four companies — no real invoice/WO history exists yet. |
-| Recency report, sales CRM, payment methods, dashboard stats | Not built |
+| Recency report | Built (3.3, migration 023, `/reports/recency`): last-service date = GREATEST of WO history and imported `customer_job_dates`, bucketed 1-2/3-6/6-12/12+ months (boundaries matched to the Phase 0 site), grouped by management company, PDF export. History-import script (`import_job_dates.py`) written and dry-run for real against production statements data — 258 customers/2,859 job dates would import for Get a Grip (the only company with statements job history); `--commit` on hold pending Chris's review. |
+| Sales CRM, payment methods, dashboard stats | Not built |
 
 This table matches `FIELDKIT_BUILD_DIRECTIVE_2026-09.md` §0.2 — confirmed by grepping
 the full route list out of `app.py` (3,248 lines) and querying row counts in all four
@@ -89,7 +90,12 @@ migration 022) complete — nightly A–F grade, manager override, badges on all
 display points. Caught and fixed a test-only bug along the way (D-083 — a prior
 increment's smoke test didn't know about the new table its own job_nightly() call
 now writes to; a stray production `alert_email` value from that got caught and
-cleaned by hand). Next: Increment 3.3 (recency report + history import).
+cleaned by hand). Increment 3.3 (recency report + history import, migration 023)
+complete — report + PDF export built and smoke-tested; `import_job_dates.py`'s real
+dry run confirms 258 customers/2,859 job dates for Get a Grip only (consistent with
+D-038 — the other three companies have zero statements job history), 38 unmatched
+names logged for Chris/Michele; the actual `--commit` import stays on hold per his
+2026-09-19 instruction. Next: Increment 3.4 (Callbacks).
 
 Decisions Chris has already made for this build (delinquent threshold = 90 days past
 invoice date, FL tax left empty/exempt for Kleanit SF, SF-import receivables excluded

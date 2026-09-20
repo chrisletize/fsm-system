@@ -1071,4 +1071,54 @@ Full 17-file regression suite re-run clean (after the D-083 fix).
 
 **Deferred:** nothing from this increment's own scope.
 
-Proceeding to Increment 3.3 (recency report + history import).
+## Increment 3.3 — Recency report + history import
+
+- `customer_job_dates` table (migration 023: `customer_id, job_date, source,`
+  audit columns, `UNIQUE(customer_id, job_date)`) — holds pre-cutover
+  ServiceFusion job history for customers with no FieldKit work order yet.
+- Last-service date = `GREATEST(MAX(work_orders.start_date` where status in
+  Completed/Invoiced/Extraction Active`), MAX(customer_job_dates.job_date))`.
+  Buckets (1-2/3-6/6-12/12+ months, <30 days excluded) copied verbatim from the
+  Phase 0 statements site's own `recency_report.html` boundaries so the two
+  sites' numbers agree during the transition (D-084).
+- `GET /reports/recency` — grouped by `management_companies`, colored bucket
+  sections matching the Phase 0 site's palette; `GET /reports/recency/pdf` —
+  matching ReportLab export (`pageCompression=0`, byte-searchable). Reports
+  landing card switched from disabled (D-058) to live.
+- `import_job_dates.py` (`phase1/fieldkit_phase1/`) — standalone one-time
+  history-import script, NOT part of the app container's bind-mounted code
+  (lives in `fieldkit_phase1/`, not `fieldkit_backend/`), so running it inside
+  the app container requires `docker cp`-ing it in first. Matches statements
+  customers to FieldKit customers by normalized (lowercase, punctuation-stripped)
+  name within each company's own DB — exact match only, never creates a
+  customer, logs unmatched names to CSV. Dry-run is the default and the only
+  mode run today; `--commit` requires further explicit sign-off from Chris.
+- Discovered `statements-db-1` and `fieldkit-prod-app-1` are on separate Docker
+  networks with no published host ports on either DB — running the script
+  requires a temporary `docker network connect statements_default
+  fieldkit-prod-app-1` bridge, disconnected again immediately after.
+
+**Dry run results (2026-09-20, real data, nothing written):** 258 customers
+matched, 2,859 job date rows would be inserted, 38 unmatched customer names —
+all for Get a Grip (`company_id=2`); the statements DB has zero job history for
+the other three companies, consistent with D-038's earlier finding. Unmatched
+name list saved to `/tmp/unmatched_job_dates_getagrip.csv` (mostly
+management-company/property accounts whose ServiceFusion name doesn't exactly
+match the FieldKit `property_name`, plus a handful of individual names).
+
+**Migration:** 023 (`023_customer_job_dates.sql`), applied to all four DBs,
+verified idempotent. Pre-migration backups in `~/db-backups/2026-09-20c/`.
+
+**Smoke test:** `tests/smoke_recency.py` — 13/13 checks: bucket-boundary unit
+checks on `_recency_bucket()` at every edge (29/30/59/60/182/183/364/365),
+fixture customers proving WO-derived vs. `customer_job_dates`-derived dates
+both bucket correctly and land in the right section (not just "present
+somewhere on the page"), the under-30-days customer excluded entirely, PDF
+export renders and is byte-searchable, and the reports-landing link. Full
+18-file regression suite re-run clean.
+
+**Deferred:** the real `--commit` import itself — on hold per Chris's
+2026-09-19 standing instruction until he reviews these dry-run counts and the
+unmatched-name list.
+
+Proceeding to Increment 3.4 (Callbacks).

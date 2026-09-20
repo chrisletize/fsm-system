@@ -4063,6 +4063,144 @@ def report_jobs_export_csv(company_key):
 
 
 # ============================================================================
+# Recency report  (admin + manager + office; Increment 3.3)
+# ============================================================================
+
+# (label, min_days, max_days_exclusive_or_None) — checked in order. Matches the
+# Phase 0 statements site's own recency report bucket boundaries exactly
+# (backend/api/templates/recency_report.html), so numbers a customer of the
+# statements site sees never disagree with FieldKit's version once this
+# replaces it. Customers under 30 days are dropped entirely -- not a dormancy
+# concern yet.
+RECENCY_BUCKETS = [
+    ('1-2 Months', 30, 60),
+    ('3-6 Months', 60, 183),
+    ('6-12 Months', 183, 365),
+    ('12+ Months', 365, None),
+]
+
+
+def _recency_bucket(days):
+    for label, lo, hi in RECENCY_BUCKETS:
+        if days >= lo and (hi is None or days < hi):
+            return label
+    return None  # days < 30 -- not bucketed, caller drops it
+
+
+def _recency_report_data(company_key):
+    """Last service date per customer = MAX(work_orders.start_date) for
+    Completed/Invoiced/Extraction Active jobs, GREATEST-combined with imported
+    customer_job_dates (pre-cutover ServiceFusion history with no matching
+    FieldKit WO) — directive's own formula. Grouped by management company."""
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT c.id, c.property_name, c.management_company_id, mc.name AS management_company_name,
+               GREATEST(
+                   (SELECT MAX(wo.start_date) FROM work_orders wo
+                    WHERE wo.customer_id = c.id AND wo.deleted_at IS NULL
+                      AND wo.status IN ('Completed', 'Invoiced', 'Extraction Active')),
+                   (SELECT MAX(cjd.job_date) FROM customer_job_dates cjd
+                    WHERE cjd.customer_id = c.id AND cjd.deleted_at IS NULL)
+               ) AS last_service_date
+        FROM customers c
+        LEFT JOIN management_companies mc ON mc.id = c.management_company_id
+        WHERE c.deleted_at IS NULL
+    """)
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+
+    today = date.today()
+    groups = {}
+    for r in rows:
+        if not r['last_service_date']:
+            continue
+        days = (today - r['last_service_date']).days
+        bucket = _recency_bucket(days)
+        if bucket is None:
+            continue
+        mc_name = r['management_company_name'] or 'Independent (no management company)'
+        groups.setdefault(mc_name, {b[0]: [] for b in RECENCY_BUCKETS})
+        groups[mc_name][bucket].append({
+            'id': r['id'], 'name': r['property_name'],
+            'last_service_date': r['last_service_date'], 'days': days,
+        })
+    for mc_name, buckets in groups.items():
+        for label in buckets:
+            buckets[label].sort(key=lambda x: x['days'], reverse=True)
+
+    return dict(sorted(groups.items(), key=lambda kv: (kv[0] == 'Independent (no management company)', kv[0])))
+
+
+@app.route('/<company_key>/reports/recency')
+@login_required
+@company_access_required
+@with_branding
+def report_recency(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    groups = _recency_report_data(company_key)
+    return render_template('recency_report.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        groups=groups, bucket_labels=[b[0] for b in RECENCY_BUCKETS], today=date.today(),
+    )
+
+
+@app.route('/<company_key>/reports/recency/pdf')
+@login_required
+@company_access_required
+def report_recency_pdf(company_key):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    groups = _recency_report_data(company_key)
+    branding = COMPANY_BRANDING.get(company_key, {})
+    primary = colors.HexColor(branding.get('color_primary', '#2C2C2C'))
+    bucket_bg = {
+        '1-2 Months': colors.HexColor('#8B1538'), '3-6 Months': colors.HexColor('#c41e3a'),
+        '6-12 Months': colors.HexColor('#e74c3c'), '12+ Months': colors.HexColor('#d93838'),
+    }
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter, pageCompression=0,
+                             rightMargin=0.6*inch, leftMargin=0.6*inch, topMargin=0.6*inch, bottomMargin=0.6*inch)
+    doc.invariant = 1
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle('title', parent=styles['Heading1'], fontSize=16, textColor=primary,
+                                  spaceAfter=4, alignment=TA_CENTER)
+    mc_style = ParagraphStyle('mc', parent=styles['Heading2'], fontSize=12, textColor=primary, spaceBefore=16, spaceAfter=6)
+    bucket_style_base = ParagraphStyle('bucket', parent=styles['Heading3'], fontSize=10, textColor=colors.white, spaceAfter=0)
+
+    elements = [
+        Paragraph(f"{branding.get('name', company_key)} — Recency Report", title_style),
+        Paragraph(date.today().strftime('%B %d, %Y'), ParagraphStyle('d', parent=styles['Normal'], alignment=TA_CENTER, spaceAfter=10)),
+    ]
+    if not groups:
+        elements.append(Paragraph('No customers are 30+ days out from their last service.', styles['Normal']))
+    for mc_name, buckets in groups.items():
+        elements.append(Paragraph(mc_name, mc_style))
+        for label in [b[0] for b in RECENCY_BUCKETS]:
+            rows = buckets[label]
+            if not rows:
+                continue
+            header = Table([[f'{label} ({len(rows)})']], colWidths=[7.3*inch])
+            header.setStyle(TableStyle([('BACKGROUND', (0, 0), (-1, -1), bucket_bg[label]),
+                                         ('TEXTCOLOR', (0, 0), (-1, -1), colors.white),
+                                         ('FONTSIZE', (0, 0), (-1, -1), 10), ('TOPPADDING', (0, 0), (-1, -1), 4),
+                                         ('BOTTOMPADDING', (0, 0), (-1, -1), 4), ('LEFTPADDING', (0, 0), (-1, -1), 8)]))
+            elements.append(header)
+            data = [[r['name'], f"{r['days']} days ago"] for r in rows]
+            t = Table(data, colWidths=[5.8*inch, 1.5*inch])
+            t.setStyle(TableStyle([('FONTSIZE', (0, 0), (-1, -1), 8.5),
+                                    ('GRID', (0, 0), (-1, -1), 0.4, colors.HexColor('#eeeeee')),
+                                    ('ALIGN', (1, 0), (1, -1), 'RIGHT')]))
+            elements.append(t)
+    doc.build(elements)
+    return Response(buf.getvalue(), mimetype='application/pdf',
+                     headers={'Content-Disposition': 'attachment; filename="recency_report.pdf"'})
+
+
+# ============================================================================
 # Contacts — new
 # ============================================================================
 
