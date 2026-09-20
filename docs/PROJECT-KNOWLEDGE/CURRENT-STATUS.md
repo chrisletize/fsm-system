@@ -110,4 +110,4 @@ is the authoritative work plan for this build; where it disagrees with an older 
 doc, the directive wins (disagreements are catalogued in
 `docs/FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md`).
 
-*Last commit at time of writing: `0774ea5` (2026-09-20).*
+*Last commit at time of writing: `e648992` (2026-09-20).*
