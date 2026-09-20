@@ -751,6 +751,60 @@ where the honeypot field (not the rate limit) is the actual bot deterrent. IP is
 from `X-Forwarded-For` (first hop) falling back to `request.remote_addr`, since the
 app sits behind NPM/Cloudflare per the directive's own note.
 
+D-078 — [MODEL] `customer_ratings`' three `*_score` columns store SIGNED
+contributions to the 100-point base (a penalty is negative, the volume bonus is
+positive), not raw sub-scores — `composite_score = 100 + payment_timeliness_score +
+cancellation_score + job_volume_score` (clamped 0–100) is then a direct, auditable
+sum rather than a weighted-average formula hidden in application code, and it's what
+customer detail's "full breakdown" (per the design addendum) displays directly.
+
+D-079 — [MODEL] `manager_adjustment` is a numeric point delta applied on top of
+`composite_score`, not a direct letter-grade override — matches the addendum's own
+"a delta plus a required note" wording. `adjusted_letter_grade` is re-banded from
+`clamp(composite_score + manager_adjustment, 0, 100)` every time it changes (both on
+a fresh override and on every nightly recompute, which re-reads the existing
+`manager_adjustment` before writing so a standing override is never lost to the
+nightly job — verified in the smoke test). Posting an empty adjustment clears the
+override entirely, reverting `adjusted_letter_grade` to the algorithmic grade.
+
+D-080 — [SCOPE] Rating constants (`RATING_PAYMENT_FACTOR_CAP` etc.) live in `app.py`
+next to `_job_recompute_customer_ratings`, not "at the top of jobs.py" as the
+directive's literal wording suggests — continuing the same decision already made for
+every other scheduled job in Increment 2.5 (jobs.py stays a thin CLI wrapper; the
+actual logic and its tuning constants live in app.py, where a smoke test can import
+and exercise them directly without shelling out to a subprocess).
+
+D-081 — [MODEL] Cancellation rate's denominator ("scheduled, trailing 12 mo") is
+every WO with `start_date` in the trailing 365 days, regardless of final status — not
+just ones that reached a terminal state — matching "Cancelled WOs / total WOs
+scheduled" as literally as the data allows. Job volume counts `status IN
+('Completed', 'Invoiced')`, the same set Increment 2.3's job activity report already
+uses (D-060) for "did the work actually get done."
+
+D-082 — [SCOPE] The rating badge is added to the SAME customer-options JSON the
+delinquent badge already reads client-side (`_load_wo_customers`, shared by both the
+WO form and the estimate form) — one query change lit up two of the four display
+points the directive lists at once. The dispatch board gets it in the popover only
+(directive: "dispatch popover," not "dispatch block" — unlike 2.4's New
+Customer/Delinquent badges, which the directive explicitly put on the block itself).
+
+D-083 — [BUG FIX, test-only] `smoke_scheduled_jobs.py` (Increment 2.5) calls
+`job_nightly()` directly, which now (Increment 3.2) also writes a `customer_ratings`
+row for that test's fixture customer — a table the 2.5 test's `finally` block didn't
+know about yet, so `DELETE FROM customers` hit the new FK and raised. Worse: because
+the whole cleanup block runs in one uncommitted transaction, that one failure rolled
+back EVERY delete in the same `finally` block, including the restore of
+`company_settings.scheduled_alerts_enabled`/`alert_email` to their real production
+values — leaving `alert_email` set to the test's throwaway address until caught and
+fixed by hand (`scheduled_alerts_enabled` itself was already safe because that test
+also commits it back to FALSE mid-run, separately from the final restore). Fixed by
+adding `DELETE FROM customer_ratings` to that test's cleanup. General lesson for any
+future job that touches a new table Increment 2.5's smoke test doesn't know about:
+one unhandled FK violation in a `finally` block silently discards every OTHER cleanup
+statement in the same uncommitted transaction, not just the one that failed — worth
+a from-scratch verification pass (`SELECT` for stray rows, not just "did it crash")
+after adding any new table that a shared job function writes to.
+
 ---
 
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:

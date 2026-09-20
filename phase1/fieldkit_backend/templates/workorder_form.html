@@ -138,6 +138,7 @@
                   padding:.2rem .6rem; font-size:.78rem; font-weight:600; margin-top:.3rem; width:fit-content;"></span>
             <span id="delinquentBadge" style="display:none; background:#fdecea; color:#a32d2d; border-radius:8px;
                   padding:.2rem .6rem; font-size:.78rem; font-weight:600; margin-top:.3rem; width:fit-content;">Delinquent</span>
+            <span id="ratingBadge" style="display:none; border-radius:8px; padding:.2rem .6rem; font-size:.78rem; font-weight:600; margin-top:.3rem; width:fit-content;"></span>
         </div>
         <div class="form-group">
             <label>Service Location</label>
@@ -741,10 +742,22 @@
         }
     }
 
+    const RATING_COLORS = { A: ['#eaf3de', '#3b6d11'], B: ['#e6f1fb', '#185fa5'], C: ['#fff8e1', '#8a6d00'],
+                             D: ['#faeeda', '#854f0b'], F: ['#fdecea', '#a32d2d'] };
+
     function updateDelinquentBadge() {
         const opts = JSON.parse(document.getElementById('customerCombo').dataset.options || '[]');
         const cust = opts.find(c => String(c.id) === customerHidden.value);
         document.getElementById('delinquentBadge').style.display = (cust && cust.is_delinquent) ? 'block' : 'none';
+        const ratingEl = document.getElementById('ratingBadge');
+        if (cust && cust.adjusted_letter_grade) {
+            const [bg, fg] = RATING_COLORS[cust.adjusted_letter_grade] || ['#f1efe8', '#5f5e5a'];
+            ratingEl.style.background = bg; ratingEl.style.color = fg;
+            ratingEl.textContent = 'Rating: ' + cust.adjusted_letter_grade;
+            ratingEl.style.display = 'block';
+        } else {
+            ratingEl.style.display = 'none';
+        }
     }
     customerHidden.addEventListener('change', () => { loadCustomerContext(customerHidden.value, false); updateDelinquentBadge(); });
     locationSelect.addEventListener('change', () => { maybePrefillSite(); checkDupes(); });

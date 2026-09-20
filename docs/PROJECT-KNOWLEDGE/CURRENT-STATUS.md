@@ -35,7 +35,8 @@ reporting until FieldKit's billing is complete.
 | Retired-tag replacements | Built (2.4 + 2.5, migrations 019/020): `is_internal_task` (customer-less WOs), derived "New Customer" badge, and (once `customer_flags` existed) the Delinquent Account badge on customer detail/WO form/dispatch board. Callback still deferred to §4.4. |
 | Scheduled jobs | Built (2.5, migration 020, `phase1/fieldkit_backend/jobs.py`): nightly customer_flags/extraction upkeep, uninvoiced alert, EOD digest, weekly sales report placeholder. Per-company master on/off switch (`company_settings.scheduled_alerts_enabled`, `/settings/company`) — **off for all four companies**; cron installed and live (computing/logging) but sends no real email until switched on. See `docs/DEPLOYMENT/cron-jobs.md`. |
 | Estimates | Built (3.1, migration 021, `/estimates`): Draft/Sent/Approved/Declined/Converted lifecycle, PDF + email send, convert-to-WO, public request form at `/request/<company>` (no login, honeypot + rate limit), requests queue. Permissions: admin/manager/salesperson. |
-| Recency report, customer ratings, sales CRM, payment methods, dashboard stats | Not built |
+| Customer ratings | Built (3.2, migration 022): nightly A–F grade (payment timeliness + cancellation rate + job volume), manager override, badges on customer detail/WO form/estimate form/dispatch popover. Currently all grade A across all four companies — no real invoice/WO history exists yet. |
+| Recency report, sales CRM, payment methods, dashboard stats | Not built |
 
 This table matches `FIELDKIT_BUILD_DIRECTIVE_2026-09.md` §0.2 — confirmed by grepping
 the full route list out of `app.py` (3,248 lines) and querying row counts in all four
@@ -83,8 +84,12 @@ with Stage 2. Increment 3.1 (estimates + public estimate request form, migration
 complete — full Draft→Sent→Approved→Converted lifecycle, PDF/email send, decline
 with reason, convert-to-WO (a WO save flips the source estimate, not the navigation
 click), public no-login request form with honeypot + 5/hr per-IP rate limit, requests
-queue with "Create customer + estimate." Next: Increment 3.2 (customer rating
-system).
+queue with "Create customer + estimate." Increment 3.2 (customer rating system,
+migration 022) complete — nightly A–F grade, manager override, badges on all four
+display points. Caught and fixed a test-only bug along the way (D-083 — a prior
+increment's smoke test didn't know about the new table its own job_nightly() call
+now writes to; a stray production `alert_email` value from that got caught and
+cleaned by hand). Next: Increment 3.3 (recency report + history import).
 
 Decisions Chris has already made for this build (delinquent threshold = 90 days past
 invoice date, FL tax left empty/exempt for Kleanit SF, SF-import receivables excluded

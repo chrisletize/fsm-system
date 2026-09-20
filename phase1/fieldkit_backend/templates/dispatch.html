@@ -126,6 +126,7 @@ function showPopover(block, anchorEl) {
     if (block.equipment_incomplete) badges.push('⚠️ Equipment not confirmed');
     if (block.is_new_customer) badges.push('🆕 New Customer');
     if (block.is_delinquent) badges.push('🔴 Delinquent');
+    if (block.adjusted_letter_grade) badges.push('Rating: ' + block.adjusted_letter_grade);
     pop.innerHTML = `
         <h4>${block.work_order_number}</h4>
         <div class="row">${block.customer_name || 'Internal Task'}</div>

@@ -1016,3 +1016,59 @@ suite re-run clean.
 **Deferred:** nothing from this increment's own scope.
 
 Proceeding to Increment 3.2 (customer rating system).
+
+---
+
+## 2026-09-20 — Stage 3, Increment 3.2 — Customer rating system
+
+**What:**
+- **Migration 022**: `customer_ratings` (one row per customer, replaced wholesale
+  each nightly run — same shape as `customer_flags`). Signed `*_score` columns
+  (D-078) so `composite_score = 100 + payment_timeliness_score + cancellation_score
+  + job_volume_score` is a direct auditable sum.
+- `_job_recompute_customer_ratings` (app.py, wired into `job_nightly`): payment
+  penalty = Σ over open receivables of `(days past 30 / 30, capped 4) × 5`, plus 10
+  per receivable in the 90+ bucket; cancellation penalty = (Cancelled ÷ scheduled,
+  trailing 12mo) × 40; volume bonus = min(completed WOs trailing 12mo, 20) × 0.5;
+  clamp 0–100; bands A≥90/B75-89/C60-74/D40-59/F<40. Reuses
+  `_customer_receivables_detail`'s per-invoice day counts, so this can never disagree
+  with the A/R aging report. Ran for real against all 5,307 production customers —
+  clean, all currently grade A (no real invoice/WO history exists yet).
+- Manager override: `POST /customers/<id>/rating-override` (admin/manager),
+  numeric point delta + required note (D-079), preserved across every nightly
+  recompute (re-read before each write), clearable by posting an empty delta.
+- Badges on all four points the directive lists: customer detail (full breakdown
+  card: the three signed scores, composite, algorithmic + adjusted grade, override
+  form), the WO form's customer picker, the estimate form's customer picker (one
+  shared query change lit up both — D-082), and the dispatch board's popover
+  (directive says "popover" here, not "block," unlike 2.4's badges).
+- Rating constants stay in `app.py` next to the function (D-080), continuing the
+  same jobs.py-stays-thin decision from Increment 2.5.
+
+**Bug found and fixed (test-only, not app code):** D-083 — `smoke_scheduled_jobs.py`
+didn't know about the new `customer_ratings` table its own `job_nightly()` call now
+writes to, so its cleanup hit an FK violation that silently rolled back the ENTIRE
+cleanup transaction — including the restore of `company_settings.alert_email` to its
+real value. Caught by re-running the full regression suite, fixed both the stray
+production data (by hand) and the test's cleanup code.
+
+**Migration:** 022 (`022_customer_ratings.sql`), applied to all four DBs.
+Pre-migration backups in `~/db-backups/2026-09-20b/`.
+
+**Commit:** (pending — migration file, `app.py`, `customer_detail.html`,
+`workorder_form.html`, `estimate_form.html`, `estimate_detail.html`, `dispatch.html`,
+new smoke test, `smoke_scheduled_jobs.py` cleanup fix, this entry, decisions log,
+status doc).
+
+**Smoke test:** `tests/smoke_customer_ratings.py` — 24/24 checks, exact-to-the-cent
+on the scoring formula (a kitchen-sink fixture: one invoice 120 days overdue,
+1 Cancelled + 2 Completed + 1 Scheduled WO in the trailing 12mo → payment
+-25.0, cancellation -10.0, volume +1.0, composite 66.0, grade C, verified against
+the DB directly). Also covers: the customer detail breakdown card; the WO form's
+embedded grade; the full override lifecycle (set → verify → clear → rejected without
+a note → survives a nightly recompute); and the dispatch board carrying the grade.
+Full 17-file regression suite re-run clean (after the D-083 fix).
+
+**Deferred:** nothing from this increment's own scope.
+
+Proceeding to Increment 3.3 (recency report + history import).

@@ -586,6 +586,9 @@ def customer_detail(company_key, customer_id, branding, all_companies, company_a
     """, (customer_id,))
     customer_estimates = cur.fetchall()
 
+    cur.execute("SELECT * FROM customer_ratings WHERE customer_id = %s", (customer_id,))
+    rating = cur.fetchone()
+
     cur.close(); conn.close()
 
     return render_template('customer_detail.html',
@@ -599,7 +602,7 @@ def customer_detail(company_key, customer_id, branding, all_companies, company_a
         statement_recipients=statement_recipients, resend_configured=bool(RESEND_API_KEY),
         compliance_portals=compliance_portals, portal_types=PORTAL_TYPES,
         default_statement_subject=default_statement_subject, default_statement_body=default_statement_body,
-        customer_estimates=customer_estimates,
+        customer_estimates=customer_estimates, rating=rating,
     )
 
 # ============================================================================
@@ -2346,9 +2349,11 @@ def _load_wo_customers(company_key):
     cur  = conn.cursor()
     cur.execute("""
         SELECT c.id, c.property_name AS name, c.customer_type AS category,
-               COALESCE(cf.is_delinquent, FALSE) AS is_delinquent
+               COALESCE(cf.is_delinquent, FALSE) AS is_delinquent,
+               cr.adjusted_letter_grade
         FROM customers c
         LEFT JOIN customer_flags cf ON cf.customer_id = c.id
+        LEFT JOIN customer_ratings cr ON cr.customer_id = c.id
         WHERE c.deleted_at IS NULL AND c.status = 'Active'
         ORDER BY c.property_name
     """)
@@ -3362,10 +3367,12 @@ def _dispatch_board_data(company_key, target_date):
                      AND wo2.status IN ('Completed', 'Invoiced') AND wo2.deleted_at IS NULL
                      AND wo2.start_date < wo.start_date
                )) AS is_new_customer,
-               COALESCE(cf.is_delinquent, FALSE) AS is_delinquent
+               COALESCE(cf.is_delinquent, FALSE) AS is_delinquent,
+               cr.adjusted_letter_grade
         FROM work_orders wo
         LEFT JOIN customers c ON c.id = wo.customer_id
         LEFT JOIN customer_flags cf ON cf.customer_id = wo.customer_id
+        LEFT JOIN customer_ratings cr ON cr.customer_id = wo.customer_id
         WHERE wo.deleted_at IS NULL AND wo.start_date = %s
         ORDER BY wo.scheduled_start NULLS LAST, wo.id
     """, (target_date,))
@@ -3392,7 +3399,7 @@ def _dispatch_board_data(company_key, target_date):
             'customer_name': w['customer_name'], 'status': w['status'],
             'priority': w['priority'], 'has_equipment': w['is_extraction'],
             'equipment_incomplete': w['equipment_incomplete'], 'is_new_customer': w['is_new_customer'],
-            'is_delinquent': w['is_delinquent'],
+            'is_delinquent': w['is_delinquent'], 'adjusted_letter_grade': w['adjusted_letter_grade'],
             'techs': techs_by_wo.get(w['id'], []),
             'scheduled_start': w['scheduled_start'], 'duration_hours': duration,
         }
@@ -7883,17 +7890,165 @@ def _job_eod_escalation(company_key):
     return len(rows)
 
 
+# Customer rating constants (directive §4.2 / design addendum §14) — "tune once
+# there's real data to look at." Kept in app.py (not jobs.py, which stays a thin
+# CLI wrapper per the pattern established for every other job this build — see
+# D-0xx) so the same values back both the nightly recompute and any smoke test.
+RATING_PAYMENT_FACTOR_CAP        = 4     # (days past 30 / 30), capped here
+RATING_PAYMENT_PENALTY_PER_UNIT  = 5     # x the capped factor, per open receivable
+RATING_PAYMENT_90PLUS_PENALTY    = 10    # flat, additional, per receivable in the 90+ bucket
+RATING_CANCELLATION_WEIGHT       = 40    # x cancellation rate (Cancelled / scheduled, trailing 12mo)
+RATING_VOLUME_CAP                = 20    # completed WOs, trailing 12mo, capped here
+RATING_VOLUME_PER_JOB            = 0.5   # x the capped count
+RATING_BANDS = [(90, 'A'), (75, 'B'), (60, 'C'), (40, 'D'), (0, 'F')]  # checked high to low
+
+
+def _rating_letter(score):
+    for minimum, letter in RATING_BANDS:
+        if score >= minimum:
+            return letter
+    return 'F'
+
+
+def _job_recompute_customer_ratings(company_key):
+    """directive §4.2: base 100; payment penalty = Sigma over open receivables
+    of (days past 30 / 30, capped 4) x 5, plus 10 per receivable currently
+    90+; cancellation penalty = cancellation rate x 40; volume bonus =
+    min(completed WOs trailing 12mo, 20) x 0.5; clamp 0-100. Reuses
+    _customer_receivables_detail (the A/R aging report's own per-invoice
+    day-count) so this can never disagree with what the office sees live
+    there. manager_adjustment (if any) is preserved across every recompute —
+    only adjusted_letter_grade is refreshed against the new composite_score."""
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM customers WHERE deleted_at IS NULL")
+    customer_ids = [r['id'] for r in cur.fetchall()]
+    cutoff = date.today() - timedelta(days=365)
+
+    for cid in customer_ids:
+        detail, _buckets, _total, _oldest = _customer_receivables_detail(cur, cid)
+        payment_penalty = 0.0
+        for row in detail:
+            days_past_30 = max(0, row['days'] - 30)
+            factor = min(days_past_30 / 30.0, RATING_PAYMENT_FACTOR_CAP)
+            payment_penalty += factor * RATING_PAYMENT_PENALTY_PER_UNIT
+            if row['days'] > 90:
+                payment_penalty += RATING_PAYMENT_90PLUS_PENALTY
+
+        cur.execute("""
+            SELECT status, count(*) AS n FROM work_orders
+            WHERE customer_id = %s AND deleted_at IS NULL AND start_date >= %s
+            GROUP BY status
+        """, (cid, cutoff))
+        status_counts = {r['status']: r['n'] for r in cur.fetchall()}
+        total_scheduled = sum(status_counts.values())
+        cancelled = status_counts.get('Cancelled', 0)
+        cancellation_rate = (cancelled / total_scheduled) if total_scheduled else 0.0
+        cancellation_penalty = cancellation_rate * RATING_CANCELLATION_WEIGHT
+
+        completed = status_counts.get('Completed', 0) + status_counts.get('Invoiced', 0)
+        volume_bonus = min(completed, RATING_VOLUME_CAP) * RATING_VOLUME_PER_JOB
+
+        composite = max(0.0, min(100.0, 100 - payment_penalty - cancellation_penalty + volume_bonus))
+        letter = _rating_letter(composite)
+
+        cur.execute("SELECT manager_adjustment FROM customer_ratings WHERE customer_id = %s", (cid,))
+        existing = cur.fetchone()
+        manager_adjustment = existing['manager_adjustment'] if existing else None
+        if manager_adjustment is not None:
+            adjusted = max(0.0, min(100.0, composite + float(manager_adjustment)))
+            adjusted_letter = _rating_letter(adjusted)
+        else:
+            adjusted_letter = letter
+
+        cur.execute("""
+            INSERT INTO customer_ratings (customer_id, job_volume_score, payment_timeliness_score,
+                cancellation_score, composite_score, letter_grade, adjusted_letter_grade,
+                last_calculated_at, calculated_by)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, 'system')
+            ON CONFLICT (customer_id) DO UPDATE
+            SET job_volume_score = EXCLUDED.job_volume_score,
+                payment_timeliness_score = EXCLUDED.payment_timeliness_score,
+                cancellation_score = EXCLUDED.cancellation_score,
+                composite_score = EXCLUDED.composite_score,
+                letter_grade = EXCLUDED.letter_grade,
+                adjusted_letter_grade = EXCLUDED.adjusted_letter_grade,
+                last_calculated_at = EXCLUDED.last_calculated_at,
+                calculated_by = EXCLUDED.calculated_by
+        """, (cid, volume_bonus, -payment_penalty, -cancellation_penalty, composite, letter, adjusted_letter))
+    conn.commit(); cur.close(); conn.close()
+    return len(customer_ids)
+
+
+@app.route('/<company_key>/customers/<int:customer_id>/rating-override', methods=['POST'])
+@login_required
+@company_access_required
+def customer_rating_override(company_key, customer_id):
+    """Manager override: a numeric delta on top of composite_score, plus a
+    required note (directive/addendum §14). Posting an empty delta clears
+    the override, reverting display to the algorithmic grade."""
+    if session.get('user_role') not in ('admin', 'manager'):
+        abort(403)
+    username = session.get('username')
+    raw_delta = request.form.get('manager_adjustment', '').strip()
+    note = request.form.get('manager_adjustment_note', '').strip()
+
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("SELECT composite_score, letter_grade FROM customer_ratings WHERE customer_id = %s", (customer_id,))
+    rating = cur.fetchone()
+    if not rating:
+        cur.close(); conn.close()
+        flash('No rating has been calculated for this customer yet.', 'error')
+        return redirect(f'/{company_key}/customers/{customer_id}')
+
+    if not raw_delta:
+        cur.execute("""
+            UPDATE customer_ratings
+            SET manager_adjustment = NULL, manager_adjustment_note = NULL,
+                manager_adjustment_by = NULL, manager_adjustment_at = NULL,
+                adjusted_letter_grade = letter_grade
+            WHERE customer_id = %s
+        """, (customer_id,))
+        flash('Manager override cleared.', 'success')
+    else:
+        try:
+            delta = float(raw_delta)
+        except ValueError:
+            cur.close(); conn.close()
+            flash('Adjustment must be a number.', 'error')
+            return redirect(f'/{company_key}/customers/{customer_id}')
+        if not note:
+            cur.close(); conn.close()
+            flash('A note is required when overriding the rating.', 'error')
+            return redirect(f'/{company_key}/customers/{customer_id}')
+        adjusted = max(0.0, min(100.0, float(rating['composite_score']) + delta))
+        adjusted_letter = _rating_letter(adjusted)
+        cur.execute("""
+            UPDATE customer_ratings
+            SET manager_adjustment = %s, manager_adjustment_note = %s,
+                manager_adjustment_by = %s, manager_adjustment_at = CURRENT_TIMESTAMP,
+                adjusted_letter_grade = %s
+            WHERE customer_id = %s
+        """, (delta, note, username, adjusted_letter, customer_id))
+        flash('Manager override saved.', 'success')
+    conn.commit(); cur.close(); conn.close()
+    return redirect(f'/{company_key}/customers/{customer_id}')
+
+
 def job_nightly(company_key):
     run_id = _job_run_start(company_key, 'nightly')
     try:
         n_customers = _job_recompute_customer_flags(company_key)
         n_active, n_missed = _job_extraction_upkeep(company_key)
         n_escalated = _job_escalation_check(company_key)
+        n_rated = _job_recompute_customer_ratings(company_key)
         summary = (
             f"customer_flags recomputed for {n_customers} customers; "
             f"{n_active} active extraction job(s) upkept, {n_missed} Missed Today row(s) written; "
-            f"{n_escalated} job(s) at day 5+ escalation. "
-            f"Customer ratings (§4.2) and dormancy alerts (§4.1) skipped -- not built yet."
+            f"{n_escalated} job(s) at day 5+ escalation; "
+            f"customer_ratings recomputed for {n_rated} customers. "
+            f"Dormancy alerts (§4.1) skipped -- not built yet."
         )
         _job_run_finish(company_key, run_id, 'success', summary)
         return summary
@@ -8278,11 +8433,13 @@ def estimate_detail(company_key, estimate_id, branding, all_companies, company_a
         SELECT e.*, c.property_name AS customer_name, c.customer_type,
                sl.location_name, sl.address AS location_address, sl.city AS location_city,
                sl.state AS location_state,
-               cc.first_name AS contact_first, cc.last_name AS contact_last, cc.office_email AS contact_email
+               cc.first_name AS contact_first, cc.last_name AS contact_last, cc.office_email AS contact_email,
+               cr.adjusted_letter_grade
         FROM estimates e
         JOIN customers c ON c.id = e.customer_id
         LEFT JOIN service_locations sl ON sl.id = e.service_location_id
         LEFT JOIN customer_contacts cc ON cc.id = e.primary_contact_id
+        LEFT JOIN customer_ratings cr ON cr.customer_id = e.customer_id
         WHERE e.id = %s AND e.deleted_at IS NULL
     """, (estimate_id,))
     est = cur.fetchone()

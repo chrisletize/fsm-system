@@ -46,6 +46,7 @@
                    est.customer_id if est else (prefill_customer_id or none),
                    (est.customer_name + ' (' + est.customer_type + ')') if est else '',
                    'Type customer name…', True, 'customerCombo') }}
+            <span id="ratingBadge" style="display:none; border-radius:8px; padding:.2rem .6rem; font-size:.78rem; font-weight:600; margin-top:.3rem; width:fit-content;"></span>
         </div>
         <div class="form-group">
             <label>Service Location</label>
@@ -238,12 +239,28 @@
             })
             .catch(() => {});
     }
-    customerHidden.addEventListener('change', () => loadCustomerContext(customerHidden.value, false));
+    const RATING_COLORS = { A: ['#eaf3de', '#3b6d11'], B: ['#e6f1fb', '#185fa5'], C: ['#fff8e1', '#8a6d00'],
+                             D: ['#faeeda', '#854f0b'], F: ['#fdecea', '#a32d2d'] };
+    function updateRatingBadge() {
+        const opts = JSON.parse(document.getElementById('customerCombo').dataset.options || '[]');
+        const cust = opts.find(c => String(c.id) === customerHidden.value);
+        const el = document.getElementById('ratingBadge');
+        if (cust && cust.adjusted_letter_grade) {
+            const [bg, fg] = RATING_COLORS[cust.adjusted_letter_grade] || ['#f1efe8', '#5f5e5a'];
+            el.style.background = bg; el.style.color = fg;
+            el.textContent = 'Rating: ' + cust.adjusted_letter_grade;
+            el.style.display = 'block';
+        } else {
+            el.style.display = 'none';
+        }
+    }
+    customerHidden.addEventListener('change', () => { loadCustomerContext(customerHidden.value, false); updateRatingBadge(); });
 
     document.addEventListener('DOMContentLoaded', () => {
         initRestrictedComboFields();
         INIT_LINES.forEach(li => addRow(li));
         if (customerHidden.value) loadCustomerContext(customerHidden.value, true);
+        updateRatingBadge();
         recalc();
     });
 </script>

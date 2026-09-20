@@ -188,6 +188,14 @@
 <div class="page-header">
     <div>
         <h1>{{ customer.property_name }}
+            {% if rating %}
+            {% set grade_colors = {'A': ('#eaf3de', '#3b6d11'), 'B': ('#e6f1fb', '#185fa5'), 'C': ('#fff8e1', '#8a6d00'), 'D': ('#faeeda', '#854f0b'), 'F': ('#fdecea', '#a32d2d')} %}
+            {% set bg, fg = grade_colors.get(rating.adjusted_letter_grade, ('#f1efe8', '#5f5e5a')) %}
+            <span style="font-size:.8rem; background:{{ bg }}; color:{{ fg }}; border-radius:10px; padding:.2rem .7rem; font-weight:600; vertical-align:middle;"
+                  title="Algorithmic: {{ rating.letter_grade }}{% if rating.manager_adjustment is not none %} — manager-adjusted{% endif %}">
+                {{ rating.adjusted_letter_grade }}{% if rating.adjusted_letter_grade != rating.letter_grade %} <span style="opacity:.65;">({{ rating.letter_grade }})</span>{% endif %}
+            </span>
+            {% endif %}
             {% if customer.is_delinquent %}
             <span style="font-size:.8rem; background:#fdecea; color:#a32d2d; border-radius:10px; padding:.2rem .7rem; font-weight:600; vertical-align:middle;">Delinquent</span>
             {% endif %}
@@ -400,6 +408,46 @@
     </div>
     {% endif %}
 </div>
+
+<!-- Customer Rating -->
+{% if rating %}
+<div class="card" style="margin-bottom:1.25rem;">
+    <div class="section-title">Customer Rating</div>
+    <div style="display:flex; gap:2rem; flex-wrap:wrap; margin-bottom:1rem;">
+        <div><span style="font-size:.75rem; color:#999; text-transform:uppercase;">Payment Timeliness</span>
+            <div style="font-size:1rem;">{{ '%+.1f'|format(rating.payment_timeliness_score) }}</div></div>
+        <div><span style="font-size:.75rem; color:#999; text-transform:uppercase;">Cancellation</span>
+            <div style="font-size:1rem;">{{ '%+.1f'|format(rating.cancellation_score) }}</div></div>
+        <div><span style="font-size:.75rem; color:#999; text-transform:uppercase;">Job Volume</span>
+            <div style="font-size:1rem;">{{ '%+.1f'|format(rating.job_volume_score) }}</div></div>
+        <div><span style="font-size:.75rem; color:#999; text-transform:uppercase;">Composite</span>
+            <div style="font-size:1rem;">{{ '%.1f'|format(rating.composite_score) }} ({{ rating.letter_grade }})</div></div>
+    </div>
+    {% if rating.manager_adjustment is not none %}
+    <div style="background:#fff8e1; border:1px solid #ffe082; border-radius:6px; padding:.75rem 1rem; margin-bottom:1rem; font-size:.88rem;">
+        <strong>Manager override:</strong> {{ '%+.1f'|format(rating.manager_adjustment) }} points → {{ rating.adjusted_letter_grade }}
+        <br><span style="color:#666;">{{ rating.manager_adjustment_note }}</span>
+        <br><span style="color:#999; font-size:.8rem;">— {{ rating.manager_adjustment_by }}, {{ rating.manager_adjustment_at.strftime('%b %d, %Y') if rating.manager_adjustment_at else '' }}</span>
+    </div>
+    {% endif %}
+    {% if session.user_role in ('admin', 'manager') %}
+    <form method="POST" action="/{{ company_key }}/customers/{{ customer.id }}/rating-override" style="display:flex; gap:.6rem; align-items:flex-end; flex-wrap:wrap;">
+        <div class="form-group">
+            <label style="font-size:.8rem; font-weight:600;">Adjustment (points)</label>
+            <input type="text" name="manager_adjustment" placeholder="e.g. +10" style="padding:.5rem; border:1px solid #ddd; border-radius:4px; width:110px;"
+                   value="{{ rating.manager_adjustment if rating.manager_adjustment is not none else '' }}">
+        </div>
+        <div class="form-group" style="flex:1; min-width:200px;">
+            <label style="font-size:.8rem; font-weight:600;">Note (required to set an override)</label>
+            <input type="text" name="manager_adjustment_note" style="padding:.5rem; border:1px solid #ddd; border-radius:4px; width:100%;"
+                   value="{{ rating.manager_adjustment_note or '' }}">
+        </div>
+        <button type="submit" class="btn btn-outline btn-sm">Save</button>
+    </form>
+    <p style="font-size:.78rem; color:#999; margin-top:.4rem;">Leave the adjustment blank and save to clear the override.</p>
+    {% endif %}
+</div>
+{% endif %}
 
 <!-- Jobs -->
 <div class="card" style="margin-bottom:1.25rem;">

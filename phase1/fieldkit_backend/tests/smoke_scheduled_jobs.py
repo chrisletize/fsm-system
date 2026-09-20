@@ -277,6 +277,10 @@ def main():
             cur.execute("DELETE FROM work_orders WHERE id = ANY(%s)", (wo_ids,))
         if customer_ids:
             cur.execute("DELETE FROM customer_flags WHERE customer_id = ANY(%s)", (customer_ids,))
+            # job_nightly (Increment 3.2) also recomputes customer_ratings for
+            # every customer it touches -- clean that up too, or the FK blocks
+            # the customer delete below.
+            cur.execute("DELETE FROM customer_ratings WHERE customer_id = ANY(%s)", (customer_ids,))
             cur.execute("DELETE FROM customers WHERE id = ANY(%s)", (customer_ids,))
         cur.execute("DELETE FROM job_runs WHERE company_key = 'getagrip' AND started_at > NOW() - INTERVAL '5 minutes'")
         conn.commit()

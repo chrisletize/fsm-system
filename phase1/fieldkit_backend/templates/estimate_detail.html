@@ -32,7 +32,13 @@
 
 {% block content %}
 <div class="page-header">
-    <h1>{{ est.estimate_number }} <span class="badge badge-{{ est.status|lower }}">{{ est.status }}</span></h1>
+    <h1>{{ est.estimate_number }} <span class="badge badge-{{ est.status|lower }}">{{ est.status }}</span>
+        {% if est.adjusted_letter_grade %}
+        {% set grade_colors = {'A': ('#eaf3de', '#3b6d11'), 'B': ('#e6f1fb', '#185fa5'), 'C': ('#fff8e1', '#8a6d00'), 'D': ('#faeeda', '#854f0b'), 'F': ('#fdecea', '#a32d2d')} %}
+        {% set bg, fg = grade_colors.get(est.adjusted_letter_grade, ('#f1efe8', '#5f5e5a')) %}
+        <span class="badge" style="background:{{ bg }}; color:{{ fg }};">Rating: {{ est.adjusted_letter_grade }}</span>
+        {% endif %}
+    </h1>
     <div style="display:flex; gap:.6rem;">
         <a href="/{{ company_key }}/estimates" class="btn btn-secondary">← Estimates</a>
         {% if est.status == 'Draft' %}
