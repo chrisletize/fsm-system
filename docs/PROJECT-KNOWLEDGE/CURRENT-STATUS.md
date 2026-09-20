@@ -39,7 +39,8 @@ reporting until FieldKit's billing is complete.
 | Recency report | Built (3.3, migration 023, `/reports/recency`): last-service date = GREATEST of WO history and imported `customer_job_dates`, bucketed 1-2/3-6/6-12/12+ months (boundaries matched to the Phase 0 site), grouped by management company, PDF export. History-import script (`import_job_dates.py`) written and dry-run for real against production statements data — 258 customers/2,859 job dates would import for Get a Grip (the only company with statements job history); `--commit` on hold pending Chris's review. |
 | Callbacks | Built (3.4, migration 024): WO form's "This is a callback for…" combo pre-fills location/site/lines from the prior job, defaults Responsible Tech to its lead tech; badges on dispatch/WO list/customer detail/WO detail; `/reports/callbacks` grouped by responsible tech with paid-vs-unpaid detection (no payroll engine — just exposes the data); customer rating gets a new signed `callback_score` (-3 per callback, trailing 12mo). |
 | Sales CRM | Built (3.5, migration 025): prospects/contacts/visits/approval-queue CRUD under `/sales`, mobile quick-tap visit logging, follow-ups, unified customer+prospect search, dormant-customer detection reusing the recency-report formula, convert-to-customer via manager approval (creates customer + contacts in one transaction), Monday weekly report email. See below. |
-| Payment methods, dashboard stats | Not built |
+| Dashboard | Built (5.1, no migration, `/<company>/dashboard`): today's jobs, uninvoiced completed WOs (loud), open extraction units, outstanding A/R + 90+ + unapplied credits (from the `customer_flags` nightly cache), follow-ups due, pending approvals, last-15 recent activity across WO/invoice/payment status history, role-gated Quick Actions. Role-gated sections, not a role-gated route — technicians/salespeople still land here until §5.4 builds `/myday`. |
+| Payment methods | Not built |
 
 This table matches `FIELDKIT_BUILD_DIRECTIVE_2026-09.md` §0.2 — confirmed by grepping
 the full route list out of `app.py` (3,248 lines) and querying row counts in all four
@@ -121,6 +122,16 @@ estimate is sent and converted to a WO (done since 3.1); the Monday report arriv
 company having `scheduled_alerts_enabled` switched on, which all four don't yet,
 per Increment 2.5); ratings show on the board (done since 2.1/3.2). Next up:
 **Stage 4 — Dashboard, data quality, permissions sweep, help** (directive §5).
+
+**Stage 4 — Dashboard, data quality, permissions sweep, help**: in progress.
+Increment 5.1 (Dashboard) complete — replaced the Phase 1 placeholder with the
+real thing: today's jobs, uninvoiced completed WOs (loud), open extraction
+units, outstanding A/R + 90+ + unapplied credits (read from the `customer_flags`
+nightly cache rather than a live per-customer walk — see D-088), follow-ups due,
+pending approvals, last-15 recent activity, role-gated Quick Actions. No
+migration — every table read already existed. 21/21 smoke checks
+(`tests/smoke_dashboard.py`), full 21-file regression suite green. Next:
+5.2 (customer merge + duplicate detection).
 
 Decisions Chris has already made for this build (delinquent threshold = 90 days past
 invoice date, FL tax left empty/exempt for Kleanit SF, SF-import receivables excluded

@@ -1224,3 +1224,29 @@ re-run clean.
 directive-scope decisions (approval_queue limited to `convert_prospect`,
 no persisted dormant-list "Dismiss", 768px verified by CSS review not a
 live browser walkthrough).
+
+## Stage 4 — Dashboard, data quality, permissions sweep, help
+
+## Increment 5.1 — Dashboard
+
+- Replaced the Phase 1 placeholder (`active_customers` + `recent_customers`,
+  "Coming in Phase N" stubs) with the real thing per directive §5.1: today's
+  jobs (count + link to `/dispatch`), uninvoiced completed WOs (loud —
+  reddened stat tile), open extraction units (skipped for getagrip per
+  `COMPANIES_WITHOUT_EXTRACTION`), outstanding A/R + 90+ and unapplied
+  credits (from the `customer_flags` nightly cache, not a live per-customer
+  aging walk — see D-088), follow-ups due (sales roles), pending approvals
+  (admin/manager), last-15 recent activity (`UNION ALL` across the three
+  existing status-history tables), and role-gated Quick Actions (New WO,
+  New Customer, New Estimate, Record Payment → `/billing`).
+- Financial/activity sections are gated behind `financial_view`
+  (admin/manager) both in the query layer and the template — technicians and
+  salespeople still land on `/dashboard` (no `/myday` yet, that's §5.4) but
+  see only Today's Jobs + Active Customers plus whatever their own role
+  unlocks (follow-ups for sales roles).
+- No migration — every table this increment reads already existed.
+
+**Smoke test:** `tests/smoke_dashboard.py` — 21/21 checks (see D-088). Full
+21-file regression suite re-run clean.
+
+**Deferred:** nothing from this increment's own scope.

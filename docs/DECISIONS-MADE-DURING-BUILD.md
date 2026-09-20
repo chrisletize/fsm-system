@@ -1001,6 +1001,62 @@ deliberately left out as directive-scope decisions, not deferrals).
 
 ---
 
+D-088 — Increment 5.1 (Dashboard, directive §5.1). Replaced the Phase 1 placeholder
+(`active_customers` count + `recent_customers` list, "Coming in Phase N" stubs) with
+the real thing.
+
+- **Outstanding A/R / 90+ / unapplied credits read from `customer_flags`**, the
+  nightly-computed cache Increment 2.4 built for the Delinquent Account badges
+  (`_job_recompute_customer_flags`, reusing `_customer_aging_summary`/
+  `customer_unapplied_credit`), not a live per-customer aging walk repeated on
+  every dashboard load. The live per-invoice walk (`_customer_receivables_detail`)
+  stays reserved for pages that need exact bucket-by-invoice precision for real
+  financial work — the A/R aging report and the billing page. A dashboard tile is
+  a badge, not a report; badges read the cache elsewhere in this build (customer
+  ratings, delinquent flag) and this follows the same line. "90+" on the tile is
+  `SUM(open_balance) FILTER (WHERE is_delinquent)` — `is_delinquent` is exactly
+  "has an open invoice >90 days past its invoice date" (`DELINQUENT_DAYS_PAST_INVOICE
+  = 90`, D-001), the same 90-day cut the aging report's own 90+ bucket uses, just
+  evaluated once nightly instead of live.
+- **Role-gated sections, not a role-gated route.** `/dashboard` itself keeps no
+  role check (it's every role's landing page, including technician, until §5.4
+  builds `/myday`) — instead the route computes a `financial_view` bool
+  (`admin`/`manager`) that gates uninvoiced-WOs/extraction/A/R/credits/recent-
+  activity both in the query layer (skip the queries entirely, don't just hide
+  the markup) and in the template. Follow-ups-due uses `SALES_ROLES`
+  (admin/manager/salesperson — same constant Increment 3.5 defined), pending-
+  approvals uses the stricter `SALES_APPROVAL_ROLES` (admin/manager) — both
+  already existed, reused rather than redefined. Quick Actions row follows the
+  same per-button gate (`ESTIMATE_ROLES` for "+ New Estimate", `financial_view`
+  for "Record Payment", which links to `/billing` since there's no standalone
+  "new payment" page — `POST /payments/new` is a form action embedded in the
+  per-customer billing flow, not a page of its own).
+- **Recent activity** is a `UNION ALL` across `work_order_status_history`/
+  `invoice_status_history`/`payment_status_history` (all three already existed,
+  append-only, `changed_by`/`changed_at` on each per migrations 005/007/011) —
+  nothing new written, just read together and limited to 15. Gated under
+  `financial_view` since it surfaces invoice/payment events technicians and
+  salespeople have no route access to view directly.
+- **"Today's Jobs"** = WOs with `start_date = today AND status != 'Cancelled'`,
+  visible to every role, linking to `/dispatch` — the closest existing "today's
+  schedule" surface. Not gated, since every role (including technician, until
+  `/myday` exists) benefits from knowing today's job count.
+- No migration — every table this increment reads already existed.
+
+**Smoke test:** `tests/smoke_dashboard.py` — 21/21 checks: today's-jobs count
+increments on a same-day WO, a Completed/uninvoiced WO shows up (and turns the
+tile "loud"), recent activity surfaces a fixture WO's status event, outstanding
+A/R / 90+ / unapplied credits move by exactly the fixture's `customer_flags`
+values (diff-based, not exact-value, since production already carries real
+`customer_flags` rows), and role-based visibility for technician (no financial
+tiles, still sees Today's Jobs) vs. salesperson (follow-ups yes, approvals no,
+estimate quick-action yes, payment quick-action no) vs. admin (sees everything).
+Full 21-file regression suite re-run clean.
+
+**Deferred:** nothing from this increment's own scope.
+
+---
+
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:
 #33 (OPS/VendorCafe export templates), #50 (SMS alerts via Twilio), and Stage 5.6
 (ServiceFusion price-list exports, company legal names/remit-to/reply-to/alert emails).

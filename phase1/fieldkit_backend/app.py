@@ -341,30 +341,121 @@ def home():
 # Dashboard
 # ============================================================================
 
+def _dashboard_recent_activity(cur, limit=15):
+    """Last N status-history events across WOs/invoices/payments, newest
+    first. Each of the three history tables already has changed_by/changed_at
+    (migrations 005/007/011) -- this just UNIONs them with a friendly label
+    and a link target, it doesn't add anything new."""
+    cur.execute("""
+        (SELECT 'work_order' AS kind, wo.id AS ref_id, wo.work_order_number AS ref_label,
+                c.property_name AS customer_name, wosh.status AS event,
+                wosh.changed_by, wosh.changed_at
+         FROM work_order_status_history wosh
+         JOIN work_orders wo ON wo.id = wosh.work_order_id
+         LEFT JOIN customers c ON c.id = wo.customer_id
+         ORDER BY wosh.changed_at DESC LIMIT %s)
+        UNION ALL
+        (SELECT 'invoice', i.id, i.invoice_number,
+                c.property_name, ish.state,
+                ish.changed_by, ish.changed_at
+         FROM invoice_status_history ish
+         JOIN invoices i ON i.id = ish.invoice_id
+         LEFT JOIN customers c ON c.id = i.customer_id
+         ORDER BY ish.changed_at DESC LIMIT %s)
+        UNION ALL
+        (SELECT 'payment', p.id, '$' || TO_CHAR(p.amount, 'FM999,999,990.00'),
+                c.property_name, psh.event,
+                psh.changed_by, psh.changed_at
+         FROM payment_status_history psh
+         JOIN payments p ON p.id = psh.payment_id
+         LEFT JOIN customers c ON c.id = p.customer_id
+         ORDER BY psh.changed_at DESC LIMIT %s)
+        ORDER BY changed_at DESC LIMIT %s
+    """, (limit, limit, limit, limit))
+    return cur.fetchall()
+
+
 @app.route('/<company_key>/')
 @app.route('/<company_key>/dashboard')
 @login_required
 @company_access_required
 @with_branding
 def dashboard(company_key, branding, all_companies, company_access):
+    role = session.get('user_role')
     conn = get_db_connection(company_key)
     cur  = conn.cursor()
+    today = date.today()
 
     cur.execute("SELECT COUNT(*) as count FROM customers WHERE deleted_at IS NULL AND status = 'Active'")
     active_customers = cur.fetchone()['count']
 
     cur.execute("""
-        SELECT id, property_name, customer_type, city, status
-        FROM customers WHERE deleted_at IS NULL
-        ORDER BY created_at DESC LIMIT 10
-    """)
-    recent_customers = cur.fetchall()
+        SELECT COUNT(*) AS count FROM work_orders
+        WHERE deleted_at IS NULL AND start_date = %s AND status NOT IN ('Cancelled')
+    """, (today,))
+    todays_jobs = cur.fetchone()['count']
+
+    financial_view = role in ('admin', 'manager')
+    uninvoiced = []
+    extraction_open = None
+    ar_outstanding = ar_90plus = unapplied_credits_total = 0
+    recent_activity = []
+    if financial_view:
+        cur.execute("""
+            SELECT wo.id, wo.work_order_number, c.property_name AS customer_name
+            FROM work_orders wo
+            LEFT JOIN customers c ON c.id = wo.customer_id
+            WHERE wo.deleted_at IS NULL AND wo.status = 'Completed' AND wo.customer_id IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.work_order_id = wo.id AND i.deleted_at IS NULL)
+            ORDER BY wo.work_order_number
+        """)
+        uninvoiced = cur.fetchall()
+
+        if company_key not in COMPANIES_WITHOUT_EXTRACTION:
+            cur.execute("SELECT COUNT(*) AS count FROM work_orders WHERE deleted_at IS NULL AND status = 'Extraction Active'")
+            extraction_open = cur.fetchone()['count']
+
+        # Nightly-computed cache (job_nightly -> _job_recompute_customer_flags), same
+        # table the Delinquent Account badges already read -- not a live per-invoice
+        # aging walk on every dashboard load (that's what /reports/aging is for).
+        cur.execute("""
+            SELECT COALESCE(SUM(open_balance), 0) AS total,
+                   COALESCE(SUM(open_balance) FILTER (WHERE is_delinquent), 0) AS total_90plus,
+                   COALESCE(SUM(unapplied_credit) FILTER (WHERE unapplied_credit > 0.005), 0) AS credits
+            FROM customer_flags
+        """)
+        ar = cur.fetchone()
+        ar_outstanding, ar_90plus, unapplied_credits_total = ar['total'], ar['total_90plus'], ar['credits']
+
+        recent_activity = _dashboard_recent_activity(cur)
+
+    followups_due = None
+    if role in SALES_ROLES:
+        cur.execute("""
+            SELECT COUNT(*) AS count FROM sales_visits
+            WHERE deleted_at IS NULL AND follow_up_needed = TRUE AND follow_up_completed = FALSE
+              AND follow_up_date <= %s
+        """, (today,))
+        followups_due = cur.fetchone()['count']
+
+    pending_approvals = None
+    if role in SALES_APPROVAL_ROLES:
+        cur.execute("SELECT COUNT(*) AS count FROM approval_queue WHERE deleted_at IS NULL AND status = 'pending'")
+        pending_approvals = cur.fetchone()['count']
+
     cur.close(); conn.close()
 
     return render_template('dashboard.html',
         branding=branding, company_key=company_key,
         company_access=company_access, all_companies=all_companies,
-        active_customers=active_customers, recent_customers=recent_customers,
+        active_customers=active_customers, todays_jobs=todays_jobs,
+        financial_view=financial_view, uninvoiced=uninvoiced,
+        extraction_open=extraction_open,
+        ar_outstanding=ar_outstanding, ar_90plus=ar_90plus,
+        unapplied_credits_total=unapplied_credits_total,
+        recent_activity=recent_activity,
+        followups_due=followups_due, pending_approvals=pending_approvals,
+        estimate_roles=ESTIMATE_ROLES,
     )
 
 # ============================================================================

@@ -2,117 +2,144 @@
 
 {% block title %}Dashboard - {{ branding.name }}{% endblock %}
 
+{% block extra_css %}
+<style>
+    .page-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:1.25rem; flex-wrap:wrap; gap:.75rem; }
+    .page-header h1 { font-size:1.75rem; color:{{ branding.color_primary }}; }
+    .stat-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:1.25rem; margin-bottom:1.5rem; }
+    @media (max-width:768px) { .stat-grid { grid-template-columns:1fr 1fr; } }
+    .stat-tile { text-align:center; }
+    .stat-tile .n { font-size:2.25rem; font-weight:600; color:{{ branding.color_primary }}; }
+    .stat-tile.loud .n { color:#a32d2d; }
+    .stat-tile .label { color:#666; font-size:.9rem; margin-top:.25rem; }
+    .dash-grid { display:grid; grid-template-columns:1fr 1fr; gap:1.25rem; }
+    @media (max-width:768px) { .dash-grid { grid-template-columns:1fr; } }
+    .card h2 { font-size:1rem; color:#444; margin-bottom:.9rem; }
+    .row-item { display:flex; justify-content:space-between; align-items:center; padding:.6rem 0; border-bottom:1px solid #f2f2f2; gap:.75rem; }
+    .row-item:last-child { border-bottom:none; }
+    .row-name { font-weight:500; }
+    .row-sub { font-size:.8rem; color:#888; }
+    .empty { color:#aaa; padding:1rem 0; text-align:center; font-size:.9rem; }
+    .quick-actions { display:flex; gap:.75rem; flex-wrap:wrap; margin-bottom:1.5rem; }
+    .btn { display:inline-block; padding:.7rem 1.4rem; border-radius:4px; text-decoration:none; font-weight:500; border:none; font-size:.95rem; cursor:pointer; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-outline { background:white; color:{{ branding.color_primary }}; border:1px solid {{ branding.color_primary }}; }
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="dashboard">
-    <h1 style="color: {{ branding.color_primary }}; margin-bottom: 2rem;">
-        {{ branding.name }} Dashboard
-    </h1>
-    
-    <!-- Quick Stats -->
-    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
-        <div class="card" style="background-color: {{ branding.color_primary }}; color: white;">
-            <h3 style="font-size: 2.5rem; margin-bottom: 0.5rem;">{{ active_customers }}</h3>
-            <p>Active Customers</p>
-        </div>
-        
-        <div class="card">
-            <h3 style="font-size: 2.5rem; margin-bottom: 0.5rem; color: {{ branding.color_primary }};">0</h3>
-            <p>Open Jobs</p>
-            <small style="color: #999;">(Coming in Phase 4)</small>
-        </div>
-        
-        <div class="card">
-            <h3 style="font-size: 2.5rem; margin-bottom: 0.5rem; color: {{ branding.color_primary }};">0</h3>
-            <p>Pending Invoices</p>
-            <small style="color: #999;">(Coming in Phase 5)</small>
-        </div>
-    </div>
-    
-    <!-- Quick Actions -->
-    <div class="card">
-        <h2>Quick Actions</h2>
-        <div style="display: flex; gap: 1rem; margin-top: 1rem;">
-            <a href="/{{ company_key }}/customers" class="btn btn-primary">View Customers</a>
-            <a href="/{{ company_key }}/customers/new" class="btn btn-secondary">Add Customer</a>
-            <button class="btn btn-secondary" disabled>Create Job (Phase 4)</button>
-            <button class="btn btn-secondary" disabled>New Invoice (Phase 5)</button>
-        </div>
-    </div>
-    
-    <!-- Recent Customers -->
-    <div class="card">
-        <h2>Recent Customers</h2>
-        {% if recent_customers %}
-        <table style="width: 100%; margin-top: 1rem; border-collapse: collapse;">
-            <thead>
-                <tr style="border-bottom: 2px solid #ddd;">
-                    <th style="text-align: left; padding: 0.75rem;">Property Name</th>
-                    <th style="text-align: left; padding: 0.75rem;">Type</th>
-                    <th style="text-align: left; padding: 0.75rem;">City</th>
-                    <th style="text-align: left; padding: 0.75rem;">Status</th>
-                    <th style="text-align: left; padding: 0.75rem;">Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for customer in recent_customers %}
-                <tr style="border-bottom: 1px solid #eee;">
-                    <td style="padding: 0.75rem;">{{ customer.property_name }}</td>
-                    <td style="padding: 0.75rem;">{{ customer.customer_type }}</td>
-                    <td style="padding: 0.75rem;">{{ customer.city or 'N/A' }}</td>
-                    <td style="padding: 0.75rem;">
-                        <span style="
-                            padding: 0.25rem 0.75rem;
-                            border-radius: 12px;
-                            font-size: 0.85rem;
-                            background-color: {% if customer.status == 'Active' %}#e8f5e9{% else %}#fce4ec{% endif %};
-                            color: {% if customer.status == 'Active' %}#2e7d32{% else %}#c2185b{% endif %};
-                        ">
-                            {{ customer.status }}
-                        </span>
-                    </td>
-                    <td style="padding: 0.75rem;">
-                        <a href="/{{ company_key }}/customers/{{ customer.id }}" style="color: {{ branding.color_primary }}; text-decoration: none;">View →</a>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-        {% else %}
-        <p style="color: #999; margin-top: 1rem;">No customers yet. Add your first customer!</p>
-        {% endif %}
-    </div>
-    
-    <!-- Phase 1 Status -->
-    <div class="card" style="background-color: #e8f4f8; border-left: 4px solid {{ branding.color_primary }};">
-        <h3 style="color: {{ branding.color_primary }};">🚀 Phase 1: Core Foundation</h3>
-        <p style="margin-top: 0.5rem;">You're using FieldKit Phase 1! Core features:</p>
-        <ul style="margin: 1rem 0 1rem 2rem; line-height: 1.8;">
-            <li>✅ Multi-company authentication</li>
-            <li>✅ Company switcher with color branding</li>
-            <li>✅ Customer database ({{ active_customers }} imported)</li>
-            <li>🔄 Customer management interface (in progress)</li>
-        </ul>
-        <p style="color: #666; font-size: 0.9rem;">
-            Coming soon: Full customer CRUD, search, jobs, invoicing, mobile apps
-        </p>
-    </div>
+<div class="page-header">
+    <h1>{{ branding.name }} Dashboard</h1>
 </div>
 
-<style>
-    table {
-        font-size: 0.95rem;
-    }
-    
-    th {
-        font-weight: 600;
-        color: #666;
-        text-transform: uppercase;
-        font-size: 0.8rem;
-        letter-spacing: 0.5px;
-    }
-    
-    tr:hover {
-        background-color: #f8f9fa;
-    }
-</style>
+<div class="quick-actions">
+    <a href="/{{ company_key }}/workorders/new" class="btn btn-primary">+ New Work Order</a>
+    <a href="/{{ company_key }}/customers/new" class="btn btn-outline">+ New Customer</a>
+    {% if session.user_role in estimate_roles %}
+    <a href="/{{ company_key }}/estimates/new" class="btn btn-outline">+ New Estimate</a>
+    {% endif %}
+    {% if financial_view %}
+    <a href="/{{ company_key }}/billing" class="btn btn-outline">Record Payment</a>
+    {% endif %}
+</div>
+
+<div class="stat-grid">
+    <div class="card stat-tile">
+        <a href="/{{ company_key }}/dispatch" style="text-decoration:none; color:inherit;">
+            <div class="n">{{ todays_jobs }}</div>
+            <div class="label">Today's Jobs</div>
+        </a>
+    </div>
+    <div class="card stat-tile">
+        <div class="n">{{ active_customers }}</div>
+        <div class="label">Active Customers</div>
+    </div>
+    {% if financial_view %}
+    <div class="card stat-tile {{ 'loud' if uninvoiced|length > 0 else '' }}">
+        <a href="/{{ company_key }}/workorders?status=Completed" style="text-decoration:none; color:inherit;">
+            <div class="n">{{ uninvoiced|length }}</div>
+            <div class="label">Uninvoiced Completed WOs</div>
+        </a>
+    </div>
+    {% if extraction_open is not none %}
+    <div class="card stat-tile">
+        <a href="/{{ company_key }}/extraction" style="text-decoration:none; color:inherit;">
+            <div class="n">{{ extraction_open }}</div>
+            <div class="label">Open Extraction Units</div>
+        </a>
+    </div>
+    {% endif %}
+    <div class="card stat-tile">
+        <a href="/{{ company_key }}/reports/aging" style="text-decoration:none; color:inherit;">
+            <div class="n">${{ '%.0f'|format(ar_outstanding) }}</div>
+            <div class="label">Outstanding A/R (${{ '%.0f'|format(ar_90plus) }} 90+)</div>
+        </a>
+    </div>
+    <div class="card stat-tile">
+        <a href="/{{ company_key }}/billing?filter=all" style="text-decoration:none; color:inherit;">
+            <div class="n">${{ '%.0f'|format(unapplied_credits_total) }}</div>
+            <div class="label">Unapplied Credits</div>
+        </a>
+    </div>
+    {% endif %}
+    {% if followups_due is not none %}
+    <div class="card stat-tile {{ 'loud' if followups_due > 0 else '' }}">
+        <a href="/{{ company_key }}/sales/followups" style="text-decoration:none; color:inherit;">
+            <div class="n">{{ followups_due }}</div>
+            <div class="label">Follow-Ups Due</div>
+        </a>
+    </div>
+    {% endif %}
+    {% if pending_approvals is not none %}
+    <div class="card stat-tile {{ 'loud' if pending_approvals > 0 else '' }}">
+        <a href="/{{ company_key }}/sales/approvals" style="text-decoration:none; color:inherit;">
+            <div class="n">{{ pending_approvals }}</div>
+            <div class="label">Pending Approvals</div>
+        </a>
+    </div>
+    {% endif %}
+</div>
+
+{% if financial_view %}
+<div class="dash-grid">
+    <div class="card">
+        <h2>Uninvoiced Completed Work Orders</h2>
+        {% for w in uninvoiced %}
+        <div class="row-item">
+            <div>
+                <div class="row-name">
+                    <a href="/{{ company_key }}/workorders/{{ w.id }}" style="color:{{ branding.color_primary }}; text-decoration:none;">{{ w.work_order_number }}</a>
+                </div>
+                <div class="row-sub">{{ w.customer_name or 'Internal Task' }}</div>
+            </div>
+        </div>
+        {% else %}
+        <div class="empty">Nothing uninvoiced — all caught up.</div>
+        {% endfor %}
+    </div>
+
+    <div class="card">
+        <h2>Recent Activity</h2>
+        {% for a in recent_activity %}
+        <div class="row-item">
+            <div>
+                <div class="row-name">
+                    {% if a.kind == 'work_order' %}
+                    <a href="/{{ company_key }}/workorders/{{ a.ref_id }}" style="color:{{ branding.color_primary }}; text-decoration:none;">{{ a.ref_label }}</a>
+                    {% elif a.kind == 'invoice' %}
+                    <a href="/{{ company_key }}/invoices/{{ a.ref_id }}" style="color:{{ branding.color_primary }}; text-decoration:none;">{{ a.ref_label }}</a>
+                    {% else %}
+                    {{ a.ref_label }}
+                    {% endif %}
+                </div>
+                <div class="row-sub">{{ a.event }} — {{ a.customer_name or 'Internal Task' }}</div>
+            </div>
+            <div class="row-sub">{{ a.changed_at.strftime('%b %-d, %-I:%M%p') if a.changed_at else '' }} · {{ a.changed_by or 'system' }}</div>
+        </div>
+        {% else %}
+        <div class="empty">No activity yet.</div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
 {% endblock %}
