@@ -1304,3 +1304,29 @@ idempotent. Pre-migration backups in `~/db-backups/2026-09-20g/`.
 23-file regression suite re-run clean.
 
 **Deferred:** nothing from this increment's own scope.
+
+## Increment 5.4 — Permissions sweep
+
+- Full route-by-route audit (142 routes) against the directive's Appendix A
+  matrix found 13 completely ungated Customers-area routes + `billing_export`,
+  3 routes too permissive for manager (`field_settings`/`field_add`/
+  `field_toggle`), and 5 too restrictive for salesperson (reports). All fixed
+  — see D-091 for the full list and the `CUSTOMER_WRITE_ROLES` /
+  technician-scoping design.
+- Technician customer access is read-only, scoped to customers they've been
+  assigned a work order for (`_technician_customer_ids()`), not a flat
+  exclude — matches the matrix's "own jobs' customers, read-only."
+- **New**: `/<company>/myday` — the technician mobile-stand-in page the
+  directive calls for. Date-scoped list of the tech's own assigned WOs, each
+  with On The Way / Start / Complete buttons writing the two status values
+  (`'On The Way'`, `'In Progress'`) the schema already reserved for this
+  surface (`WO_OFFICE_STATUSES`'s own comment said so) but that nothing could
+  reach until now. Reuses `_record_audit` for every status write.
+- `VALID_ROLES` no longer offers the dead `'office'` value on the New/Edit
+  User form (DB CHECK constraint left untouched, out of scope).
+- No migration — permission gates + one new route, no schema change.
+
+**Smoke test:** `tests/smoke_permissions.py` — 42/42 checks (see D-091). Full
+24-file regression suite re-run clean.
+
+**Deferred:** nothing from this increment's own scope.

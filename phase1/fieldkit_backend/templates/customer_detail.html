@@ -213,7 +213,9 @@
         {% endif %}
     </div>
     <div class="header-actions">
+        {% if not read_only %}
         <a href="/{{ company_key }}/customers/{{ customer.id }}/edit" class="btn btn-outline">Edit</a>
+        {% endif %}
         {% if session.user_role == 'admin' %}
         <a href="/{{ company_key }}/customers/{{ customer.id }}/merge" class="btn btn-outline">Merge…</a>
         {% endif %}
@@ -339,8 +341,10 @@
             </span>
             {% endif %}
         </div>
+        {% if not read_only %}
         <a href="/{{ company_key }}/customers/{{ customer.id }}/locations/new"
            class="btn btn-outline btn-sm">+ Add Location</a>
+        {% endif %}
     </div>
 
     {% if locations %}
@@ -378,8 +382,10 @@
                     </div>
                 </div>
                 <div class="location-actions">
+                    {% if not read_only %}
                     <a href="/{{ company_key }}/customers/{{ customer.id }}/locations/{{ loc.id }}/edit"
                        class="btn btn-outline btn-sm">Edit</a>
+                    {% endif %}
                 </div>
             </div>
 
@@ -801,8 +807,10 @@ function openPortalModal(portal) {
             </span>
             {% endif %}
         </div>
+        {% if not read_only %}
         <a href="/{{ company_key }}/customers/{{ customer.id }}/contacts/new"
            class="btn btn-outline btn-sm">+ Add Contact</a>
+        {% endif %}
     </div>
 
     {% if contacts %}
@@ -820,6 +828,7 @@ function openPortalModal(portal) {
                     {% if contact.is_primary %}
                     <span class="contact-primary-badge">Primary</span>
                     {% endif %}
+                    {% if not read_only %}
                     <a href="/{{ company_key }}/customers/{{ customer.id }}/contacts/{{ contact.id }}/edit"
                        class="btn btn-outline btn-sm">Edit</a>
                     {% if contacts|length > 1 %}
@@ -832,6 +841,7 @@ function openPortalModal(portal) {
                             Remove
                         </button>
                     </form>
+                    {% endif %}
                     {% endif %}
                 </div>
             </div>
@@ -886,7 +896,7 @@ function openPortalModal(portal) {
 
         <!-- Billing coverage warning -->
         {% set billing_contacts = contacts | selectattr('accepts_billing') | list %}
-        {% if not billing_contacts %}
+        {% if not billing_contacts and not read_only %}
         <div style="margin-top:0.75rem; padding:0.75rem 1rem; background:#fff8e1;
                     border:1px solid #ffe082; border-radius:4px; font-size:0.85rem; color:#f57f17;">
             ⚠️ No contacts have "Invoices &amp; Statements" enabled.
@@ -898,8 +908,10 @@ function openPortalModal(portal) {
 
     {% else %}
     <div class="no-contacts">No contacts on file.
+        {% if not read_only %}
         <a href="/{{ company_key }}/customers/{{ customer.id }}/contacts/new"
            style="color:{{ branding.color_primary }};">Add one →</a>
+        {% endif %}
     </div>
     {% endif %}
 </div>
@@ -907,6 +919,7 @@ function openPortalModal(portal) {
 <!-- Notes -->
 <div class="card">
     <div class="section-title">Activity & Notes</div>
+    {% if not read_only %}
     <div class="add-note-form">
         <form method="POST" action="/{{ company_key }}/customers/{{ customer.id }}/notes">
             <textarea name="note_text" placeholder="Add a note about this customer..." rows="3"></textarea>
@@ -923,6 +936,7 @@ function openPortalModal(portal) {
             </div>
         </form>
     </div>
+    {% endif %}
     <div style="margin-top:1.25rem;">
         {% if notes %}
             {% for note in notes %}

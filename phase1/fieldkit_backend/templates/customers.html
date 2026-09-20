@@ -151,7 +151,9 @@
 {% block content %}
 <div class="page-header">
     <h1>Customers</h1>
+    {% if not read_only %}
     <a href="/{{ company_key }}/customers/new" class="btn btn-primary">+ Add Customer</a>
+    {% endif %}
 </div>
 
 <div class="card">

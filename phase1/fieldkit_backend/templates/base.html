@@ -535,10 +535,17 @@
                 Extraction
             </a>
             {% endif %}
-            {% if session.user_role in ('admin', 'manager', 'office') %}
+            {% if session.user_role in ('admin', 'manager', 'office', 'salesperson') %}
             <a href="/{{ company_key }}/reports"
                class="subnav-link {% if '/reports' in current_path %}active{% endif %}">
                 Reports
+            </a>
+            {% endif %}
+
+            {% if session.user_role == 'technician' %}
+            <a href="/{{ company_key }}/myday"
+               class="subnav-link {% if '/myday' in current_path %}active{% endif %}">
+                My Day
             </a>
             {% endif %}
 

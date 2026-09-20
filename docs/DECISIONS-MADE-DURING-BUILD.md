@@ -1218,6 +1218,112 @@ re-run clean.
 
 ---
 
+D-091 — Increment 5.4 (Permissions sweep, directive §5.4). Full route-by-route
+audit against the directive's Appendix A matrix (142 routes, every `@app.route`
+in app.py) found: 13 routes with NO role check at all (the Customers area —
+`customers`, `customers_search`, `customer_detail`, `add_note`, `customer_new`,
+`customer_edit`, `customer_dupe_check`, `location_new`, `location_edit`,
+`contact_new`, `contact_edit`, `contact_delete` — plus `billing_export`, which
+was the one ungated route in an otherwise fully-gated billing area); 3 routes
+too permissive (`field_settings`/`field_add`/`field_toggle` let `manager`
+through, when the matrix's "manager = catalog & equipment only" line excludes
+custom-field settings); 5 routes too restrictive (`reports_landing`,
+`report_jobs`, `report_jobs_export_csv`, `report_recency`, `report_recency_pdf`
+blocked `salesperson`, who the matrix grants "recency, jobs, sales"); and
+`/myday` didn't exist at all.
+
+- **`CUSTOMER_WRITE_ROLES = ('admin', 'manager', 'salesperson')`** (a new
+  constant, deliberately not reusing the value-identical `ESTIMATE_ROLES`/
+  `SALES_ROLES` — same domain-clarity-over-DRY precedent those two already
+  set) gates every customer/contact/location write path. Customer *view*
+  (`customers`, `customer_detail`) stays open to every role, including
+  technician, per the matrix's "own jobs' customers, read-only" rather than a
+  flat exclude — technician's access is query-scoped instead:
+  `_technician_customer_ids()` returns the set of customer ids a technician
+  has ever been assigned a work order for (`work_order_techs` join), and both
+  `customers` (list, filtered `WHERE id = ANY(...)`) and `customer_detail`
+  (403 if the requested id isn't in that set) use it. `customers_search` (the
+  JSON autocomplete endpoint every write-form's picker calls) is gated to
+  `CUSTOMER_WRITE_ROLES` outright rather than scoped — a technician has no
+  legitimate reason to search customers generically since every form that
+  would call this endpoint is already closed to them.
+- **Reports**: `salesperson` added to the five gates above; `reports_landing.html`
+  now conditionally hides the admin/manager-only cards (Tax, Aging, Day Sheet,
+  Hours, Callbacks) from a salesperson rather than showing a card that 403s on
+  click. Recency and Job Activity are granted **unscoped** (company-wide, same
+  as admin/manager see) — the matrix's "(own)" qualifier next to "jobs" has no
+  corresponding data-model concept to scope by (work orders have no
+  salesperson/creator field, only assigned techs and a customer), and Sales
+  CRM's own dormant-customer tooling (`/sales`, Increment 3.5) already covers
+  the genuinely salesperson-scoped use case. Treated as a data-model gap to
+  flag, not a reason to invent scoping logic with nothing to scope against.
+- **`/myday`** (technician-only — gated `!= 'technician'`, not opened to
+  admin/manager for oversight, matching the directive's literal framing of
+  this page as the technician mobile stand-in, not a general-purpose view):
+  a single page, date-scoped (default today, same `?date=` convention as
+  `report_daysheet`), listing only work orders where the logged-in tech has a
+  `work_order_techs` row for that date, each with three buttons — On The Way /
+  Start / Complete — writing `'On The Way'`/`'In Progress'`/`'Completed'`
+  respectively. Those two middle statuses already existed in the `status`
+  CHECK constraint and in `app.py`'s own `WO_OFFICE_STATUSES` comment
+  ("On The Way / In Progress arrive with the mobile app") — Increment 1's
+  schema had already reserved this vocabulary for exactly this surface, never
+  reachable through the office WO form's own status dropdown
+  (`_save_work_order` rejects anything outside `WO_OFFICE_STATUSES`). The
+  status-update route re-verifies the `work_order_techs` assignment itself
+  (404, not a generic 403, if the WO doesn't exist OR isn't theirs — doesn't
+  leak which case) and rejects the write if the WO is already
+  Completed/Cancelled/No Charge/Invoiced/Extraction Active (can't move
+  backward out of a terminal state) or `is_extraction` (the extraction
+  lifecycle, Increment 2.2, has its own daily-log/retrieve workflow — My
+  Day's plain 3-button flow renders those WOs read-only with a pointer to the
+  extraction queue instead of half-reimplementing that state machine). Reuses
+  `_record_audit` (Increment 5.3) for every status write, same as every other
+  WO status change in the app.
+- **`workorder_detail` itself was deliberately left admin/manager/office-only,
+  not opened to technician** — My Day's per-job card already surfaces
+  everything the directive's "WO detail of their own assignments" asks for
+  (site, address+map, contact phone, description, tech notes, line
+  descriptions) inline, without needing a second, separately-scoped read path
+  into the full office WO detail template. Keeps the "everything else 403 for
+  technicians" boundary the directive states literally intact.
+- **`VALID_ROLES` dropped the dead `'office'` value** (D-087 already
+  established no seeded user has it and no route grants it anything) so the
+  New/Edit User form can no longer hand an admin a role that maps to zero
+  live capabilities. The DB's own `users_role_check` CHECK constraint still
+  permits `'office'` at the schema level — left untouched, out of scope for
+  an app-level permissions sweep — and the ~40 inert `not in ('admin',
+  'manager', 'office')` tuples scattered through existing routes were left
+  alone too: they're dead weight, not a correctness bug (no user can ever
+  have that role again now that the form won't offer it), and touching 40
+  call sites for zero behavior change trades real risk for cosmetic benefit.
+  Whoever next touches any one of those routes can drop the literal then.
+- No migration — this increment is entirely permission-gate and one new
+  read/write-scoped route, no schema change.
+
+**Smoke test:** `tests/smoke_permissions.py` — 42/42 checks: My Day shows only
+the logged-in tech's own-date assignment and hides an unrelated tech's job;
+admin/manager/salesperson all 403 from My Day; a tech can move their own job
+through On The Way → Completed but gets a 404 (not 403) trying to touch a job
+they're not assigned to, and can't move a Completed job backward; the office
+WO form still rejects `'On The Way'` as a status (proving the reservation
+line actually holds); technician customer list/detail scoping (sees own-job
+customer, 403 on an unrelated one, no write buttons rendered); every customer
+write path 403s for technician while salesperson still reaches all of them;
+`field_settings` now blocks manager; salesperson reaches reports/jobs/recency
+and the landing page hides admin-only cards from them while tax report stays
+blocked; `billing_export` now gated; technician still 403 everywhere else
+(dispatch/invoices/billing/sales/estimates/settings); and the New User form
+no longer offers `'office'`. Full 24-file regression suite re-run clean.
+
+**Deferred:** nothing from this increment's own scope. The five-route
+salesperson-scoping gap noted above (no "own" concept for jobs/recency to
+scope against) is a data-model observation, not deferred work — there's
+nothing to build until a future increment defines what "a salesperson's own
+job" would even mean in this schema.
+
+---
+
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:
 #33 (OPS/VendorCafe export templates), #50 (SMS alerts via Twilio), and Stage 5.6
 (ServiceFusion price-list exports, company legal names/remit-to/reply-to/alert emails).

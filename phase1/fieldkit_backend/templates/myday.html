@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}My Day — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { margin-bottom:.5rem; }
+    .page-header h1 { font-size:1.75rem; color:{{ branding.color_primary }}; }
+    .controls { display:flex; gap:.75rem; margin-bottom:1.25rem; align-items:flex-end; flex-wrap:wrap; }
+    .controls label { display:flex; flex-direction:column; gap:.3rem; font-size:.78rem; color:#666; font-weight:600; }
+    .controls input { padding:.5rem .6rem; border:1px solid #ddd; border-radius:4px; font-size:1rem; }
+    .btn { padding:.6rem 1.1rem; border-radius:4px; text-decoration:none; font-size:.9rem; border:none; cursor:pointer; font-weight:500; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-outline { background:white; color:{{ branding.color_primary }}; border:1px solid {{ branding.color_primary }}; }
+
+    .job-card { background:white; border:1px solid #eee; border-radius:8px; padding:1.1rem 1.25rem; margin-bottom:1rem; }
+    .job-head { display:flex; justify-content:space-between; align-items:flex-start; gap:.75rem; flex-wrap:wrap; }
+    .job-time { font-size:1.1rem; font-weight:700; color:{{ branding.color_primary }}; }
+    .job-customer { font-size:1.15rem; font-weight:600; margin-top:.15rem; }
+    .job-status { display:inline-block; padding:.25rem .75rem; border-radius:10px; font-size:.78rem; font-weight:600; white-space:nowrap; }
+    .status-Scheduled { background:#eef2ff; color:#3949ab; }
+    .status-OnTheWay { background:#fff3d6; color:#8a6100; }
+    .status-InProgress { background:#fdf0e6; color:#a04b00; }
+    .status-Completed { background:#e8f5e9; color:#2e7d32; }
+    .job-detail { margin-top:.75rem; font-size:.9rem; color:#555; line-height:1.5; }
+    .job-detail .label { color:#999; font-size:.76rem; text-transform:uppercase; letter-spacing:.4px; }
+    .maps-link { font-size:.82rem; }
+    .job-lines { margin:.5rem 0 0; padding-left:1.1rem; font-size:.88rem; color:#444; }
+    .job-actions { display:flex; gap:.6rem; margin-top:1rem; flex-wrap:wrap; }
+    .job-actions form { display:inline; }
+    .job-actions button {
+        padding:.75rem 1.1rem; border-radius:6px; border:1px solid #ddd; background:white;
+        font-size:.92rem; font-weight:600; cursor:pointer; min-height:44px; min-width:44px;
+    }
+    .btn-onway { color:#8a6100; border-color:#f0d9a0; }
+    .btn-start { color:#a04b00; border-color:#f0c0a0; }
+    .btn-complete { color:#2e7d32; border-color:#a0d0a8; }
+    .empty { text-align:center; color:#aaa; padding:3rem 1rem; }
+    @media (max-width:600px) {
+        .job-actions button { flex:1; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header"><h1>My Day</h1></div>
+
+<form method="GET" class="controls">
+    <label>Date <input type="date" name="date" value="{{ target_date }}"></label>
+    <button type="submit" class="btn btn-primary">Go</button>
+    {% if target_date != today %}
+    <a class="btn btn-outline" href="?date={{ today }}">Today</a>
+    {% endif %}
+</form>
+
+{% if not jobs %}
+<div class="job-card empty">No jobs assigned to you on this date.</div>
+{% endif %}
+
+{% for j in jobs %}
+<div class="job-card">
+    <div class="job-head">
+        <div>
+            <div class="job-time">{{ j.time_display or 'No time set' }}</div>
+            <div class="job-customer">{{ j.customer_name or 'Internal Task' }}</div>
+        </div>
+        <span class="job-status status-{{ j.status|replace(' ', '') }}">{{ j.status }}</span>
+    </div>
+
+    <div class="job-detail">
+        {% if j.work_site_label %}<div><span class="label">Site</span> {{ j.work_site_label }}</div>{% endif %}
+        {% if j.address_display %}
+        <div>{{ j.address_display }}
+            <span class="maps-link"><a href="https://www.google.com/maps/search/?api=1&query={{ j.address_display|urlencode }}" target="_blank">Map →</a></span>
+        </div>
+        {% endif %}
+        {% if j.contact_phone %}<div><span class="label">Phone</span> {{ j.contact_phone }}</div>{% endif %}
+        {% if j.auto_description %}<div style="margin-top:.4rem;">{{ j.auto_description }}</div>{% endif %}
+        {% if j.notes_for_techs %}
+        <div style="margin-top:.4rem;"><span class="label">Notes</span> {{ j.notes_for_techs }}</div>
+        {% endif %}
+        {% if j.line_descriptions %}
+        <ul class="job-lines">
+            {% for line in j.line_descriptions %}
+            <li>{{ line }}</li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+    </div>
+
+    {% if j.actionable %}
+    <div class="job-actions">
+        <form method="POST" action="/{{ company_key }}/myday/{{ j.id }}/status">
+            <input type="hidden" name="date" value="{{ target_date }}">
+            <input type="hidden" name="status" value="On The Way">
+            <button type="submit" class="btn-onway">On The Way</button>
+        </form>
+        <form method="POST" action="/{{ company_key }}/myday/{{ j.id }}/status">
+            <input type="hidden" name="date" value="{{ target_date }}">
+            <input type="hidden" name="status" value="In Progress">
+            <button type="submit" class="btn-start">Start</button>
+        </form>
+        <form method="POST" action="/{{ company_key }}/myday/{{ j.id }}/status"
+              onsubmit="return confirm('Mark this job Completed?')">
+            <input type="hidden" name="date" value="{{ target_date }}">
+            <input type="hidden" name="status" value="Completed">
+            <button type="submit" class="btn-complete">Complete</button>
+        </form>
+    </div>
+    {% elif j.is_extraction %}
+    <div class="job-detail" style="margin-top:.75rem; color:#999; font-size:.82rem;">
+        Extraction job — managed from the office extraction queue, not My Day.
+    </div>
+    {% endif %}
+</div>
+{% endfor %}
+{% endblock %}

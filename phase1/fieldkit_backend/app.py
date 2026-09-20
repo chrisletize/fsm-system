@@ -463,6 +463,29 @@ def dashboard(company_key, branding, all_companies, company_access):
 # Customers — list
 # ============================================================================
 
+# Directive §5.2/5.4 permissions matrix: customers view = every role, but
+# create/edit/delete-merge (Appendix A) is admin/manager/salesperson only --
+# technician gets "own jobs' customers, read-only" (scoped by
+# _technician_customer_ids below), never a write path.
+CUSTOMER_WRITE_ROLES = ('admin', 'manager', 'salesperson')
+
+
+def _technician_customer_ids(company_key, username):
+    """Customer ids a technician has ever been assigned a work order for --
+    the 'own jobs' customers' set the permissions matrix scopes a
+    technician's read-only customer access to (directive §5.4)."""
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT DISTINCT wo.customer_id FROM work_orders wo
+        JOIN work_order_techs wt ON wt.work_order_id = wo.id
+        WHERE wt.username = %s AND wo.deleted_at IS NULL AND wo.customer_id IS NOT NULL
+    """, (username,))
+    ids = {r['customer_id'] for r in cur.fetchall()}
+    cur.close(); conn.close()
+    return ids
+
+
 @app.route('/<company_key>/customers')
 @login_required
 @company_access_required
@@ -486,6 +509,12 @@ def customers(company_key, branding, all_companies, company_access):
     if type_filter:
         conditions.append("customer_type = %s")
         params.append(type_filter)
+
+    scoped_ids = None
+    if session.get('user_role') == 'technician':
+        scoped_ids = _technician_customer_ids(company_key, session.get('username'))
+        conditions.append("id = ANY(%s)")
+        params.append(list(scoped_ids))
 
     where  = " AND ".join(conditions)
     offset = (page - 1) * per_page
@@ -513,6 +542,7 @@ def customers(company_key, branding, all_companies, company_access):
         customers=customer_list,
         search=search, status_filter=status_filter, type_filter=type_filter,
         page=page, total_pages=total_pages, total=total,
+        read_only=(scoped_ids is not None),
     )
 
 
@@ -520,7 +550,12 @@ def customers(company_key, branding, all_companies, company_access):
 @login_required
 @company_access_required
 def customers_search(company_key):
-    """JSON endpoint for live customer search — returns matching rows."""
+    """JSON endpoint for live customer search — returns matching rows.
+    Powers pickers on the create/edit forms customer-write roles use, so
+    technician (read-only, no write forms) has no legitimate reason to
+    reach this (directive §5.4)."""
+    if session.get('user_role') not in CUSTOMER_WRITE_ROLES:
+        abort(403)
     search        = request.args.get('search', '').strip()
     status_filter = request.args.get('status', 'Active')
     type_filter   = request.args.get('type', '')
@@ -589,6 +624,11 @@ def customer_detail(company_key, customer_id, branding, all_companies, company_a
             flash('This customer was merged into another record.', 'info')
             return redirect(f'/{company_key}/customers/{merged["merged_into_customer_id"]}')
         abort(404)
+
+    read_only = session.get('user_role') == 'technician'
+    if read_only and customer_id not in _technician_customer_ids(company_key, session.get('username')):
+        cur.close(); conn.close()
+        abort(403)
 
     cur.execute("""
         SELECT * FROM customer_contacts
@@ -703,6 +743,7 @@ def customer_detail(company_key, customer_id, branding, all_companies, company_a
         compliance_portals=compliance_portals, portal_types=PORTAL_TYPES,
         default_statement_subject=default_statement_subject, default_statement_body=default_statement_body,
         customer_estimates=customer_estimates, rating=rating, audit_history=audit_history,
+        read_only=read_only,
     )
 
 # ============================================================================
@@ -713,6 +754,8 @@ def customer_detail(company_key, customer_id, branding, all_companies, company_a
 @login_required
 @company_access_required
 def add_note(company_key, customer_id):
+    if session.get('user_role') not in CUSTOMER_WRITE_ROLES:
+        abort(403)
     note_text = request.form.get('note_text', '').strip()
     note_type = request.form.get('note_type', 'General')
     if not note_text:
@@ -736,6 +779,8 @@ def add_note(company_key, customer_id):
 @company_access_required
 @with_branding
 def customer_new(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in CUSTOMER_WRITE_ROLES:
+        abort(403)
     conn = get_db_connection(company_key)
     field_defs          = get_field_definitions(conn)
     management_companies = get_management_companies(conn)
@@ -810,6 +855,8 @@ def customer_new(company_key, branding, all_companies, company_access):
 @company_access_required
 @with_branding
 def customer_edit(company_key, customer_id, branding, all_companies, company_access):
+    if session.get('user_role') not in CUSTOMER_WRITE_ROLES:
+        abort(403)
     conn = get_db_connection(company_key)
     cur  = conn.cursor()
 
@@ -891,9 +938,10 @@ def customer_edit(company_key, customer_id, branding, all_companies, company_acc
 def customer_dupe_check(company_key):
     """Duplicate-customer detection: normalized-name + normalized-address
     match, same non-blocking-banner pattern as workorder_dupe_check (the
-    directive's "double-booking brick"). No role gate -- customer_new/
-    customer_edit have none either, so this mirrors whatever can already
-    reach the form it's called from."""
+    directive's "double-booking brick"). Gated the same as customer_new/
+    customer_edit, the only two forms that ever call this (directive §5.4)."""
+    if session.get('user_role') not in CUSTOMER_WRITE_ROLES:
+        abort(403)
     name    = (request.args.get('name') or '').strip()
     address = (request.args.get('address') or '').strip()
     exclude_id = _opt_num(request.args.get('exclude_id'))
@@ -1123,6 +1171,8 @@ def customer_merge_preview(company_key):
 @company_access_required
 @with_branding
 def location_new(company_key, customer_id, branding, all_companies, company_access):
+    if session.get('user_role') not in CUSTOMER_WRITE_ROLES:
+        abort(403)
     conn = get_db_connection(company_key)
     cur  = conn.cursor()
 
@@ -1194,6 +1244,8 @@ def location_new(company_key, customer_id, branding, all_companies, company_acce
 @company_access_required
 @with_branding
 def location_edit(company_key, customer_id, location_id, branding, all_companies, company_access):
+    if session.get('user_role') not in CUSTOMER_WRITE_ROLES:
+        abort(403)
     conn = get_db_connection(company_key)
     cur  = conn.cursor()
 
@@ -1266,7 +1318,7 @@ def location_edit(company_key, customer_id, location_id, branding, all_companies
 @company_access_required
 @with_branding
 def field_settings(company_key, branding, all_companies, company_access):
-    if session.get('user_role') not in ('admin', 'manager', 'office'):
+    if session.get('user_role') != 'admin':
         abort(403)
     conn = get_db_connection(company_key)
     field_defs = get_field_definitions(conn)
@@ -1281,7 +1333,7 @@ def field_settings(company_key, branding, all_companies, company_access):
 @login_required
 @company_access_required
 def field_add(company_key):
-    if session.get('user_role') not in ('admin', 'manager', 'office'):
+    if session.get('user_role') != 'admin':
         abort(403)
     field_name = request.form.get('field_name','').strip()
     field_type = request.form.get('field_type','text')
@@ -1302,7 +1354,7 @@ def field_add(company_key):
 @login_required
 @company_access_required
 def field_toggle(company_key, field_id):
-    if session.get('user_role') not in ('admin', 'manager', 'office'):
+    if session.get('user_role') != 'admin':
         abort(403)
     conn = get_db_connection(company_key)
     cur  = conn.cursor()
@@ -4438,7 +4490,7 @@ def workorder_followup_new(company_key, wo_id):
 @company_access_required
 @with_branding
 def reports_landing(company_key, branding, all_companies, company_access):
-    if session.get('user_role') not in ('admin', 'manager', 'office'):
+    if session.get('user_role') not in ('admin', 'manager', 'office', 'salesperson'):
         abort(403)
     return render_template('reports_landing.html',
         branding=branding, company_key=company_key,
@@ -4504,6 +4556,122 @@ def report_daysheet(company_key, branding, all_companies, company_access):
         target_date=target_date, tech_filter=tech_filter,
         tech_groups=tech_groups, all_techs=_company_techs(company_key),
     )
+
+
+# ============================================================================
+# My Day  (technician only, directive §5.4 -- the office-web stand-in for
+# mobile status updates: read-only day sheet + WO detail scoped to the
+# logged-in tech's own assignments, plus the three mobile-reserved statuses
+# WO_OFFICE_STATUSES deliberately excludes: On The Way / In Progress / Completed)
+# ============================================================================
+
+MYDAY_STATUSES = ('On The Way', 'In Progress', 'Completed')
+
+@app.route('/<company_key>/myday')
+@login_required
+@company_access_required
+@with_branding
+def myday(company_key, branding, all_companies, company_access):
+    if session.get('user_role') != 'technician':
+        abort(403)
+    username = session.get('username')
+    target_date = request.args.get('date') or date.today().isoformat()
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT wo.id, wo.work_order_number, wo.status, wo.is_extraction,
+               to_char(wo.scheduled_start, 'HH12:MI AM') AS time_display,
+               wo.work_site_label, wo.auto_description, wo.notes_for_techs,
+               c.property_name AS customer_name,
+               COALESCE(sl.address, c.address) AS address,
+               COALESCE(sl.city, c.city) AS city,
+               COALESCE(sl.state, c.state) AS state,
+               COALESCE(cc.office_phone, cc.mobile_phone) AS contact_phone
+        FROM work_orders wo
+        JOIN work_order_techs wt ON wt.work_order_id = wo.id AND wt.username = %s
+        LEFT JOIN customers c ON c.id = wo.customer_id
+        LEFT JOIN service_locations sl ON sl.id = wo.service_location_id
+        LEFT JOIN customer_contacts cc ON cc.id = wo.primary_contact_id
+        WHERE wo.deleted_at IS NULL AND wo.start_date = %s
+        ORDER BY wo.scheduled_start ASC NULLS LAST, wo.id
+    """, (username, target_date))
+    jobs = [dict(r) for r in cur.fetchall()]
+
+    wo_ids = [j['id'] for j in jobs]
+    lines_by_wo = {}
+    if wo_ids:
+        cur.execute("""
+            SELECT li.work_order_id, li.description, ci.name AS catalog_name
+            FROM work_order_line_items li
+            JOIN catalog_items ci ON ci.id = li.catalog_item_id
+            WHERE li.work_order_id = ANY(%s) AND li.deleted_at IS NULL
+            ORDER BY li.sort_order, li.id
+        """, (wo_ids,))
+        for row in cur.fetchall():
+            lines_by_wo.setdefault(row['work_order_id'], []).append(row['description'] or row['catalog_name'])
+    cur.close(); conn.close()
+
+    for j in jobs:
+        j['address_display'] = ', '.join(filter(None, [j['address'], j['city'], j['state']]))
+        j['line_descriptions'] = lines_by_wo.get(j['id'], [])
+        # The extraction lifecycle (Increment 2.2) has its own daily-log/retrieve
+        # workflow -- My Day's plain 3-button flow isn't the right surface for
+        # it, so those WOs render read-only here, same "don't build a second
+        # half-implementation of an existing workflow" instinct as elsewhere
+        # in this build.
+        j['actionable'] = (not j['is_extraction']) and j['status'] in ('Scheduled',) + MYDAY_STATUSES[:-1]
+
+    return render_template('myday.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        jobs=jobs, target_date=target_date, today=date.today().isoformat(),
+        myday_statuses=MYDAY_STATUSES,
+    )
+
+
+@app.route('/<company_key>/myday/<int:wo_id>/status', methods=['POST'])
+@login_required
+@company_access_required
+def myday_status(company_key, wo_id):
+    if session.get('user_role') != 'technician':
+        abort(403)
+    username = session.get('username')
+    new_status = request.form.get('status')
+    if new_status not in MYDAY_STATUSES:
+        abort(400)
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT wo.status FROM work_orders wo
+        JOIN work_order_techs wt ON wt.work_order_id = wo.id AND wt.username = %s
+        WHERE wo.id = %s AND wo.deleted_at IS NULL
+    """, (username, wo_id))
+    wo = cur.fetchone()
+    if not wo:
+        cur.close(); conn.close()
+        abort(404)  # doesn't exist, or this tech isn't assigned to it
+    if wo['status'] not in ('Scheduled',) + MYDAY_STATUSES[:-1]:
+        cur.close(); conn.close()
+        flash('This job can no longer be updated from My Day.', 'error')
+        return redirect(f'/{company_key}/myday')
+
+    cur.execute("""
+        UPDATE work_orders SET status = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s
+    """, (new_status, username, wo_id))
+    cur.execute("""
+        INSERT INTO work_order_status_history (work_order_id, status, changed_by, notes)
+        VALUES (%s, %s, %s, 'Updated from My Day (office-web mobile stand-in)')
+    """, (wo_id, new_status, username))
+    _record_audit(cur, 'work_orders', wo_id, 'update',
+                   before={'status': wo['status']}, after={'status': new_status}, changed_by=username)
+    conn.commit(); cur.close(); conn.close()
+    flash(f'Marked {new_status}.', 'success')
+
+    redirect_date = request.form.get('date')
+    return redirect(f'/{company_key}/myday' + (f'?date={redirect_date}' if redirect_date else ''))
 
 
 @app.route('/<company_key>/reports/hours')
@@ -4621,7 +4789,7 @@ def _jobs_report_query(company_key):
 @company_access_required
 @with_branding
 def report_jobs(company_key, branding, all_companies, company_access):
-    if session.get('user_role') not in ('admin', 'manager', 'office'):
+    if session.get('user_role') not in ('admin', 'manager', 'office', 'salesperson'):
         abort(403)
     rows, filters = _jobs_report_query(company_key)
     totals = {
@@ -4640,7 +4808,7 @@ def report_jobs(company_key, branding, all_companies, company_access):
 @login_required
 @company_access_required
 def report_jobs_export_csv(company_key):
-    if session.get('user_role') not in ('admin', 'manager', 'office'):
+    if session.get('user_role') not in ('admin', 'manager', 'office', 'salesperson'):
         abort(403)
     rows, _ = _jobs_report_query(company_key)
     lines = ['Work Order #,Date,Status,Customer,Invoiced Total']
@@ -4728,7 +4896,7 @@ def _recency_report_data(company_key):
 @company_access_required
 @with_branding
 def report_recency(company_key, branding, all_companies, company_access):
-    if session.get('user_role') not in ('admin', 'manager', 'office'):
+    if session.get('user_role') not in ('admin', 'manager', 'office', 'salesperson'):
         abort(403)
     groups = _recency_report_data(company_key)
     return render_template('recency_report.html',
@@ -4742,7 +4910,7 @@ def report_recency(company_key, branding, all_companies, company_access):
 @login_required
 @company_access_required
 def report_recency_pdf(company_key):
-    if session.get('user_role') not in ('admin', 'manager', 'office'):
+    if session.get('user_role') not in ('admin', 'manager', 'office', 'salesperson'):
         abort(403)
     groups = _recency_report_data(company_key)
     branding = COMPANY_BRANDING.get(company_key, {})
@@ -4891,6 +5059,8 @@ def report_callbacks(company_key, branding, all_companies, company_access):
 @company_access_required
 @with_branding
 def contact_new(company_key, customer_id, branding, all_companies, company_access):
+    if session.get('user_role') not in CUSTOMER_WRITE_ROLES:
+        abort(403)
     conn = get_db_connection(company_key)
     cur  = conn.cursor()
 
@@ -4982,6 +5152,8 @@ def contact_new(company_key, customer_id, branding, all_companies, company_acces
 @company_access_required
 @with_branding
 def contact_edit(company_key, customer_id, contact_id, branding, all_companies, company_access):
+    if session.get('user_role') not in CUSTOMER_WRITE_ROLES:
+        abort(403)
     conn = get_db_connection(company_key)
     cur  = conn.cursor()
 
@@ -5075,6 +5247,8 @@ def contact_edit(company_key, customer_id, contact_id, branding, all_companies, 
 @login_required
 @company_access_required
 def contact_delete(company_key, customer_id, contact_id):
+    if session.get('user_role') not in CUSTOMER_WRITE_ROLES:
+        abort(403)
     conn = get_db_connection(company_key)
     cur  = conn.cursor()
 
@@ -6957,6 +7131,8 @@ def billing(company_key, branding, all_companies, company_access):
 @company_access_required
 def billing_export(company_key):
     """Generate a CSV of selected customers for batch billing."""
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
     import csv, io
     from flask import Response
 
@@ -7422,7 +7598,13 @@ def compliance_reject(company_key, invoice_id):
 # getagrip is the canonical read source; all writes go to all 4 DBs.
 # ============================================================================
 
-VALID_ROLES = ['admin', 'manager', 'office', 'salesperson', 'technician']
+# 'office' remains a legal value in the DB's users_role_check CHECK constraint
+# (schema left untouched -- out of scope for this cleanup) but was never a
+# real role: no seeded user has it and no route anywhere in the app grants it
+# any permission (D-087). Dropped here so the New/Edit User role dropdown
+# can't hand an admin a role that maps to zero live capabilities (directive
+# §5.4 permissions sweep, D-091).
+VALID_ROLES = ['admin', 'manager', 'salesperson', 'technician']
 ALL_COMPANY_KEYS = list(DB_CONFIG.keys())  # ['getagrip', 'kleanit_charlotte', 'cts', 'kleanit_sf']
 
 # Fixed 12-color dispatch-board palette (directive §3.1). Assigned by id % 12 so a

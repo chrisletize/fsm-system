@@ -39,9 +39,10 @@ reporting until FieldKit's billing is complete.
 | Recency report | Built (3.3, migration 023, `/reports/recency`): last-service date = GREATEST of WO history and imported `customer_job_dates`, bucketed 1-2/3-6/6-12/12+ months (boundaries matched to the Phase 0 site), grouped by management company, PDF export. History-import script (`import_job_dates.py`) written and dry-run for real against production statements data — 258 customers/2,859 job dates would import for Get a Grip (the only company with statements job history); `--commit` on hold pending Chris's review. |
 | Callbacks | Built (3.4, migration 024): WO form's "This is a callback for…" combo pre-fills location/site/lines from the prior job, defaults Responsible Tech to its lead tech; badges on dispatch/WO list/customer detail/WO detail; `/reports/callbacks` grouped by responsible tech with paid-vs-unpaid detection (no payroll engine — just exposes the data); customer rating gets a new signed `callback_score` (-3 per callback, trailing 12mo). |
 | Sales CRM | Built (3.5, migration 025): prospects/contacts/visits/approval-queue CRUD under `/sales`, mobile quick-tap visit logging, follow-ups, unified customer+prospect search, dormant-customer detection reusing the recency-report formula, convert-to-customer via manager approval (creates customer + contacts in one transaction), Monday weekly report email. See below. |
-| Dashboard | Built (5.1, no migration, `/<company>/dashboard`): today's jobs, uninvoiced completed WOs (loud), open extraction units, outstanding A/R + 90+ + unapplied credits (from the `customer_flags` nightly cache), follow-ups due, pending approvals, last-15 recent activity across WO/invoice/payment status history, role-gated Quick Actions. Role-gated sections, not a role-gated route — technicians/salespeople still land here until §5.4 builds `/myday`. |
+| Dashboard | Built (5.1, no migration, `/<company>/dashboard`): today's jobs, uninvoiced completed WOs (loud), open extraction units, outstanding A/R + 90+ + unapplied credits (from the `customer_flags` nightly cache), follow-ups due, pending approvals, last-15 recent activity across WO/invoice/payment status history, role-gated Quick Actions. Role-gated sections, not a role-gated route — technicians land on the reduced view; salespeople land on the full sales-aware view. |
 | Customer merge + duplicate detection | Built (5.2, migration 026): non-blocking duplicate-customer banner on the customer form; admin-only `/customers/<id>/merge` with AJAX side-by-side preview and a one-transaction merge across every referencing table; merged customer URLs redirect to the target. |
 | Audit trail | Built (5.3, migration 027): `record_audit` written from customers/contacts/service locations/work orders/invoices/payments/estimates/catalog/tax rates/users via one shared `_record_audit()` helper; read-only History panel on customer/WO/invoice/payment detail; admin-only global view at `/settings/audit`. |
+| Permissions sweep + My Day | Built (5.4, no migration): full route audit against the Appendix A matrix, gaps closed (see D-091); technician customer access read-only and scoped to own-job customers (`_technician_customer_ids()`); `/<company>/myday` — date-scoped list of a technician's own assigned WOs with On The Way / Start / Complete status buttons. |
 | Payment methods | Not built |
 
 This table matches `FIELDKIT_BUILD_DIRECTIVE_2026-09.md` §0.2 — confirmed by grepping
@@ -152,8 +153,20 @@ centrally inside the helper, not per call site — see D-090 for the bug this
 design caught on the first smoke-test run (briefly present in a test fixture,
 never a real user). Read-only History panel on customer/WO/invoice/payment
 detail; admin-only global view at `/settings/audit`. 46/46 smoke checks
-(`tests/smoke_audit_trail.py`), full 23-file regression suite green. Next:
-5.4 (permissions sweep).
+(`tests/smoke_audit_trail.py`), full 23-file regression suite green.
+Increment 5.4 (permissions sweep) complete — full route-by-route audit (142
+routes) against the directive's Appendix A matrix found and fixed 13
+completely ungated Customers-area routes + `billing_export`, 3 routes too
+permissive for manager, 5 too restrictive for salesperson; technician
+customer access is now read-only and scoped to customers they've been
+assigned a work order for (`_technician_customer_ids()`), not a flat
+exclude. **New**: `/<company>/myday`, the technician mobile-stand-in page —
+date-scoped list of the tech's own assigned WOs with On The Way / Start /
+Complete buttons writing the two status values (`'On The Way'`,
+`'In Progress'`) the schema had already reserved for this surface but
+nothing could reach until now. See D-091. 42/42 smoke checks
+(`tests/smoke_permissions.py`), full 24-file regression suite green. Next:
+5.5 (settings landing + in-app help).
 
 Decisions Chris has already made for this build (delinquent threshold = 90 days past
 invoice date, FL tax left empty/exempt for Kleanit SF, SF-import receivables excluded

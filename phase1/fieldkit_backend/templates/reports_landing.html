@@ -17,12 +17,16 @@
 <div class="page-header"><h1>Reports — {{ branding.name }}</h1></div>
 
 <div class="report-grid">
+    {% if session.user_role in ('admin', 'manager') %}
     <a class="report-card" href="/{{ company_key }}/reports/tax"><h3>NC Cash-Basis Tax Report</h3><p>By county, state/county/transit split.</p></a>
     <a class="report-card" href="/{{ company_key }}/reports/aging"><h3>A/R Aging</h3><p>Open receivables by bucket.</p></a>
     <a class="report-card" href="/{{ company_key }}/reports/daysheet"><h3>Day Sheet</h3><p>Printable per-tech schedule.</p></a>
     <a class="report-card" href="/{{ company_key }}/reports/hours"><h3>Hours</h3><p>Scheduled hours, jobs, extraction checks per tech.</p></a>
+    {% endif %}
     <a class="report-card" href="/{{ company_key }}/reports/jobs"><h3>Job Activity</h3><p>Job list with totals, CSV export.</p></a>
     <a class="report-card" href="/{{ company_key }}/reports/recency"><h3>Recency</h3><p>Last service date by management company, bucketed by months since.</p></a>
+    {% if session.user_role in ('admin', 'manager') %}
     <a class="report-card" href="/{{ company_key }}/reports/callbacks"><h3>Callbacks</h3><p>By responsible tech: count, ratio to completed jobs, paid vs. unpaid.</p></a>
+    {% endif %}
 </div>
 {% endblock %}
