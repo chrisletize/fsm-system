@@ -69,3 +69,17 @@
     </div>
 </details>
 {%- endmacro %}
+
+{# Collapsible in-app help panel (directive §5.5) -- static text per page,
+   explaining the workflow/reconciliation rules that apply there. Usage:
+     {% call help_panel('Invoices') %}
+       <p>...</p>
+     {% endcall %} #}
+{% macro help_panel(title) -%}
+<details class="help-panel">
+    <summary>❓ {{ title }}</summary>
+    <div class="help-panel-body">
+        {{ caller() }}
+    </div>
+</details>
+{%- endmacro %}

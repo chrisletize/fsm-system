@@ -1324,6 +1324,67 @@ job" would even mean in this schema.
 
 ---
 
+D-092 — Increment 5.5 (Settings landing + in-app help, directive §5.5).
+
+- **`/<company>/settings`** (admin/manager) shows a card per settings page the
+  logged-in role can actually reach — Custom Fields/Tax Rates/Company
+  Settings/User Management/Audit Log are admin-only cards, hidden from
+  manager rather than shown-then-403 (same pattern `reports_landing.html`
+  already used for salesperson in Increment 5.4). **The Scheduled Jobs panel
+  is rendered inline**, not linked to — the directive's own wording says
+  "cards for every settings page **plus** the scheduled-jobs panel," treating
+  it as a distinct thing from a card, and the whole point of a landing page
+  is not making an admin click through to Company Settings just to see
+  whether cron is still alive. Reuses the exact query `company_settings_edit`
+  already had (`DISTINCT ON (job_name) ... ORDER BY job_name, started_at
+  DESC`) so the two views can never disagree.
+- **`field_settings`/`field_add`/`field_toggle`'s nav entries** (base.html)
+  were still gated `('admin','manager','office')` even after Increment 5.4
+  made the routes themselves admin-only — fixed here so a manager doesn't
+  see a Custom Fields link that 403s. Added an "All Settings" entry at the
+  top of the existing Settings dropdown, admin/manager only.
+- **In-app help**: a new `help_panel(title)` macro (`_macros.html`, a native
+  `<details>` disclosure, same mechanism as the History panel) added to six
+  pages — `invoice_detail.html` (the directive's own worked example: why a
+  Sent invoice can't be edited, Revise vs. Reissue), `billing.html` (what
+  Delinquent/No Contact/Portal mean, tied to the exact same 90-day threshold
+  and nightly computation the badges elsewhere already use), `estimate_detail.html`
+  (Draft→Sent→Approved/Declined→Converted, and that Convert flips status on
+  WO save, not on the click), `workorder_form.html` (the double-booking
+  banner is non-blocking, the callback prefill excludes equipment lines and
+  requires a reason, On The Way/In Progress are My Day-only), `extraction_queue.html`
+  (one WO for the whole lifecycle, what Retrieved actually finalizes, why
+  Get a Grip doesn't have this page), and `myday.html` (button semantics for
+  a technician who's never used it before). **`tax_rates_list.html` was left
+  as-is** — it already has an always-visible (not collapsible) reconciliation
+  note covering exactly the directive's own tax-rate example ("never edit
+  the percentage on a row an invoice may already have used"); duplicating it
+  as a second, collapsed panel would only bury the same information the page
+  already surfaces prominently.
+- **Six pages, not "every major page"** — the directive's phrase is broad by
+  nature; these six are the ones with a genuine reconciliation rule or
+  non-obvious workflow constraint to explain (matching the directive's own
+  single worked example, on invoices), not just any page with a form on it.
+  Logged as the scope call it is, not silently narrowed.
+- No migration — this increment is entirely new routes/templates/nav, no
+  schema change.
+
+**Smoke test:** `tests/smoke_settings_landing.py` — 27/27 checks: admin sees
+every card plus the scheduled-jobs table, manager sees only catalog/equipment
+(no admin-only cards, no jobs table), salesperson/technician both 403 from
+the landing page, the "All Settings" nav link is role-gated correctly, and
+all six help panels render with a check on their actual substantive content
+(not just "a `<details>` tag exists somewhere") — including real invoice and
+estimate fixtures created for those two detail-page checks (getagrip has
+zero real invoice/estimate rows in production, so this test creates,
+verifies, and hard-deletes its own), plus the extraction-queue check run
+against `kleanit_charlotte` since getagrip has that page gated off entirely
+(D-071). Full 25-file regression suite re-run clean.
+
+**Deferred:** nothing from this increment's own scope.
+
+---
+
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:
 #33 (OPS/VendorCafe export templates), #50 (SMS alerts via Twilio), and Stage 5.6
 (ServiceFusion price-list exports, company legal names/remit-to/reply-to/alert emails).

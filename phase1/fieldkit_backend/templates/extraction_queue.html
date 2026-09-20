@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import help_panel %}
 {% block title %}Extraction Queue — {{ branding.name }}{% endblock %}
 
 {% block extra_css %}
@@ -29,6 +30,19 @@
 {% endblock %}
 
 {% block content %}
+{% call help_panel('How extraction works here') %}
+<p><strong>One work order, one lifecycle</strong> — an extraction job is never cloned into a
+   new WO each day. The same WO stays "Extraction Active" from day one through pickup; the
+   daily log and per-day equipment billing all accrue onto that single WO.</p>
+<p><strong>Retrieved</strong> marks every still-deployed equipment line as picked up on
+   today's date and recomputes that line's billed days accordingly — it's the only place
+   per-day equipment billing gets finalized, so it can't be re-triggered after the fact.</p>
+<p><strong>Escalated</strong> (the highlighted row) just means the job has been active longer
+   than the configured warning threshold — it doesn't block anything, it's a flag to go
+   check on it.</p>
+<p>Get a Grip doesn't do this kind of work (bathtub/surface resurfacing) — this page and its
+   nav link are gated off entirely for that company.</p>
+{% endcall %}
 <div class="page-header">
     <h1>Extraction Queue — {{ branding.name }}</h1>
     <a class="btn btn-outline" href="/{{ company_key }}/extraction/pickup-list.pdf">Generate Pickup List for Tomorrow</a>

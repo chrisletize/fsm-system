@@ -436,6 +436,22 @@
         .audit-old { color: #a32d2d; text-decoration: line-through; opacity: 0.75; }
         .audit-new { color: #2e7d32; font-weight: 500; }
         .audit-empty { color: #aaa; font-size: 0.85rem; padding: 0.4rem 0; }
+
+        /* In-app help panel (directive §5.5) -- collapsible, static per-page text. */
+        .help-panel {
+            margin-bottom: 1.25rem; border: 1px solid #e6ddb8; border-radius: 6px;
+            background: #fffdf5;
+        }
+        .help-panel summary {
+            cursor: pointer; font-size: 0.85rem; font-weight: 600; color: #6d5300;
+            padding: 0.7rem 1rem; user-select: none; list-style: none;
+        }
+        .help-panel summary::-webkit-details-marker { display: none; }
+        .help-panel-body {
+            padding: 0 1.1rem 1rem; font-size: 0.85rem; color: #555; line-height: 1.6;
+        }
+        .help-panel-body p { margin: 0.5rem 0; }
+        .help-panel-body strong { color: #333; }
     </style>
     {% block extra_css %}{% endblock %}
 </head>
@@ -574,7 +590,14 @@
                     Settings ▾
                 </button>
                 <div class="subnav-dropdown-menu">
-                    {% if session.user_role in ('admin', 'manager', 'office') %}
+                    {% if session.user_role in ('admin', 'manager') %}
+                    <a href="/{{ company_key }}/settings"
+                       class="{% if current_path == '/' + company_key + '/settings' %}active{% endif %}">
+                        All Settings
+                    </a>
+                    <div class="subnav-divider"></div>
+                    {% endif %}
+                    {% if session.user_role == 'admin' %}
                     <a href="/{{ company_key }}/settings/fields"
                        class="{% if '/settings/fields' in current_path %}active{% endif %}">
                         Custom Fields

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import help_panel %}
 {% block title %}{{ est.estimate_number }} — {{ branding.name }}{% endblock %}
 
 {% block extra_css %}
@@ -31,6 +32,17 @@
 {% endblock %}
 
 {% block content %}
+{% call help_panel('How estimates work here') %}
+<p><strong>Draft → Sent → Approved/Declined → Converted.</strong> Only a Draft estimate can
+   be edited — once Sent, the customer has a PDF copy with a frozen tax rate/total, so the
+   line items lock the same way an invoice does once Hardened.</p>
+<p><strong>Approve/Decline</strong> only apply to a Sent estimate. Declining requires a
+   reason, kept for the record.</p>
+<p><strong>Convert</strong> only appears once Approved — it opens a new work order pre-filled
+   from the estimate's lines, site, and contact. The estimate itself flips to Converted the
+   moment that work order is actually saved (not when you click Convert) and links to it —
+   so an abandoned WO form never leaves an estimate in a half-converted state.</p>
+{% endcall %}
 <div class="page-header">
     <h1>{{ est.estimate_number }} <span class="badge badge-{{ est.status|lower }}">{{ est.status }}</span>
         {% if est.adjusted_letter_grade %}

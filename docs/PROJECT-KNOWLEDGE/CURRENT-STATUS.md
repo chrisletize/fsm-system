@@ -43,6 +43,7 @@ reporting until FieldKit's billing is complete.
 | Customer merge + duplicate detection | Built (5.2, migration 026): non-blocking duplicate-customer banner on the customer form; admin-only `/customers/<id>/merge` with AJAX side-by-side preview and a one-transaction merge across every referencing table; merged customer URLs redirect to the target. |
 | Audit trail | Built (5.3, migration 027): `record_audit` written from customers/contacts/service locations/work orders/invoices/payments/estimates/catalog/tax rates/users via one shared `_record_audit()` helper; read-only History panel on customer/WO/invoice/payment detail; admin-only global view at `/settings/audit`. |
 | Permissions sweep + My Day | Built (5.4, no migration): full route audit against the Appendix A matrix, gaps closed (see D-091); technician customer access read-only and scoped to own-job customers (`_technician_customer_ids()`); `/<company>/myday` — date-scoped list of a technician's own assigned WOs with On The Way / Start / Complete status buttons. |
+| Settings landing + in-app help | Built (5.5, no migration): `/<company>/settings` (admin/manager) with a card per reachable settings page plus the Scheduled Jobs panel inline; collapsible `help_panel()` macro on invoice detail (Revise vs. Reissue), billing, estimate detail, the WO form, extraction queue, and My Day. See D-092. |
 | Payment methods | Not built |
 
 This table matches `FIELDKIT_BUILD_DIRECTIVE_2026-09.md` §0.2 — confirmed by grepping
@@ -165,8 +166,24 @@ date-scoped list of the tech's own assigned WOs with On The Way / Start /
 Complete buttons writing the two status values (`'On The Way'`,
 `'In Progress'`) the schema had already reserved for this surface but
 nothing could reach until now. See D-091. 42/42 smoke checks
-(`tests/smoke_permissions.py`), full 24-file regression suite green. Next:
-5.5 (settings landing + in-app help).
+(`tests/smoke_permissions.py`), full 24-file regression suite green.
+Increment 5.5 (settings landing + in-app help) complete — `/<company>/settings`
+(admin/manager) with a card per reachable settings page plus the Scheduled
+Jobs panel rendered inline; a collapsible `help_panel()` macro added to six
+pages with a genuine reconciliation rule to explain (invoice Revise-vs-Reissue
+is the directive's own worked example; also billing, estimates, the WO form,
+extraction, and My Day). See D-092. 27/27 smoke checks
+(`tests/smoke_settings_landing.py`), full 25-file regression suite green.
+
+**Stage 4 is functionally complete** (Increments 5.1–5.5 all done, smoke-tested,
+full regression suite green throughout). Increment 5.6 ("Seeding tasks that need
+Chris") is the one remaining item in Stage 4 — it's not a code increment: it's
+CSV import scripts (`import_catalog.py`, `import_equipment.py`) waiting on
+Chris to supply real ServiceFusion price-list exports, plus company settings
+fields (legal names, remit-to text, reply-to/alert emails) and non-admin user
+password resets that need Chris's input before they can be entered, not built.
+Next: Stage 5 (cutover readiness) once Chris has reviewed Stage 4's work and
+supplied the Stage 5.6 inputs, or continue further at Chris's direction.
 
 Decisions Chris has already made for this build (delinquent threshold = 90 days past
 invoice date, FL tax left empty/exempt for Kleanit SF, SF-import receivables excluded

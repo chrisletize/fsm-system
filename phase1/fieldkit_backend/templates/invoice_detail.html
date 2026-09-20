@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import audit_history_panel %}
+{% from "_macros.html" import audit_history_panel, help_panel %}
 {% block title %}{{ inv.invoice_number }} — {{ branding.name }}{% endblock %}
 
 {% block extra_css %}
@@ -49,6 +49,25 @@
 {% endblock %}
 
 {% block content %}
+{% call help_panel('How invoices work here') %}
+<p><strong>Draft states are Live → Hardened → Sent.</strong> While Live, line items are
+   freely editable. <strong>Hardening freezes the tax rate and total</strong> — once
+   Hardened, you can't edit line items or the tax county anymore, because the tax engine
+   has already resolved and frozen the rate that applied on that invoice's effective date.</p>
+<p><strong>Why you can't edit a Sent invoice:</strong> the customer already has a copy of
+   whatever was Hardened/Sent — silently changing it after the fact would make the office's
+   copy disagree with what the customer received. If a Sent invoice needs to change, use
+   <strong>Revise</strong> (creates a new Live version, the old one becomes Superseded — a
+   correction on the SAME receivable, same invoice number, before anything's been paid).</p>
+<p><strong>Revise vs. Reissue:</strong> Revise corrects an invoice that hasn't been voided —
+   the receivable stays open, a new version supersedes the old one. <strong>Reissue</strong>
+   only applies to a <strong>Void</strong>ed invoice — it mints a brand-new invoice number
+   (a new receivable) with the void's line items copied over as an editable starting point,
+   while the voided original is kept untouched as a permanent record of what was voided and why.</p>
+<p><strong>Voiding</strong> requires zero payments applied — un-apply any payment first. A
+   void is never deleted; it stays visible with its void reason, linked forward to whatever
+   reissued it.</p>
+{% endcall %}
 <div class="breadcrumb">
     <a href="/{{ company_key }}/invoices">Invoices</a> /
     <a href="/{{ company_key }}/customers/{{ inv.customer_id }}">{{ inv.customer_name }}</a> /

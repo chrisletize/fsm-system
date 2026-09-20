@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import help_panel %}
 {% block title %}Billing — {{ branding.name }}{% endblock %}
 
 {% block extra_css %}
@@ -56,6 +57,20 @@
 {% endblock %}
 
 {% block content %}
+{% call help_panel('How billing works here') %}
+<p><strong>Delinquent</strong> means a customer has an open invoice more than 90 days past
+   its invoice date (Chris's chosen threshold, not the industry-default 60) — it's the same
+   flag shown as a red badge on customer detail, the WO form, and the dispatch board, all
+   computed by the same nightly job so this page can never disagree with those badges.</p>
+<p><strong>No Contact</strong> flags a customer with zero contacts marked "accepts billing" —
+   they'll be silently skipped by batch statement runs and Record Payment has nowhere to
+   send a receipt until a billing contact is added.</p>
+<p><strong>Portal</strong> filters to customers whose active compliance-portal enrollment is
+   marked as their primary billing method (see the Compliance page) — these are invoiced
+   through the portal rather than emailed directly.</p>
+<p><strong>Record Payment</strong> only offers a customer's real open invoices with a
+   balance — it can't apply money to something already paid or voided.</p>
+{% endcall %}
 <div class="page-header">
     <h1>Billing</h1>
     <div>

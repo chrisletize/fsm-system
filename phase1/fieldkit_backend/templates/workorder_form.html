@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import restricted_combo_field, autocomplete_field %}
+{% from "_macros.html" import restricted_combo_field, autocomplete_field, help_panel %}
 {% block title %}{% if wo %}Edit{% else %}New{% endif %} Work Order — {{ branding.name }}{% endblock %}
 
 {% block extra_css %}
@@ -95,6 +95,22 @@
 {% endblock %}
 
 {% block content %}
+{% call help_panel('How this form works') %}
+<p><strong>Possible duplicate booking</strong> is a non-blocking warning — same customer,
+   same normalized work site, dated within the last 4 weeks or anytime in the future. It
+   never stops you from saving; it just surfaces a likely double-entry before it happens.</p>
+<p><strong>"This is a callback for…"</strong> only lists this customer's prior jobs. Picking
+   one pre-fills the site/location/catalog lines from that job (equipment lines excluded —
+   those reference already-deployed units, not something to silently redeploy here) and
+   defaults Responsible Tech to that job's lead tech. A reason is required once a source is
+   linked — it's what feeds the callback rate on the Callbacks report and the customer's
+   rating.</p>
+<p><strong>Status</strong> here only offers Scheduled/Completed/No Charge/Cancelled — On The
+   Way and In Progress are set from My Day by the tech actually working the job, not typed in
+   here.</p>
+<p><strong>Duration</strong> is estimated live from the catalog as you add lines; overriding
+   it by hand is allowed but flagged so the office knows it's not the catalog's own number.</p>
+{% endcall %}
 <div class="page-header">
     <h1>
         {% if wo %}Edit Work Order<span class="wo-number">{{ wo.work_order_number }}</span>

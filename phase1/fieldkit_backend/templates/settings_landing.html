@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Settings — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header h1 { font-size:1.75rem; color:{{ branding.color_primary }}; margin-bottom:1.25rem; }
+    .settings-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:1rem; margin-bottom:2rem; }
+    .settings-card { background:white; border:1px solid #eee; border-radius:8px; padding:1.25rem; text-decoration:none; color:inherit; display:block; }
+    .settings-card:hover { border-color:{{ branding.color_primary }}; }
+    .settings-card h3 { font-size:1rem; color:{{ branding.color_primary }}; margin-bottom:.4rem; }
+    .settings-card p { font-size:.82rem; color:#888; }
+    .jobs-table { width:100%; border-collapse:collapse; font-size:.85rem; }
+    .jobs-table th { text-align:left; padding:.5rem; border-bottom:2px solid #eee; color:#888; font-size:.75rem; text-transform:uppercase; }
+    .jobs-table td { padding:.5rem; border-bottom:1px solid #f5f5f5; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header"><h1>Settings — {{ branding.name }}</h1></div>
+
+<div class="settings-grid">
+    {% if session.user_role == 'admin' %}
+    <a class="settings-card" href="/{{ company_key }}/settings/fields"><h3>Custom Fields</h3><p>Extra fields on customers and locations.</p></a>
+    {% endif %}
+    <a class="settings-card" href="/{{ company_key }}/settings/catalog"><h3>Service Catalog</h3><p>Billable line items, pricing, taxability.</p></a>
+    <a class="settings-card" href="/{{ company_key }}/settings/equipment"><h3>Equipment Registry</h3><p>Per-day billable equipment units.</p></a>
+    {% if session.user_role == 'admin' %}
+    <a class="settings-card" href="/{{ company_key }}/settings/tax"><h3>Tax Rates</h3><p>Effective-dated county rates.</p></a>
+    <a class="settings-card" href="/{{ company_key }}/settings/company"><h3>Company Settings</h3><p>Legal name, remit-to, email templates, alerts.</p></a>
+    <a class="settings-card" href="/{{ company_key }}/settings/users"><h3>User Management</h3><p>Accounts, roles, company access.</p></a>
+    <a class="settings-card" href="/{{ company_key }}/settings/audit"><h3>Audit Log</h3><p>Every create/update/delete, company-wide.</p></a>
+    {% endif %}
+</div>
+
+{% if session.user_role == 'admin' %}
+<div class="card">
+    <h3 style="margin-bottom:.75rem;">Scheduled Jobs</h3>
+    <p style="font-size:.85rem; color:#888; margin-bottom:1rem;">
+        Host cron runs these on a schedule. Toggle the master email switch from
+        <a href="/{{ company_key }}/settings/company">Company Settings</a>.
+    </p>
+    <table class="jobs-table">
+        <thead>
+            <tr><th>Job</th><th>Last Run</th><th>Status</th><th>Summary</th></tr>
+        </thead>
+        <tbody>
+            {% for j in job_runs %}
+            <tr>
+                <td>{{ j.job_name }}</td>
+                <td>{{ j.finished_at or j.started_at or 'never run' }}</td>
+                <td>{{ j.status }}</td>
+                <td style="color:#666;">{{ j.summary or '—' }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" style="padding:1rem; text-align:center; color:#aaa;">No jobs have run yet.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endblock %}

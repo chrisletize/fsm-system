@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import help_panel %}
 {% block title %}My Day — {{ branding.name }}{% endblock %}
 
 {% block extra_css %}
@@ -42,6 +43,15 @@
 {% endblock %}
 
 {% block content %}
+{% call help_panel('How the buttons work') %}
+<p>Tap a button when it actually happens, not ahead of time — <strong>On The Way</strong>
+   when you leave for the job, <strong>Start</strong> when you're working it, and
+   <strong>Complete</strong> when you're done. These update the same status the office sees
+   on the dispatch board and work order in real time.</p>
+<p>Once a job is Complete you can't move it backward from here — if that was a mistake, ask
+   the office to fix it.</p>
+<p>You'll only ever see jobs assigned to you.</p>
+{% endcall %}
 <div class="page-header"><h1>My Day</h1></div>
 
 <form method="GET" class="controls">

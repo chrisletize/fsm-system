@@ -2010,6 +2010,35 @@ def _save_company_settings(company_key):
     conn.commit(); cur.close(); conn.close()
     return None
 
+@app.route('/<company_key>/settings')
+@login_required
+@company_access_required
+@with_branding
+def settings_landing(company_key, branding, all_companies, company_access):
+    """Directive §5.5: cards for every settings page plus the scheduled-jobs
+    panel inline (not just a link to it — Company Settings is where the panel
+    lives, but the whole point of a landing page is not making an admin click
+    through to see whether cron is still alive)."""
+    if session.get('user_role') not in ('admin', 'manager'):
+        abort(403)
+    job_runs = []
+    if session.get('user_role') == 'admin':
+        conn = get_db_connection(company_key)
+        cur  = conn.cursor()
+        cur.execute("""
+            SELECT DISTINCT ON (job_name) job_name, started_at, finished_at, status, summary
+            FROM job_runs WHERE company_key = %s
+            ORDER BY job_name, started_at DESC
+        """, (company_key,))
+        job_runs = cur.fetchall()
+        cur.close(); conn.close()
+    return render_template('settings_landing.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        job_runs=job_runs,
+    )
+
+
 @app.route('/<company_key>/settings/company', methods=['GET', 'POST'])
 @login_required
 @company_access_required

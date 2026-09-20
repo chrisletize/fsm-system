@@ -1330,3 +1330,25 @@ idempotent. Pre-migration backups in `~/db-backups/2026-09-20g/`.
 24-file regression suite re-run clean.
 
 **Deferred:** nothing from this increment's own scope.
+
+## Increment 5.5 — Settings landing + in-app help
+
+- `/<company>/settings` (admin/manager): a card per settings page the role
+  can reach, plus the Scheduled Jobs panel rendered inline (not just linked)
+  — the directive's own "cards for every settings page **plus** the
+  scheduled-jobs panel" phrasing treats it as a distinct thing from a card.
+- `help_panel(title)` macro (`_macros.html`), a native `<details>`
+  disclosure, added to six pages: `invoice_detail.html` (Revise vs. Reissue,
+  the directive's own worked example), `billing.html`, `estimate_detail.html`,
+  `workorder_form.html`, `extraction_queue.html`, `myday.html`. See D-092 for
+  why these six and not "every page," and why `tax_rates_list.html`'s
+  existing always-visible note was left alone rather than duplicated.
+- Nav: "All Settings" link added to the Settings dropdown (admin/manager);
+  the Custom Fields nav entry's own gate fixed to match Increment 5.4's
+  admin-only route change (it had drifted out of sync).
+- No migration.
+
+**Smoke test:** `tests/smoke_settings_landing.py` — 27/27 checks (see D-092).
+Full 25-file regression suite re-run clean.
+
+**Deferred:** nothing from this increment's own scope.
