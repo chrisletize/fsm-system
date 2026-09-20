@@ -115,6 +115,7 @@
 <input type="hidden" name="duration_overridden" id="durationOverriddenHidden" value="{{ 'true' if wo and wo.duration_overridden else 'false' }}">
 <input type="hidden" name="extraction_action" id="extractionActionHidden" value="">
 <input type="hidden" name="parent_work_order_id" value="{{ wo.parent_work_order_id if wo and wo.parent_work_order_id else (prefill_parent_id or '') }}">
+<input type="hidden" name="estimate_id" value="{{ prefill_estimate_id or '' }}">
 
 <!-- ============================ Customer & Location ============================ -->
 <div class="card">

@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% block title %}{{ est.estimate_number }} — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem; flex-wrap:wrap; gap:.75rem; }
+    .page-header h1 { font-size:1.6rem; color:{{ branding.color_primary }}; display:flex; align-items:center; gap:.75rem; }
+    .badge { display:inline-block; padding:.25rem .7rem; border-radius:10px; font-size:.82rem; font-weight:600; }
+    .badge-draft { background:#f1efe8; color:#5f5e5a; }
+    .badge-sent { background:#e6f1fb; color:#185fa5; }
+    .badge-approved { background:#eaf3de; color:#3b6d11; }
+    .badge-declined { background:#fcebeb; color:#a32d2d; }
+    .badge-converted { background:#eeedfe; color:#534ab7; }
+    .btn { display:inline-block; padding:.6rem 1.2rem; border-radius:4px; text-decoration:none; font-weight:500; border:none; font-size:.92rem; cursor:pointer; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-secondary { background:#6c757d; color:white; }
+    .btn-outline { background:white; color:{{ branding.color_primary }}; border:1px solid {{ branding.color_primary }}; }
+    .field-grid { display:grid; grid-template-columns:1fr 1fr; gap:.9rem 1.4rem; }
+    .field .lbl { font-size:.75rem; color:#999; text-transform:uppercase; margin-bottom:.2rem; }
+    .field .val { font-size:.93rem; color:#333; }
+    table { width:100%; border-collapse:collapse; margin-top:1rem; }
+    th { text-align:left; padding:.5rem; font-size:.75rem; text-transform:uppercase; color:#999; border-bottom:2px solid #eee; }
+    td { padding:.5rem; border-bottom:1px solid #f2f2f2; }
+    .num { text-align:right; }
+    .summary-row td { font-weight:600; border-top:2px solid #ddd; border-bottom:none; }
+    .history-item { padding:.55rem 0; border-bottom:1px solid #f4f4f4; font-size:.87rem; }
+    .card + .card { margin-top:1.25rem; }
+    #sendModal .modal-box { max-width:500px; }
+    #declineModal .modal-box { max-width:420px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>{{ est.estimate_number }} <span class="badge badge-{{ est.status|lower }}">{{ est.status }}</span></h1>
+    <div style="display:flex; gap:.6rem;">
+        <a href="/{{ company_key }}/estimates" class="btn btn-secondary">← Estimates</a>
+        {% if est.status == 'Draft' %}
+        <a href="/{{ company_key }}/estimates/{{ est.id }}/edit" class="btn btn-primary">Edit</a>
+        <button type="button" class="btn btn-outline" onclick="openModal('sendModal')">Send</button>
+        {% endif %}
+        {% if est.status == 'Sent' %}
+        <form method="POST" action="/{{ company_key }}/estimates/{{ est.id }}/approve" style="display:inline;">
+            <button type="submit" class="btn btn-primary">Approve</button>
+        </form>
+        <button type="button" class="btn btn-outline" onclick="openModal('declineModal')">Decline</button>
+        {% endif %}
+        {% if est.status == 'Approved' %}
+        <a href="/{{ company_key }}/estimates/{{ est.id }}/convert" class="btn btn-primary">Convert to Work Order</a>
+        {% endif %}
+        {% if est.status == 'Converted' and est.converted_to_job_id %}
+        <a href="/{{ company_key }}/workorders/{{ est.converted_to_job_id }}" class="btn btn-outline">View Work Order</a>
+        {% endif %}
+        <a href="/{{ company_key }}/estimates/{{ est.id }}/pdf" class="btn btn-outline" target="_blank">PDF</a>
+    </div>
+</div>
+
+{% if est.status == 'Declined' and est.declined_reason %}
+<div class="card" style="background:#fdecea; border:1px solid #f3b8b3; color:#a32d2d; margin-bottom:1.25rem;">
+    Declined: {{ est.declined_reason }}
+</div>
+{% endif %}
+
+<div class="detail-grid" style="display:grid; grid-template-columns:2fr 1fr; gap:1.25rem; align-items:start;">
+<div>
+    <div class="card">
+        <h2 style="font-size:1rem;color:#444;margin-bottom:.9rem;">Customer &amp; Location</h2>
+        <div class="field-grid">
+            <div class="field"><div class="lbl">Customer</div>
+                <div class="val"><a href="/{{ company_key }}/customers/{{ est.customer_id }}" style="color:{{ branding.color_primary }};">{{ est.customer_name }}</a> ({{ est.customer_type }})</div>
+            </div>
+            <div class="field"><div class="lbl">Work Site</div><div class="val">{{ est.work_site_label or '—' }}</div></div>
+            <div class="field"><div class="lbl">Location</div>
+                <div class="val">{{ [est.location_name, est.location_address, est.location_city, est.location_state] | select | join(', ') or '—' }}</div>
+            </div>
+            <div class="field"><div class="lbl">Contact</div>
+                <div class="val">{% if est.contact_first %}{{ est.contact_first }} {{ est.contact_last }} ({{ est.contact_email or 'no email' }}){% else %}—{% endif %}</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2 style="font-size:1rem;color:#444;margin-bottom:.9rem;">Line Items</h2>
+        <table>
+            <thead><tr><th>Description</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Total</th></tr></thead>
+            <tbody>
+                {% for li in line_items %}
+                <tr>
+                    <td>{{ li.description or li.catalog_name }}</td>
+                    <td class="num">{{ '%.2f'|format(li.quantity) }}</td>
+                    <td class="num">${{ '%.2f'|format(li.unit_price) }}</td>
+                    <td class="num">${{ '%.2f'|format(li.total) }}</td>
+                </tr>
+                {% endfor %}
+                <tr class="summary-row"><td colspan="3">Subtotal</td><td class="num">${{ '%.2f'|format(est.subtotal) }}</td></tr>
+                {% if est.tax_total is not none %}
+                <tr class="summary-row"><td colspan="3">Tax ({{ est.tax_rate_pct or 0 }}%)</td><td class="num">${{ '%.2f'|format(est.tax_total) }}</td></tr>
+                <tr class="summary-row"><td colspan="3">Total</td><td class="num">${{ '%.2f'|format(est.total) }}</td></tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+
+    {% if est.notes_to_customer %}
+    <div class="card"><h2 style="font-size:1rem;color:#444;margin-bottom:.9rem;">Notes to Customer</h2><p>{{ est.notes_to_customer }}</p></div>
+    {% endif %}
+</div>
+
+<div>
+    <div class="card">
+        <h2 style="font-size:1rem;color:#444;margin-bottom:.9rem;">History</h2>
+        {% for h in history %}
+        <div class="history-item">
+            <strong>{{ h.status }}</strong> — {{ h.changed_by }}<br>
+            <span style="color:#999;">{{ h.changed_at_display }}</span>
+            {% if h.notes %}<div>{{ h.notes }}</div>{% endif %}
+        </div>
+        {% else %}
+        <div style="color:#aaa; font-size:.88rem;">No history yet.</div>
+        {% endfor %}
+    </div>
+</div>
+</div>
+
+<div class="modal-overlay" id="sendModal">
+    <div class="modal-box">
+        <h3>Send Estimate</h3>
+        <form method="POST" action="/{{ company_key }}/estimates/{{ est.id }}/send">
+            <div class="form-group" style="margin-bottom:.8rem;">
+                <label style="font-size:.85rem; font-weight:600;">To (contact on file: {{ est.contact_email or 'none' }})</label>
+            </div>
+            <div class="form-group" style="margin-bottom:.8rem;">
+                <label style="font-size:.85rem; font-weight:600;">Extra emails (comma or newline separated)</label>
+                <textarea name="extra_emails" rows="2" style="width:100%; padding:.5rem;"></textarea>
+            </div>
+            <div class="form-group" style="margin-bottom:.8rem;">
+                <label style="font-size:.85rem; font-weight:600;">Subject</label>
+                <input type="text" name="subject" style="width:100%; padding:.5rem;" value="Estimate from {{ branding.name }}">
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Send</button>
+                <button type="button" class="btn btn-secondary" onclick="closeModal('sendModal')">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal-overlay" id="declineModal">
+    <div class="modal-box">
+        <h3>Decline Estimate</h3>
+        <form method="POST" action="/{{ company_key }}/estimates/{{ est.id }}/decline">
+            <div class="form-group" style="margin-bottom:.8rem;">
+                <label style="font-size:.85rem; font-weight:600;">Reason (required)</label>
+                <textarea name="declined_reason" rows="3" style="width:100%; padding:.5rem;" required></textarea>
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Decline</button>
+                <button type="button" class="btn btn-secondary" onclick="closeModal('declineModal')">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

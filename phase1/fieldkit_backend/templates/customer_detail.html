@@ -433,6 +433,43 @@
     {% endif %}
 </div>
 
+<!-- Estimates -->
+{% if session.user_role in ('admin', 'manager', 'salesperson') %}
+<div class="card" style="margin-bottom:1.25rem;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+        <div class="section-title" style="margin-bottom:0;">
+            Estimates
+            {% if customer_estimates %}<span style="font-weight:400; text-transform:none; letter-spacing:0; color:#aaa; margin-left:0.4rem;">({{ customer_estimates|length }})</span>{% endif %}
+        </div>
+        <a href="/{{ company_key }}/estimates/new?customer_id={{ customer.id }}" class="btn btn-outline btn-sm">New Estimate</a>
+    </div>
+    {% if customer_estimates %}
+    <table style="width:100%; border-collapse:collapse; font-size:.88rem;">
+        <thead>
+            <tr>
+                <th style="text-align:left; padding:.4rem .5rem; border-bottom:1px solid #eee; color:#888; font-size:.74rem; text-transform:uppercase;">Number</th>
+                <th style="text-align:left; padding:.4rem .5rem; border-bottom:1px solid #eee; color:#888; font-size:.74rem; text-transform:uppercase;">Status</th>
+                <th style="text-align:right; padding:.4rem .5rem; border-bottom:1px solid #eee; color:#888; font-size:.74rem; text-transform:uppercase;">Total</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for e in customer_estimates %}
+            <tr>
+                <td style="padding:.5rem; border-bottom:1px solid #f5f5f5;">
+                    <a href="/{{ company_key }}/estimates/{{ e.id }}" style="color:{{ branding.color_primary }};">{{ e.estimate_number }}</a>
+                </td>
+                <td style="padding:.5rem; border-bottom:1px solid #f5f5f5;">{{ e.status }}</td>
+                <td style="padding:.5rem; border-bottom:1px solid #f5f5f5; text-align:right;">${{ '%.2f'|format(e.total if e.total is not none else e.subtotal) }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="no-locations">No estimates on file.</div>
+    {% endif %}
+</div>
+{% endif %}
+
 <!-- Invoices -->
 <div class="card" style="margin-bottom:1.25rem;">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">

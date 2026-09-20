@@ -705,6 +705,52 @@ absence for getagrip; unaffected for the other three; Ozone items deactivated).
 kleanit_charlotte, since the feature it tests no longer exists for the company it
 was originally written against.
 
+D-072 — [MODEL] Estimates deliberately do NOT reuse the invoice engine's receivable/
+version split (migration 010). One row per estimate, editable while Draft, frozen
+(tax_rate_pct/tax_total/total) the moment it's Sent — no version history. An estimate
+that needs a real revision after sending has no payment history riding on it (unlike
+an invoice), so "decline it, create a new one" is an acceptable answer and a second
+freeze-discipline table wasn't justified. Editing a Sent/Approved/Declined/Converted
+estimate is rejected outright (`_save_estimate` checks status='Draft'), matching the
+freeze discipline's spirit even without a version table backing it.
+
+D-073 — [MODEL] Estimate tax is computed at send time anchored on TODAY's date
+(`_compute_estimate_tax` calls `_tax_rate_as_of(cur, county, date.today())`), not a
+frozen "estimate date" — an estimate has no receivable date of its own the way an
+invoice has `invoice_date`. This matches the directive's own wording ("total computed
+at send using the same tax path as invoices") for the one date that actually exists
+at that moment.
+
+D-074 — [SCOPE] `workorder_customer_context` (built in Stage 2 for the WO form) is now
+also used by the estimate form and gates in `salesperson` alongside the existing
+admin/manager/office — it's read-only location/contact data for a customer the
+directive already grants salespeople read access to, so extending one endpoint beat
+duplicating it for a second form that needs the exact same shape.
+
+D-075 — [MODEL] "Convert" is two steps, not one: `GET .../convert` (Approved-only
+guard) redirects into `/workorders/new?estimate_id=&customer_id=&...`, pre-filling a
+genuinely NEW work order's line items from the estimate's lines (fresh ids, so they
+save as new `work_order_line_items`, never edits to the estimate's own rows) — the
+estimate itself only flips to Converted once that WO is actually SAVED
+(`_save_work_order`, guarded `WHERE status='Approved'` so it can't double-convert or
+convert a non-Approved estimate). Clicking Convert is navigation, not a commitment;
+the office can back out of the WO form without side effects.
+
+D-076 — [SCOPE] The public estimate request form (`/request/<company_key>`) is a
+standalone HTML page that does NOT extend `base.html` — it has no session, no
+company switcher, no nav, and needs to render correctly for an anonymous visitor,
+so reusing the authenticated-app shell risked broken assumptions (`session.user_role`
+checks, `current_path` nav-highlighting, etc.) for no benefit. It borrows only
+`branding.color_primary`/`branding.name` for a consistent look.
+
+D-077 — [MODEL] The public form's per-IP rate limit (5/hour, directive's own number)
+is an in-memory dict keyed by `(company_key, ip)`, matching the directive's explicit
+"no external service" instruction — it resets on app restart and doesn't survive
+multiple app instances, which is an accepted limitation for a low-volume public form
+where the honeypot field (not the rate limit) is the actual bot deterrent. IP is read
+from `X-Forwarded-For` (first hop) falling back to `request.remote_addr`, since the
+app sits behind NPM/Cloudflare per the directive's own note.
+
 ---
 
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:

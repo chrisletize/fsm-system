@@ -34,7 +34,8 @@ reporting until FieldKit's billing is complete.
 | Day sheet / hours / job activity reports | Built (2.3, `/reports`, `/reports/daysheet`, `/reports/hours`, `/reports/jobs`): printable per-tech schedule, honest "scheduled not actual" hours, job list + CSV export. No migration needed — all columns already existed. |
 | Retired-tag replacements | Built (2.4 + 2.5, migrations 019/020): `is_internal_task` (customer-less WOs), derived "New Customer" badge, and (once `customer_flags` existed) the Delinquent Account badge on customer detail/WO form/dispatch board. Callback still deferred to §4.4. |
 | Scheduled jobs | Built (2.5, migration 020, `phase1/fieldkit_backend/jobs.py`): nightly customer_flags/extraction upkeep, uninvoiced alert, EOD digest, weekly sales report placeholder. Per-company master on/off switch (`company_settings.scheduled_alerts_enabled`, `/settings/company`) — **off for all four companies**; cron installed and live (computing/logging) but sends no real email until switched on. See `docs/DEPLOYMENT/cron-jobs.md`. |
-| Recency report, estimates, sales CRM, payment methods, dashboard stats | Not built |
+| Estimates | Built (3.1, migration 021, `/estimates`): Draft/Sent/Approved/Declined/Converted lifecycle, PDF + email send, convert-to-WO, public request form at `/request/<company>` (no login, honeypot + rate limit), requests queue. Permissions: admin/manager/salesperson. |
+| Recency report, customer ratings, sales CRM, payment methods, dashboard stats | Not built |
 
 This table matches `FIELDKIT_BUILD_DIRECTIVE_2026-09.md` §0.2 — confirmed by grepping
 the full route list out of `app.py` (3,248 lines) and querying row counts in all four
@@ -71,14 +72,19 @@ Scheduled Jobs panel); "a customer 61+ days overdue is red everywhere" — done 
 Chris's 90-day threshold instead of the directive's 60-day default (D-001), on
 customer detail, WO form, dispatch board, and billing page.
 
-Awaiting Chris's direction: Stage 3 (estimates, ratings, sales CRM, callbacks) or a
-pause for real-world testing with Michele.
-
 **Post-Stage-2 correction (2026-09-19):** water extraction was built for all four
 companies, but Get a Grip never actually does this work — Chris caught it after
 review. Gated off for getagrip specifically (`COMPANIES_WITHOUT_EXTRACTION` in
 `app.py`): `/extraction` 404s, nav link/WO-form UI hidden, two unused catalog items
 deactivated. Nothing removed for the other three companies. See D-071.
+
+**Stage 3 — Estimates, ratings, sales CRM, callbacks**: in progress, per-increment as
+with Stage 2. Increment 3.1 (estimates + public estimate request form, migration 021)
+complete — full Draft→Sent→Approved→Converted lifecycle, PDF/email send, decline
+with reason, convert-to-WO (a WO save flips the source estimate, not the navigation
+click), public no-login request form with honeypot + 5/hr per-IP rate limit, requests
+queue with "Create customer + estimate." Next: Increment 3.2 (customer rating
+system).
 
 Decisions Chris has already made for this build (delinquent threshold = 90 days past
 invoice date, FL tax left empty/exempt for Kleanit SF, SF-import receivables excluded

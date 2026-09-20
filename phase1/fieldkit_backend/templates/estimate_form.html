@@ -1,0 +1,250 @@
+{% extends "base.html" %}
+{% from "_macros.html" import restricted_combo_field %}
+{% block title %}{% if est %}Edit{% else %}New{% endif %} Estimate — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { margin-bottom:1.5rem; }
+    .page-header h1 { font-size:1.6rem; color:{{ branding.color_primary }}; }
+    .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:1.1rem 1.5rem; margin-bottom:1.5rem; }
+    .form-group { display:flex; flex-direction:column; gap:.35rem; }
+    .form-group.full { grid-column:1 / -1; }
+    .form-group label { font-size:.85rem; font-weight:600; color:#555; }
+    input[type=text], select, textarea {
+        padding:.6rem .75rem; border:1px solid #ddd; border-radius:4px; font-size:.92rem; font-family:inherit;
+    }
+    .li-row { border:1px solid #eee; border-radius:6px; padding:.8rem 1rem; margin-bottom:.7rem; }
+    .li-fields { display:grid; grid-template-columns:2fr .8fr 1fr 1fr auto; gap:.75rem; align-items:end; }
+    .li-lbl { font-size:.72rem; color:#999; text-transform:uppercase; display:block; margin-bottom:.25rem; }
+    .li-total { font-weight:600; }
+    .li-remove { background:none; border:none; color:#c0392b; cursor:pointer; font-size:1rem; }
+    .li-summary { text-align:right; margin-top:.75rem; font-size:1rem; }
+    .btn { display:inline-block; padding:.6rem 1.2rem; border-radius:4px; text-decoration:none;
+           font-weight:500; cursor:pointer; border:none; font-size:.9rem; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-secondary { background:#6c757d; color:white; }
+    .btn-add { background:none; border:1px dashed {{ branding.color_primary }}; color:{{ branding.color_primary }};
+               padding:.5rem 1rem; border-radius:4px; cursor:pointer; font-size:.88rem; }
+    .flash.error { background:#fee; color:#c33; border:1px solid #fcc; padding:.8rem 1rem; border-radius:4px; margin-bottom:1.25rem; }
+    .form-actions { margin-top:1.5rem; display:flex; gap:.75rem; align-items:center; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header"><h1>{% if est %}Edit {{ est.estimate_number }}{% else %}New Estimate{% endif %}</h1></div>
+
+{% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+
+<form method="POST" id="estForm" action="/{{ company_key }}/estimates{% if est %}/{{ est.id }}/edit{% else %}/new{% endif %}">
+<input type="hidden" name="line_items_json" id="lineItemsJson">
+
+<div class="card">
+    <div class="form-grid">
+        <div class="form-group">
+            <label>Customer <span style="color:#999;font-weight:400;">(required)</span></label>
+{{ restricted_combo_field('customer_id', customers,
+                   est.customer_id if est else (prefill_customer_id or none),
+                   (est.customer_name + ' (' + est.customer_type + ')') if est else '',
+                   'Type customer name…', True, 'customerCombo') }}
+        </div>
+        <div class="form-group">
+            <label>Service Location</label>
+            <select name="service_location_id" id="locationSelect" disabled>
+                <option value="">— pick a customer first —</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Contact</label>
+            <select name="primary_contact_id" id="contactSelect" disabled>
+                <option value="">— pick a customer first —</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label id="siteLabel">Work Site</label>
+            <input type="text" name="work_site_label" id="siteInput" value="{{ est.work_site_label or '' if est else '' }}">
+        </div>
+        <div class="form-group full">
+            <label>Notes to Customer</label>
+            <textarea name="notes_to_customer" rows="2">{{ est.notes_to_customer or '' if est else '' }}</textarea>
+        </div>
+        <div class="form-group full">
+            <label>Internal Notes</label>
+            <textarea name="internal_notes" rows="2">{{ est.internal_notes or '' if est else '' }}</textarea>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <h2 style="font-size:1rem;color:#444;margin-bottom:.9rem;">Line Items</h2>
+    <div id="liRows"></div>
+    <button type="button" class="btn-add" onclick="addRow()">+ Add Service</button>
+    <div class="li-summary">Subtotal: <span id="liSubtotal">$0.00</span></div>
+</div>
+
+<div class="form-actions">
+    <button type="submit" class="btn btn-primary">Save</button>
+    <a href="{% if est %}/{{ company_key }}/estimates/{{ est.id }}{% else %}/{{ company_key }}/estimates{% endif %}" class="btn btn-secondary">Cancel</a>
+</div>
+</form>
+
+<script>
+    const companyKey = "{{ company_key }}";
+    const CATALOG = {{ catalog_std|tojson }};
+    const INIT_LINES = {{ line_items|tojson }};
+    const INIT_LOCATION = {{ est.service_location_id if est and est.service_location_id else 'null' }};
+    const INIT_CONTACT  = {{ est.primary_contact_id if est and est.primary_contact_id else 'null' }};
+
+    function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+    function money(n) { return '$' + Number(n || 0).toFixed(2); }
+    function catById(id) { return CATALOG.find(c => String(c.id) === String(id)); }
+
+    const liRows = document.getElementById('liRows');
+    let rowSeq = 0;
+
+    function comboHtml(cls, options, selectedId, selectedLabel) {
+        return `<div class="ac-wrap">
+            <input type="text" class="js-combo-restricted ${cls}" value="${esc(selectedLabel || '')}"
+                   placeholder="Type to search the catalog…" autocomplete="off"
+                   data-options='${JSON.stringify(options).replace(/'/g, "&#39;")}' data-required="true">
+            <input type="hidden" class="${cls}-hidden" value="${selectedId != null ? selectedId : ''}">
+            <div class="ac-panel" role="listbox"></div>
+        </div>`;
+    }
+
+    function addRow(init) {
+        init = init || {};
+        const cat = init.catalog_item_id ? catById(init.catalog_item_id) : null;
+        const label = cat ? (cat.category ? cat.name + ' (' + cat.category + ')' : cat.name) : '';
+        const row = document.createElement('div');
+        row.className = 'li-row';
+        row.dataset.rowId = ++rowSeq;
+        row.dataset.lineId = init.id || '';
+        row.innerHTML = `
+            <div class="li-fields">
+                <div><span class="li-lbl">Catalog Item</span>
+                    ${comboHtml('li-cat', CATALOG.map(c => ({id: c.id, name: c.name, category: c.category})), init.catalog_item_id, label)}
+                </div>
+                <div><span class="li-lbl">Qty</span>
+                    <input type="number" class="li-qty" min="0" step="0.25" value="${init.quantity != null ? init.quantity : 1}">
+                </div>
+                <div><span class="li-lbl">Unit Price</span>
+                    <input type="number" class="li-price" min="0" step="0.01" value="${init.unit_price != null ? init.unit_price : (cat ? cat.unit_price : '')}">
+                </div>
+                <div><span class="li-lbl">Total</span><div class="li-total">$0.00</div></div>
+                <button type="button" class="li-remove" onclick="removeRow(this)">✕</button>
+            </div>
+            <div style="margin-top:.6rem;">
+                <span class="li-lbl">Description</span>
+                <input type="text" class="li-desc" value="${esc(init.description || (cat ? cat.default_description : '') || '')}">
+            </div>`;
+        liRows.appendChild(row);
+        initRestrictedComboFields();
+        recalc();
+        return row;
+    }
+
+    function removeRow(btn) { btn.closest('.li-row').remove(); recalc(); }
+
+    function recalc() {
+        let sub = 0;
+        liRows.querySelectorAll('.li-row').forEach(row => {
+            const qty = parseFloat(row.querySelector('.li-qty').value) || 0;
+            const price = parseFloat(row.querySelector('.li-price').value) || 0;
+            const total = qty * price;
+            sub += total;
+            row.querySelector('.li-total').textContent = money(total);
+        });
+        document.getElementById('liSubtotal').textContent = money(sub);
+    }
+
+    liRows.addEventListener('input', e => {
+        recalc();
+        if (e.target.classList.contains('li-cat')) {
+            // combo change handled below via change listener bubble
+        }
+    });
+    liRows.addEventListener('change', e => {
+        const wrap = e.target.closest('.ac-wrap');
+        if (wrap && e.target.type === 'hidden' && e.target.classList.contains('li-cat-hidden')) {
+            const row = e.target.closest('.li-row');
+            const cat = catById(e.target.value);
+            if (cat) {
+                row.querySelector('.li-price').value = cat.unit_price != null ? cat.unit_price : '';
+                const descInput = row.querySelector('.li-desc');
+                if (!descInput.value.trim()) descInput.value = cat.default_description || '';
+            }
+        }
+        recalc();
+    });
+
+    function serializeLines() {
+        const lines = []; let valid = true;
+        liRows.querySelectorAll('.li-row').forEach(row => {
+            const hidden = row.querySelector('.li-cat-hidden');
+            if (!hidden.value) { valid = false; row.style.borderColor = '#c33'; return; }
+            row.style.borderColor = '';
+            lines.push({
+                id: row.dataset.lineId || null, catalog_item_id: parseInt(hidden.value, 10),
+                description: row.querySelector('.li-desc').value,
+                quantity: row.querySelector('.li-qty').value,
+                unit_price: row.querySelector('.li-price').value,
+            });
+        });
+        return { lines, valid };
+    }
+
+    document.getElementById('estForm').addEventListener('submit', function(e) {
+        const { lines, valid } = serializeLines();
+        if (!valid) { e.preventDefault(); alert('One or more lines is missing a catalog selection.'); return; }
+        if (lines.length === 0) { e.preventDefault(); alert('An estimate needs at least one line item.'); return; }
+        document.getElementById('lineItemsJson').value = JSON.stringify(lines);
+    });
+
+    // ==================== Customer context (locations/contacts) ====================
+    const customerHidden = document.querySelector('#customerCombo').closest('.ac-wrap').querySelector('input[type=hidden]');
+    const locationSelect = document.getElementById('locationSelect');
+    const contactSelect  = document.getElementById('contactSelect');
+    const siteInput      = document.getElementById('siteInput');
+    const siteLabelEl    = document.getElementById('siteLabel');
+
+    function loadCustomerContext(customerId, preserve) {
+        if (!customerId) {
+            locationSelect.innerHTML = '<option value="">— pick a customer first —</option>';
+            contactSelect.innerHTML  = '<option value="">— pick a customer first —</option>';
+            locationSelect.disabled = contactSelect.disabled = true;
+            return;
+        }
+        fetch(`/${companyKey}/workorders/customer/${customerId}/context`)
+            .then(r => r.json())
+            .then(data => {
+                siteLabelEl.textContent = data.site_label;
+                locationSelect.innerHTML = '<option value="">—</option>' + data.locations.map(l => {
+                    const name = l.location_name ? l.location_name + ' — ' : '';
+                    const addr = [l.address, l.city].filter(Boolean).join(', ');
+                    return `<option value="${l.id}">${esc(name + addr)}</option>`;
+                }).join('');
+                contactSelect.innerHTML = '<option value="">—</option>' + data.contacts.map(ct => {
+                    const t = ct.title ? ' (' + ct.title + ')' : '';
+                    return `<option value="${ct.id}">${esc(ct.first_name + ' ' + ct.last_name + t)}</option>`;
+                }).join('');
+                locationSelect.disabled = contactSelect.disabled = false;
+                if (preserve) {
+                    if (INIT_LOCATION) locationSelect.value = String(INIT_LOCATION);
+                    if (INIT_CONTACT)  contactSelect.value  = String(INIT_CONTACT);
+                } else {
+                    const primary = data.locations.find(l => l.is_primary) || (data.locations.length === 1 ? data.locations[0] : null);
+                    if (primary) locationSelect.value = String(primary.id);
+                }
+            })
+            .catch(() => {});
+    }
+    customerHidden.addEventListener('change', () => loadCustomerContext(customerHidden.value, false));
+
+    document.addEventListener('DOMContentLoaded', () => {
+        initRestrictedComboFields();
+        INIT_LINES.forEach(li => addRow(li));
+        if (customerHidden.value) loadCustomerContext(customerHidden.value, true);
+        recalc();
+    });
+</script>
+{% endblock %}

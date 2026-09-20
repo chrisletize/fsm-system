@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Estimate Requests — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:1.25rem; }
+    .page-header h1 { font-size:1.75rem; color:{{ branding.color_primary }}; }
+    table { width:100%; border-collapse:collapse; font-size:.9rem; }
+    th { text-align:left; padding:.6rem .75rem; font-size:.75rem; text-transform:uppercase; color:#888; border-bottom:2px solid #eee; }
+    td { padding:.6rem .75rem; border-bottom:1px solid #f2f2f2; vertical-align:top; }
+    .badge { display:inline-block; padding:.2rem .6rem; border-radius:10px; font-size:.76rem; font-weight:500; }
+    .badge-new { background:#e6f1fb; color:#185fa5; }
+    .badge-contacted { background:#eaf3de; color:#3b6d11; }
+    .badge-converted { background:#eeedfe; color:#534ab7; }
+    .badge-spam { background:#f1efe8; color:#5f5e5a; }
+    .action-btns form { display:inline; }
+    .action-btns button, .action-btns a { font-size:.76rem; padding:.3rem .6rem; border-radius:4px; border:1px solid #ddd; background:#f7f7f7; cursor:pointer; margin-right:.25rem; text-decoration:none; color:#333; }
+    .btn-outline { display:inline-block; padding:.6rem 1.2rem; border-radius:4px; text-decoration:none; border:1px solid {{ branding.color_primary }}; color:{{ branding.color_primary }}; font-size:.9rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Estimate Requests</h1>
+    <a href="/{{ company_key }}/estimates" class="btn-outline">← Estimates</a>
+</div>
+
+<div class="card">
+    <table>
+        <thead><tr><th>Received</th><th>Name</th><th>Property</th><th>Contact</th><th>Services</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>
+            {% for r in requests %}
+            <tr>
+                <td>{{ r.created_at.strftime('%b %-d, %Y %-I:%M %p') if r.created_at else '—' }}</td>
+                <td>{{ r.name }}</td>
+                <td>{{ r.property_name or '—' }}{% if r.address %}<br><span style="color:#999;">{{ r.address }}, {{ r.city }} {{ r.state }}</span>{% endif %}</td>
+                <td>{{ r.email or '—' }}{% if r.phone %}<br>{{ r.phone }}{% endif %}</td>
+                <td>{{ r.services or '—' }}{% if r.description %}<br><span style="color:#999;">{{ r.description[:80] }}</span>{% endif %}</td>
+                <td><span class="badge badge-{{ r.status }}">{{ r.status }}</span></td>
+                <td class="action-btns">
+                    {% if r.status == 'new' %}
+                    <form method="POST" action="/{{ company_key }}/estimates/requests/{{ r.id }}/mark">
+                        <input type="hidden" name="status" value="contacted">
+                        <button type="submit">Mark Contacted</button>
+                    </form>
+                    <form method="POST" action="/{{ company_key }}/estimates/requests/{{ r.id }}/mark">
+                        <input type="hidden" name="status" value="spam">
+                        <button type="submit">Spam</button>
+                    </form>
+                    <form method="POST" action="/{{ company_key }}/estimates/requests/{{ r.id }}/create-customer">
+                        <button type="submit">Create Customer + Estimate</button>
+                    </form>
+                    {% elif r.status == 'converted' and r.linked_customer_id %}
+                    <a href="/{{ company_key }}/customers/{{ r.linked_customer_id }}">View Customer</a>
+                    {% endif %}
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="7" style="text-align:center; color:#aaa; padding:2rem;">No estimate requests yet.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

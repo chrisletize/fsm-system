@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Estimates — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:1.25rem; flex-wrap:wrap; gap:.75rem; }
+    .page-header h1 { font-size:1.75rem; color:{{ branding.color_primary }}; }
+    .toolbar { display:flex; gap:1rem; align-items:center; margin-bottom:1.25rem; flex-wrap:wrap; }
+    .toolbar input, .toolbar select { padding:.6rem 1rem; border:1px solid #ddd; border-radius:4px; font-size:.92rem; }
+    .btn { display:inline-block; padding:.7rem 1.4rem; border-radius:4px; text-decoration:none; font-weight:500; border:none; font-size:.95rem; cursor:pointer; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-outline { background:white; color:{{ branding.color_primary }}; border:1px solid {{ branding.color_primary }}; }
+    table { width:100%; border-collapse:collapse; }
+    th { text-align:left; padding:.75rem; font-size:.8rem; text-transform:uppercase; color:#888; border-bottom:2px solid #eee; }
+    td { padding:.75rem; border-bottom:1px solid #f2f2f2; font-size:.92rem; }
+    .badge { display:inline-block; padding:.2rem .7rem; border-radius:10px; font-size:.78rem; font-weight:500; }
+    .badge-draft { background:#f1efe8; color:#5f5e5a; }
+    .badge-sent { background:#e6f1fb; color:#185fa5; }
+    .badge-approved { background:#eaf3de; color:#3b6d11; }
+    .badge-declined { background:#fcebeb; color:#a32d2d; }
+    .badge-converted { background:#eeedfe; color:#534ab7; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Estimates</h1>
+    <div style="display:flex; gap:.6rem;">
+        <a href="/{{ company_key }}/estimates/requests" class="btn btn-outline">Estimate Requests</a>
+        <a href="/{{ company_key }}/estimates/new" class="btn btn-primary">+ New Estimate</a>
+    </div>
+</div>
+
+<form method="GET" class="toolbar">
+    <input type="text" name="search" value="{{ search }}" placeholder="Search estimate # or customer...">
+    <select name="status" onchange="this.form.submit()">
+        <option value="">All Statuses</option>
+        {% for s in statuses %}
+        <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+    </select>
+    <button type="submit" class="btn btn-outline">Filter</button>
+</form>
+
+<div class="card">
+    <table>
+        <thead><tr><th>Estimate #</th><th>Customer</th><th>Status</th><th style="text-align:right;">Total</th><th>Created</th></tr></thead>
+        <tbody>
+            {% for e in estimates %}
+            <tr>
+                <td><a href="/{{ company_key }}/estimates/{{ e.id }}" style="color:{{ branding.color_primary }}; text-decoration:none; font-weight:500;">{{ e.estimate_number }}</a></td>
+                <td>{{ e.customer_name }}</td>
+                <td><span class="badge badge-{{ e.status|lower }}">{{ e.status }}</span></td>
+                <td style="text-align:right;">${{ '%.2f'|format(e.total if e.total is not none else e.subtotal) }}</td>
+                <td>{{ e.created_at.strftime('%b %-d, %Y') if e.created_at else '—' }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5" style="text-align:center; color:#aaa; padding:2rem;">No estimates yet.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

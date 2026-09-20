@@ -960,3 +960,59 @@ longer exists for the company it was written against — and re-verified 33/33. 
 15-file regression suite re-run clean.
 
 Decisions: D-071 in `docs/DECISIONS-MADE-DURING-BUILD.md`.
+
+---
+
+## 2026-09-20 — Stage 3, Increment 3.1 — Estimates + public estimate request form
+
+Chris: "go ahead with stage 3." First increment of a much larger stage (5 increments:
+estimates, ratings, recency, callbacks, sales CRM) — working through it the same way
+as Stage 2, one increment at a time.
+
+**What:**
+- **Migration 021**: `estimates` (one row per estimate — deliberately simpler than
+  the invoice engine's receivable/version split, D-072; editable while Draft, frozen
+  tax/total on Sent), `estimate_line_items`, `estimate_status_history`, the FK on
+  `work_orders.estimate_id` (column already existed), and `estimate_requests` (public
+  form submissions, no login required so no FK to a user).
+- Full estimate lifecycle: `/estimates` list, new/edit (Draft only), detail, `POST
+  .../send` (PDF + Resend, tax computed at send anchored on today's date — D-073),
+  `POST .../approve|decline` (decline requires a reason), `GET .../convert`
+  (Approved-only) → pre-filled new-WO form → the estimate flips to Converted only
+  once that WO is actually saved, not on the navigation click (D-075). Customer
+  detail gets an Estimates section + "New Estimate" button (admin/manager/salesperson
+  only). Permissions: admin/manager/salesperson throughout, per the directive.
+- `workorder_customer_context` (built in Stage 2) now also backs the estimate form's
+  location/contact dropdowns, extended to allow `salesperson` (D-074) — read-only
+  data a role that already has read-only customer access can see.
+- **Public request form** `/request/<company_key>`: no login, standalone page (does
+  NOT extend `base.html` — no session/nav to assume, D-076), honeypot field, 5/hour
+  per-IP in-memory rate limit (no external service, per the directive — D-077),
+  writes `estimate_requests`, emails `alert_email` on a new submission. Queue page
+  `/estimates/requests`: mark contacted/spam, "Create customer + estimate" (creates a
+  real customer row from the request and redirects into a pre-filled new-estimate
+  form).
+- Nav: "Estimates" link for admin/manager/salesperson.
+
+**Migration:** 021 (`021_estimates.sql`), applied to all four DBs. Pre-migration
+backups in `~/db-backups/2026-09-20a/`.
+
+**Commit:** (pending — migration file, `app.py`, 5 new templates, `base.html`,
+`workorder_form.html` (convert prefill), `customer_detail.html` (Estimates section),
+smoke test, this entry, decisions log, status doc).
+
+**Smoke test:** `tests/smoke_estimates.py` — 45/45 checks, same Resend-mocking
+safety discipline as the 1.7 email test. Covers: the full Draft → edit → Send
+(tax frozen, real mocked email, correct recipient) → editing-a-Sent-estimate-rejected
+→ Approve → Convert (redirect params, pre-filled WO form showing the estimate's own
+line description, hidden `estimate_id` field) → WO save flips the estimate to
+Converted with the right `converted_to_job_id`; a second estimate's Decline path with
+its reason persisted; PDF export; the list page and its status filter; the public
+form's real submission, honeypot silently no-oping, and the 6th same-IP submission
+within an hour getting rate-limited; the requests queue and "Create customer +
+estimate" flow end to end. Cleanup verified zero residue. Full 16-file regression
+suite re-run clean.
+
+**Deferred:** nothing from this increment's own scope.
+
+Proceeding to Increment 3.2 (customer rating system).

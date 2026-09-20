@@ -471,6 +471,13 @@
                 Customers
             </a>
 
+            {% if session.user_role in ('admin', 'manager', 'salesperson') %}
+            <a href="/{{ company_key }}/estimates"
+               class="subnav-link {% if '/estimates' in current_path %}active{% endif %}">
+                Estimates
+            </a>
+            {% endif %}
+
             {% if session.user_role in ('admin', 'manager', 'office') %}
             <a href="/{{ company_key }}/workorders"
                class="subnav-link {% if '/workorders' in current_path %}active{% endif %}">

@@ -580,6 +580,12 @@ def customer_detail(company_key, customer_id, branding, all_companies, company_a
     """, (customer_id,))
     compliance_portals = cur.fetchall()
 
+    cur.execute("""
+        SELECT id, estimate_number, status, total, subtotal FROM estimates
+        WHERE customer_id = %s AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 20
+    """, (customer_id,))
+    customer_estimates = cur.fetchall()
+
     cur.close(); conn.close()
 
     return render_template('customer_detail.html',
@@ -593,6 +599,7 @@ def customer_detail(company_key, customer_id, branding, all_companies, company_a
         statement_recipients=statement_recipients, resend_configured=bool(RESEND_API_KEY),
         compliance_portals=compliance_portals, portal_types=PORTAL_TYPES,
         default_statement_subject=default_statement_subject, default_statement_body=default_statement_body,
+        customer_estimates=customer_estimates,
     )
 
 # ============================================================================
@@ -1662,6 +1669,29 @@ def _next_invoice_number(cur, company_key):
     return f'{prefix}-{year}-{seq:04d}'
 
 
+def _next_estimate_number(cur, company_key):
+    """Next per-company estimate number, e.g. GAG-EST-2026-0007 (directive
+    §4.1: PREFIX-EST-YYYY-####) — the 'EST' segment is what keeps this
+    sequence from ever colliding with the WO/invoice sequences even though
+    all three share the same per-company prefix map."""
+    prefix = WO_NUMBER_PREFIXES.get(company_key, company_key.upper()[:3])
+    year   = datetime.now().year
+    like   = f'{prefix}-EST-{year}-%'
+    cur.execute("""
+        SELECT estimate_number FROM estimates
+        WHERE estimate_number LIKE %s
+        ORDER BY id DESC LIMIT 1
+    """, (like,))
+    row = cur.fetchone()
+    seq = 1
+    if row:
+        try:
+            seq = int(row['estimate_number'].rsplit('-', 1)[1]) + 1
+        except (ValueError, IndexError):
+            seq = 1
+    return f'{prefix}-EST-{year}-{seq:04d}'
+
+
 def _tax_rate_as_of(cur, county, as_of):
     """The tax_rates row effective for `county` on date `as_of`, or None.
     Single source of truth for effective-dated rate lookups — anything that
@@ -2466,6 +2496,7 @@ def _save_work_order(company_key, wo_id):
     followup_tech_username = request.form.get('followup_tech_username', '').strip() or None
     extraction_action       = request.form.get('extraction_action') or None
     is_internal_task        = request.form.get('is_internal_task') == 'on'
+    source_estimate_id      = _opt_num(request.form.get('estimate_id'))
 
     # Misc Task (directive §3.4, retired-tag replacement): internal work with no
     # billable customer. customer_id is only optional when explicitly flagged --
@@ -2599,9 +2630,9 @@ def _save_work_order(company_key, wo_id):
                      catalog_estimated_duration_hours, duration_overridden,
                      parent_work_order_id, is_extraction, equipment_incomplete,
                      followup_tech_username, extraction_started_at, extraction_status,
-                     is_internal_task,
+                     is_internal_task, estimate_id,
                      created_by, updated_by)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 RETURNING id
             """, (wo_number, customer_id, service_location_id, primary_contact_id,
                   status, work_site_label, auto_description,
@@ -2612,9 +2643,20 @@ def _save_work_order(company_key, wo_id):
                   catalog_duration_hours, duration_overridden,
                   parent_work_order_id, is_extraction, equipment_incomplete,
                   followup_tech_username, extraction_started_at, extraction_status_value,
-                  is_internal_task,
+                  is_internal_task, source_estimate_id,
                   username, username))
             wo_id = cur.fetchone()['id']
+            if source_estimate_id:
+                cur.execute("""
+                    UPDATE estimates SET status='Converted', converted_to_job_id=%s,
+                        updated_at=CURRENT_TIMESTAMP, updated_by=%s
+                    WHERE id=%s AND status='Approved'
+                """, (wo_id, username, source_estimate_id))
+                if cur.rowcount:
+                    cur.execute("""
+                        INSERT INTO estimate_status_history (estimate_id, status, changed_by, notes)
+                        VALUES (%s, 'Converted', %s, %s)
+                    """, (source_estimate_id, username, f'Converted to work order {wo_number}'))
         else:
             cur.execute("""
                 SELECT status, extraction_started_at FROM work_orders WHERE id = %s AND deleted_at IS NULL
@@ -2857,8 +2899,11 @@ def workorders_search(company_key):
 @company_access_required
 def workorder_customer_context(company_key, customer_id):
     """JSON: everything the form needs after a customer is picked — type-driven
-    work-site label + prefill flag, service locations, contacts."""
-    if session.get('user_role') not in ('admin', 'manager', 'office'):
+    work-site label + prefill flag, service locations, contacts. Also reused
+    by the estimate form (Increment 3.1) — salesperson is included here since
+    the directive gives that role "read-only customers, can create
+    estimates," and this is read-only context data either way."""
+    if session.get('user_role') not in ('admin', 'manager', 'office', 'salesperson'):
         abort(403)
     conn = get_db_connection(company_key)
     cur  = conn.cursor()
@@ -3079,10 +3124,29 @@ def workorder_new(company_key, branding, all_companies, company_access):
         else:
             prefill_customer_id = None
 
+    # Prefill from "Convert" on an Approved estimate (directive §4.1) — pulls
+    # the estimate's line items in as starting lines on a genuinely NEW WO
+    # (fresh ids, so they save as new work_order_line_items, not edits to
+    # the estimate's own lines).
+    prefill_estimate_id = _opt_num(request.args.get('estimate_id'))
+    prefill_line_items = []
+    if prefill_estimate_id:
+        conn = get_db_connection(company_key)
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT catalog_item_id, description, quantity, unit_price FROM estimate_line_items
+            WHERE estimate_id = %s AND deleted_at IS NULL ORDER BY sort_order, id
+        """, (prefill_estimate_id,))
+        prefill_line_items = [dict(r) for r in cur.fetchall()]
+        for li in prefill_line_items:
+            li['quantity'] = float(li['quantity'])
+            li['unit_price'] = float(li['unit_price'])
+        cur.close(); conn.close()
+
     return render_template('workorder_form.html',
         branding=branding, company_key=company_key,
         company_access=company_access, all_companies=all_companies,
-        wo=None, line_items=[], wo_techs=[prefill_tech] if prefill_tech else [], error=error,
+        wo=None, line_items=prefill_line_items, wo_techs=[prefill_tech] if prefill_tech else [], error=error,
         customers=customers, catalog_std=catalog_std, equipment=equipment,
         techs=techs, statuses=WO_OFFICE_STATUSES,
         job_sources=WO_JOB_SOURCES, priorities=WO_PRIORITIES,
@@ -3096,6 +3160,8 @@ def workorder_new(company_key, branding, all_companies, company_access):
         prefill_work_site_label=request.args.get('work_site_label', '').strip(),
         prefill_parent_id=_opt_num(request.args.get('parent_id')),
         prefill_followup=request.args.get('followup') == '1',
+        prefill_estimate_id=prefill_estimate_id,
+        prefill_line_items=prefill_line_items,
     )
 
 @app.route('/<company_key>/workorders/<int:wo_id>/edit', methods=['GET', 'POST'])
@@ -7884,6 +7950,773 @@ def settings_scheduled_alerts_toggle(company_key):
     conn.commit(); cur.close(); conn.close()
     flash(f"Scheduled email alerts {'enabled' if enabled else 'disabled'}.", 'success')
     return redirect(f'/{company_key}/settings/company')
+
+
+# ============================================================================
+# Estimates  (admin + manager + salesperson; Increment 3.1)
+#
+# Deliberately simpler than the invoice engine's receivable/version split
+# (migration 010): one row per estimate, editable while Draft, frozen
+# (tax_rate_pct/tax_total/total) the moment it's Sent — no version history,
+# since an estimate needing a real revision after sending is rare enough
+# that "decline it, create a new one" is an acceptable answer (unlike an
+# invoice, which has real payment history riding on it).
+# ============================================================================
+
+ESTIMATE_ROLES = ('admin', 'manager', 'salesperson')
+
+
+def _parse_estimate_line_items(company_key, raw_json):
+    """Standard catalog items only — an estimate has nothing to deploy yet,
+    so there's no per-day-equipment line kind here. Same 'totals always
+    computed server-side' discipline as _parse_wo_line_items."""
+    try:
+        submitted = json.loads(raw_json or '[]')
+    except (ValueError, TypeError):
+        return None, 'Line items could not be read. Refresh and try again.'
+    if not isinstance(submitted, list) or len(submitted) == 0:
+        return None, 'An estimate needs at least one line item.'
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    lines = []
+    try:
+        for idx, item in enumerate(submitted, start=1):
+            catalog_item_id = item.get('catalog_item_id')
+            cur.execute("""
+                SELECT id, name, unit_price, is_taxable, is_catch_all, minimum_quantity, billing_increment
+                FROM catalog_items
+                WHERE id = %s AND billing_behavior = 'standard' AND deleted_at IS NULL
+            """, (catalog_item_id,))
+            cat = cur.fetchone()
+            if not cat:
+                return None, f'Line {idx}: pick a service from the catalog.'
+            description = (item.get('description') or '').strip()
+            if cat['is_catch_all'] and not description:
+                return None, f'Line {idx}: Custom Service requires a description.'
+            try:
+                quantity   = float(item.get('quantity'))
+                unit_price = float(item.get('unit_price'))
+            except (TypeError, ValueError):
+                return None, f'Line {idx}: quantity and price must be numbers.'
+            if quantity <= 0:
+                return None, f'Line {idx}: quantity must be greater than zero.'
+            if unit_price < 0:
+                return None, f'Line {idx}: price cannot be negative.'
+            if cat['minimum_quantity'] is not None:
+                quantity = max(quantity, float(cat['minimum_quantity']))
+            if cat['billing_increment'] is not None:
+                inc = float(cat['billing_increment'])
+                if inc > 0:
+                    quantity = math.ceil(round(quantity / inc, 6)) * inc
+            total = round(quantity * unit_price, 2)
+            lines.append({
+                'id': item.get('id') or None, 'catalog_item_id': cat['id'],
+                'description': description or None, 'quantity': quantity,
+                'unit_price': unit_price, 'total': total, 'is_taxable': cat['is_taxable'],
+            })
+    finally:
+        cur.close(); conn.close()
+    return lines, None
+
+
+def _save_estimate(company_key, estimate_id):
+    """Insert (estimate_id is None) or update (Draft only) an estimate +
+    line items from request.form. Returns (estimate_id, error)."""
+    customer_id          = _opt_num(request.form.get('customer_id'))
+    service_location_id  = _opt_num(request.form.get('service_location_id'))
+    primary_contact_id   = _opt_num(request.form.get('primary_contact_id'))
+    work_site_label      = request.form.get('work_site_label', '').strip() or None
+    notes_to_customer    = request.form.get('notes_to_customer', '').strip() or None
+    internal_notes       = request.form.get('internal_notes', '').strip() or None
+
+    if not customer_id:
+        return None, 'Pick a customer from the list.'
+
+    lines, line_error = _parse_estimate_line_items(company_key, request.form.get('line_items_json'))
+    if line_error:
+        return None, line_error
+
+    username = session.get('username')
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    try:
+        cur.execute("SELECT id FROM customers WHERE id = %s AND deleted_at IS NULL", (customer_id,))
+        if not cur.fetchone():
+            return None, 'Pick a customer from the list.'
+        tax_county = None
+        if service_location_id:
+            cur.execute("""
+                SELECT id, county FROM service_locations
+                WHERE id = %s AND customer_id = %s AND deleted_at IS NULL
+            """, (service_location_id, customer_id))
+            loc = cur.fetchone()
+            if not loc:
+                return None, 'Service location does not belong to that customer.'
+            tax_county = loc['county']
+        if primary_contact_id:
+            cur.execute("""
+                SELECT id FROM customer_contacts WHERE id = %s AND customer_id = %s
+            """, (primary_contact_id, customer_id))
+            if not cur.fetchone():
+                return None, 'Contact does not belong to that customer.'
+        if not tax_county:
+            cur.execute("SELECT default_tax_county FROM company_settings WHERE deleted_at IS NULL LIMIT 1")
+            cs = cur.fetchone()
+            tax_county = cs['default_tax_county'] if cs else None
+
+        subtotal = sum(l['total'] for l in lines)
+
+        if estimate_id is None:
+            est_number = _next_estimate_number(cur, company_key)
+            cur.execute("""
+                INSERT INTO estimates (estimate_number, customer_id, service_location_id, primary_contact_id,
+                    work_site_label, tax_county, subtotal, notes_to_customer, internal_notes, created_by, updated_by)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id
+            """, (est_number, customer_id, service_location_id, primary_contact_id,
+                  work_site_label, tax_county, subtotal, notes_to_customer, internal_notes, username, username))
+            estimate_id = cur.fetchone()['id']
+            cur.execute("""
+                INSERT INTO estimate_status_history (estimate_id, status, changed_by, notes)
+                VALUES (%s, 'Draft', %s, 'Created')
+            """, (estimate_id, username))
+        else:
+            cur.execute("SELECT status FROM estimates WHERE id = %s AND deleted_at IS NULL", (estimate_id,))
+            existing = cur.fetchone()
+            if not existing:
+                return None, 'Estimate not found.'
+            if existing['status'] != 'Draft':
+                return None, 'Only a Draft estimate can be edited.'
+            cur.execute("""
+                UPDATE estimates
+                SET customer_id=%s, service_location_id=%s, primary_contact_id=%s, work_site_label=%s,
+                    tax_county=%s, subtotal=%s, notes_to_customer=%s, internal_notes=%s,
+                    updated_at=CURRENT_TIMESTAMP, updated_by=%s
+                WHERE id=%s
+            """, (customer_id, service_location_id, primary_contact_id, work_site_label,
+                  tax_county, subtotal, notes_to_customer, internal_notes, username, estimate_id))
+
+        cur.execute("""
+            SELECT id FROM estimate_line_items WHERE estimate_id = %s AND deleted_at IS NULL
+        """, (estimate_id,))
+        existing_ids  = {r['id'] for r in cur.fetchall()}
+        submitted_ids = set()
+        for sort_order, ln in enumerate(lines):
+            if ln['id'] and int(ln['id']) in existing_ids:
+                lid = int(ln['id'])
+                submitted_ids.add(lid)
+                cur.execute("""
+                    UPDATE estimate_line_items
+                    SET catalog_item_id=%s, description=%s, quantity=%s, unit_price=%s, total=%s,
+                        is_taxable=%s, sort_order=%s, updated_at=CURRENT_TIMESTAMP, updated_by=%s
+                    WHERE id=%s AND estimate_id=%s
+                """, (ln['catalog_item_id'], ln['description'], ln['quantity'], ln['unit_price'], ln['total'],
+                      ln['is_taxable'], sort_order, username, lid, estimate_id))
+            else:
+                cur.execute("""
+                    INSERT INTO estimate_line_items
+                        (estimate_id, catalog_item_id, description, quantity, unit_price, total, is_taxable,
+                         sort_order, created_by, updated_by)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                """, (estimate_id, ln['catalog_item_id'], ln['description'], ln['quantity'], ln['unit_price'],
+                      ln['total'], ln['is_taxable'], sort_order, username, username))
+        removed = existing_ids - submitted_ids
+        if removed:
+            cur.execute("""
+                UPDATE estimate_line_items SET deleted_at=CURRENT_TIMESTAMP, deleted_by=%s WHERE id = ANY(%s)
+            """, (username, list(removed)))
+
+        conn.commit()
+        return estimate_id, None
+    finally:
+        cur.close(); conn.close()
+
+
+def _compute_estimate_tax(cur, estimate_id):
+    """Same effective-dated lookup invoices use (_tax_rate_as_of), anchored
+    on TODAY (the moment of sending) rather than a frozen invoice_date —
+    an estimate has no receivable date of its own to anchor on; the
+    directive's own wording is 'total computed at send using the same tax
+    path as invoices', which this matches exactly for the one date that
+    actually exists at that moment."""
+    cur.execute("SELECT tax_county FROM estimates WHERE id = %s", (estimate_id,))
+    est = cur.fetchone()
+    county = est['tax_county'] if est else None
+    cur.execute("""
+        SELECT COALESCE(SUM(total), 0) AS subtotal,
+               COALESCE(SUM(total) FILTER (WHERE is_taxable), 0) AS taxable_base
+        FROM estimate_line_items WHERE estimate_id = %s AND deleted_at IS NULL
+    """, (estimate_id,))
+    sums = cur.fetchone()
+    subtotal, taxable_base = sums['subtotal'], sums['taxable_base']
+    rate_pct = None
+    if county:
+        r = _tax_rate_as_of(cur, county, date.today())
+        if r:
+            rate_pct = r['total_pct']
+    effective_rate = rate_pct if rate_pct is not None else 0
+    tax_total = (taxable_base * effective_rate) / 100
+    total = subtotal + tax_total
+    return rate_pct, subtotal, tax_total, total
+
+
+@app.route('/<company_key>/estimates')
+@login_required
+@company_access_required
+@with_branding
+def estimates_list(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in ESTIMATE_ROLES:
+        abort(403)
+    status_filter = request.args.get('status', '').strip()
+    search = request.args.get('search', '').strip()
+    conditions = ['e.deleted_at IS NULL']
+    params = []
+    if status_filter:
+        conditions.append('e.status = %s'); params.append(status_filter)
+    if search:
+        conditions.append('(e.estimate_number ILIKE %s OR c.property_name ILIKE %s)')
+        params.extend([f'%{search}%', f'%{search}%'])
+    where = ' AND '.join(conditions)
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute(f"""
+        SELECT e.id, e.estimate_number, e.status, e.total, e.subtotal, e.created_at,
+               c.property_name AS customer_name
+        FROM estimates e
+        JOIN customers c ON c.id = e.customer_id
+        WHERE {where}
+        ORDER BY e.created_at DESC, e.id DESC
+        LIMIT 300
+    """, params)
+    estimates = cur.fetchall()
+    cur.close(); conn.close()
+    return render_template('estimates_list.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        estimates=estimates, status_filter=status_filter, search=search,
+        statuses=('Draft', 'Sent', 'Approved', 'Declined', 'Converted'),
+    )
+
+
+@app.route('/<company_key>/estimates/new', methods=['GET', 'POST'])
+@login_required
+@company_access_required
+@with_branding
+def estimate_new(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in ESTIMATE_ROLES:
+        abort(403)
+    error = None
+    if request.method == 'POST':
+        new_id, error = _save_estimate(company_key, estimate_id=None)
+        if not error:
+            return redirect(f'/{company_key}/estimates/{new_id}')
+    catalog_std, _equipment, _techs = _wo_form_data(company_key)
+    customers = _load_wo_customers(company_key)
+    return render_template('estimate_form.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        est=None, line_items=[], error=error,
+        customers=customers, catalog_std=catalog_std,
+        prefill_customer_id=_opt_num(request.args.get('customer_id')),
+    )
+
+
+@app.route('/<company_key>/estimates/<int:estimate_id>/edit', methods=['GET', 'POST'])
+@login_required
+@company_access_required
+@with_branding
+def estimate_edit(company_key, estimate_id, branding, all_companies, company_access):
+    if session.get('user_role') not in ESTIMATE_ROLES:
+        abort(403)
+    error = None
+    if request.method == 'POST':
+        _, error = _save_estimate(company_key, estimate_id=estimate_id)
+        if not error:
+            return redirect(f'/{company_key}/estimates/{estimate_id}')
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT e.*, c.property_name AS customer_name, c.customer_type
+        FROM estimates e JOIN customers c ON c.id = e.customer_id
+        WHERE e.id = %s AND e.deleted_at IS NULL
+    """, (estimate_id,))
+    est = cur.fetchone()
+    if not est:
+        cur.close(); conn.close(); abort(404)
+    if est['status'] != 'Draft':
+        cur.close(); conn.close()
+        flash('Only a Draft estimate can be edited.', 'error')
+        return redirect(f'/{company_key}/estimates/{estimate_id}')
+    cur.execute("""
+        SELECT eli.*, ci.name AS catalog_name FROM estimate_line_items eli
+        JOIN catalog_items ci ON ci.id = eli.catalog_item_id
+        WHERE eli.estimate_id = %s AND eli.deleted_at IS NULL ORDER BY eli.sort_order, eli.id
+    """, (estimate_id,))
+    line_items = cur.fetchall()
+    cur.close(); conn.close()
+    catalog_std, _equipment, _techs = _wo_form_data(company_key)
+    customers = _load_wo_customers(company_key)
+    return render_template('estimate_form.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        est=est, line_items=line_items, error=error,
+        customers=customers, catalog_std=catalog_std, prefill_customer_id=None,
+    )
+
+
+@app.route('/<company_key>/estimates/<int:estimate_id>')
+@login_required
+@company_access_required
+@with_branding
+def estimate_detail(company_key, estimate_id, branding, all_companies, company_access):
+    if session.get('user_role') not in ESTIMATE_ROLES:
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT e.*, c.property_name AS customer_name, c.customer_type,
+               sl.location_name, sl.address AS location_address, sl.city AS location_city,
+               sl.state AS location_state,
+               cc.first_name AS contact_first, cc.last_name AS contact_last, cc.office_email AS contact_email
+        FROM estimates e
+        JOIN customers c ON c.id = e.customer_id
+        LEFT JOIN service_locations sl ON sl.id = e.service_location_id
+        LEFT JOIN customer_contacts cc ON cc.id = e.primary_contact_id
+        WHERE e.id = %s AND e.deleted_at IS NULL
+    """, (estimate_id,))
+    est = cur.fetchone()
+    if not est:
+        cur.close(); conn.close(); abort(404)
+    cur.execute("""
+        SELECT eli.*, ci.name AS catalog_name FROM estimate_line_items eli
+        JOIN catalog_items ci ON ci.id = eli.catalog_item_id
+        WHERE eli.estimate_id = %s AND eli.deleted_at IS NULL ORDER BY eli.sort_order, eli.id
+    """, (estimate_id,))
+    line_items = cur.fetchall()
+    cur.execute("""
+        SELECT status, changed_by, notes, to_char(changed_at, 'Mon DD, YYYY HH12:MI AM') AS changed_at_display
+        FROM estimate_status_history WHERE estimate_id = %s ORDER BY changed_at DESC, id DESC
+    """, (estimate_id,))
+    history = cur.fetchall()
+    cur.close(); conn.close()
+    return render_template('estimate_detail.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        est=est, line_items=line_items, history=history,
+    )
+
+
+@app.route('/<company_key>/estimates/<int:estimate_id>/send', methods=['POST'])
+@login_required
+@company_access_required
+def estimate_send(company_key, estimate_id):
+    if session.get('user_role') not in ESTIMATE_ROLES:
+        abort(403)
+    username = session.get('username')
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT e.status, c.property_name AS customer_name, cc.office_email AS contact_email
+        FROM estimates e JOIN customers c ON c.id = e.customer_id
+        LEFT JOIN customer_contacts cc ON cc.id = e.primary_contact_id
+        WHERE e.id = %s AND e.deleted_at IS NULL
+    """, (estimate_id,))
+    est = cur.fetchone()
+    if not est:
+        cur.close(); conn.close(); abort(404)
+    if est['status'] != 'Draft':
+        cur.close(); conn.close()
+        flash('Only a Draft estimate can be sent.', 'error')
+        return redirect(f'/{company_key}/estimates/{estimate_id}')
+
+    to_emails = _parse_extra_emails(request.form.get('extra_emails', ''))
+    if est['contact_email'] and est['contact_email'] not in to_emails:
+        to_emails.insert(0, est['contact_email'])
+    if not to_emails:
+        cur.close(); conn.close()
+        flash('No email address to send to — add a contact email or type one in.', 'error')
+        return redirect(f'/{company_key}/estimates/{estimate_id}')
+
+    rate_pct, subtotal, tax_total, total = _compute_estimate_tax(cur, estimate_id)
+    cur.execute("""
+        UPDATE estimates
+        SET tax_rate_pct=%s, tax_total=%s, total=%s, status='Sent',
+            sent_at=CURRENT_TIMESTAMP, sent_by=%s, sent_to_emails=%s,
+            updated_at=CURRENT_TIMESTAMP, updated_by=%s
+        WHERE id=%s
+    """, (rate_pct, tax_total, total, username, ', '.join(to_emails), username, estimate_id))
+    cur.execute("""
+        INSERT INTO estimate_status_history (estimate_id, status, changed_by, notes)
+        VALUES (%s, 'Sent', %s, %s)
+    """, (estimate_id, username, f'Sent to {", ".join(to_emails)}'))
+    conn.commit()
+
+    pdf_bytes, cust_name = generate_estimate_pdf(company_key, estimate_id)
+    branding = COMPANY_BRANDING.get(company_key, {})
+    subject = request.form.get('subject', '').strip() or f'Estimate from {branding.get("name", company_key)}'
+    body = request.form.get('body', '').strip() or f'<p>Please find your estimate attached.</p>'
+    message_id, err = _send_email_via_resend(
+        to_emails, subject, body, attachment_bytes=pdf_bytes,
+        attachment_filename=f'{_sanitize_filename(cust_name or "estimate")}_estimate.pdf',
+        from_name=branding.get('name'),
+    )
+    _log_email(cur, 'estimate', estimate_id, to_emails, subject, message_id,
+               'failed' if err else 'sent', err, username)
+    conn.commit()
+    cur.close(); conn.close()
+    if err:
+        flash(f'Estimate marked Sent, but the email failed: {err}', 'error')
+    else:
+        flash('Estimate sent.', 'success')
+    return redirect(f'/{company_key}/estimates/{estimate_id}')
+
+
+@app.route('/<company_key>/estimates/<int:estimate_id>/approve', methods=['POST'])
+@login_required
+@company_access_required
+def estimate_approve(company_key, estimate_id):
+    if session.get('user_role') not in ESTIMATE_ROLES:
+        abort(403)
+    username = session.get('username')
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("SELECT status FROM estimates WHERE id = %s AND deleted_at IS NULL", (estimate_id,))
+    est = cur.fetchone()
+    if not est:
+        cur.close(); conn.close(); abort(404)
+    if est['status'] != 'Sent':
+        cur.close(); conn.close()
+        flash('Only a Sent estimate can be approved.', 'error')
+        return redirect(f'/{company_key}/estimates/{estimate_id}')
+    cur.execute("""
+        UPDATE estimates SET status='Approved', approved_at=CURRENT_TIMESTAMP,
+            updated_at=CURRENT_TIMESTAMP, updated_by=%s WHERE id=%s
+    """, (username, estimate_id))
+    cur.execute("""
+        INSERT INTO estimate_status_history (estimate_id, status, changed_by) VALUES (%s, 'Approved', %s)
+    """, (estimate_id, username))
+    conn.commit(); cur.close(); conn.close()
+    flash('Estimate approved.', 'success')
+    return redirect(f'/{company_key}/estimates/{estimate_id}')
+
+
+@app.route('/<company_key>/estimates/<int:estimate_id>/decline', methods=['POST'])
+@login_required
+@company_access_required
+def estimate_decline(company_key, estimate_id):
+    if session.get('user_role') not in ESTIMATE_ROLES:
+        abort(403)
+    reason = request.form.get('declined_reason', '').strip()
+    if not reason:
+        flash('A decline reason is required.', 'error')
+        return redirect(f'/{company_key}/estimates/{estimate_id}')
+    username = session.get('username')
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("SELECT status FROM estimates WHERE id = %s AND deleted_at IS NULL", (estimate_id,))
+    est = cur.fetchone()
+    if not est:
+        cur.close(); conn.close(); abort(404)
+    if est['status'] != 'Sent':
+        cur.close(); conn.close()
+        flash('Only a Sent estimate can be declined.', 'error')
+        return redirect(f'/{company_key}/estimates/{estimate_id}')
+    cur.execute("""
+        UPDATE estimates SET status='Declined', declined_at=CURRENT_TIMESTAMP, declined_reason=%s,
+            updated_at=CURRENT_TIMESTAMP, updated_by=%s WHERE id=%s
+    """, (reason, username, estimate_id))
+    cur.execute("""
+        INSERT INTO estimate_status_history (estimate_id, status, changed_by, notes) VALUES (%s, 'Declined', %s, %s)
+    """, (estimate_id, username, reason))
+    conn.commit(); cur.close(); conn.close()
+    flash('Estimate declined.', 'success')
+    return redirect(f'/{company_key}/estimates/{estimate_id}')
+
+
+@app.route('/<company_key>/estimates/<int:estimate_id>/convert')
+@login_required
+@company_access_required
+def estimate_convert(company_key, estimate_id):
+    """Redirects into the normal new-WO form pre-filled with the estimate's
+    customer/location/site label/lines. The estimate itself only flips to
+    Converted once that WO is actually saved (_save_work_order), not here —
+    clicking this link is just navigation, not a commitment."""
+    if session.get('user_role') not in ESTIMATE_ROLES:
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("SELECT * FROM estimates WHERE id = %s AND deleted_at IS NULL", (estimate_id,))
+    est = cur.fetchone()
+    if not est:
+        cur.close(); conn.close(); abort(404)
+    if est['status'] != 'Approved':
+        cur.close(); conn.close()
+        flash('Only an Approved estimate can be converted.', 'error')
+        return redirect(f'/{company_key}/estimates/{estimate_id}')
+    cur.close(); conn.close()
+    params = {'estimate_id': estimate_id, 'customer_id': est['customer_id']}
+    if est['service_location_id']:
+        params['service_location_id'] = est['service_location_id']
+    if est['work_site_label']:
+        params['work_site_label'] = est['work_site_label']
+    return redirect(f'/{company_key}/workorders/new?' + urlencode(params))
+
+
+def generate_estimate_pdf(company_key, estimate_id):
+    """Simple one-page PDF: no revision history, no payments — an estimate
+    has neither. Returns (pdf_bytes, customer_name) or (None, None)."""
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT e.*, c.property_name AS customer_name, c.address AS customer_address,
+               c.city AS customer_city, c.state AS customer_state, c.zip AS customer_zip,
+               sl.location_name, sl.address AS location_address, sl.city AS location_city, sl.state AS location_state
+        FROM estimates e JOIN customers c ON c.id = e.customer_id
+        LEFT JOIN service_locations sl ON sl.id = e.service_location_id
+        WHERE e.id = %s AND e.deleted_at IS NULL
+    """, (estimate_id,))
+    data = cur.fetchone()
+    if not data:
+        cur.close(); conn.close()
+        return None, None
+    cur.execute("""
+        SELECT description, quantity, unit_price, total, is_taxable, catalog_item_id
+        FROM estimate_line_items eli
+        WHERE estimate_id = %s AND deleted_at IS NULL ORDER BY sort_order, id
+    """, (estimate_id,))
+    lines = cur.fetchall()
+    cur.execute("SELECT ci.id, ci.name FROM catalog_items ci")
+    names = {r['id']: r['name'] for r in cur.fetchall()}
+    cur.execute("SELECT * FROM company_settings WHERE deleted_at IS NULL LIMIT 1")
+    settings = cur.fetchone() or {}
+    cur.close(); conn.close()
+
+    branding = COMPANY_BRANDING.get(company_key, {})
+    primary_hex = branding.get('color_primary', '#2C2C2C')
+    primary = colors.HexColor(primary_hex)
+    company_name = settings.get('legal_name') or settings.get('company_name') or branding.get('name', company_key)
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter, pageCompression=0,
+                             rightMargin=0.6*inch, leftMargin=0.6*inch, topMargin=0.6*inch, bottomMargin=0.6*inch)
+    doc.invariant = 1
+    styles = getSampleStyleSheet()
+    normal = styles['Normal']
+
+    header_data = [[
+        Paragraph(f'<b>{company_name}</b>', normal),
+        Paragraph(f'<para alignment="right"><font size="22" color="{primary_hex}"><b>ESTIMATE</b></font><br/>'
+                   f'{data["estimate_number"]}</para>', normal),
+    ]]
+    header_table = Table(header_data, colWidths=[3.5*inch, 3.4*inch])
+    header_table.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'TOP')]))
+    elements = [header_table, Spacer(1, 0.2*inch)]
+
+    addr_bits = [data['location_name'] or data['customer_name']]
+    if data['location_address'] or data['customer_address']:
+        addr_bits.append(data['location_address'] or data['customer_address'])
+    elements.append(Paragraph(f'<b>For:</b> {"<br/>".join(x for x in addr_bits if x)}', normal))
+    elements.append(Spacer(1, 0.25*inch))
+
+    table_data = [['Description', 'Qty', 'Price', 'Total']]
+    for li in lines:
+        desc = li['description'] or names.get(li['catalog_item_id'], '')
+        table_data.append([desc, f"{li['quantity']:g}", f"${float(li['unit_price']):,.2f}", f"${float(li['total']):,.2f}"])
+    table_data.append(['', '', 'Subtotal', f"${float(data['subtotal']):,.2f}"])
+    if data['tax_total'] is not None:
+        table_data.append(['', '', f"Tax ({data['tax_rate_pct'] or 0}%)", f"${float(data['tax_total']):,.2f}"])
+        table_data.append(['', '', 'Total', f"${float(data['total']):,.2f}"])
+    t = Table(table_data, colWidths=[3.4*inch, 0.8*inch, 1.3*inch, 1.3*inch])
+    t.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), primary), ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('GRID', (0, 0), (-1, len(lines)), 0.5, colors.HexColor('#dddddd')),
+        ('ALIGN', (1, 0), (-1, -1), 'RIGHT'), ('FONTNAME', (2, -1), (-1, -1), 'Helvetica-Bold'),
+    ]))
+    elements.append(t)
+    if data['notes_to_customer']:
+        elements.append(Spacer(1, 0.3*inch))
+        elements.append(Paragraph(data['notes_to_customer'], normal))
+    doc.build(elements)
+    return buf.getvalue(), data['customer_name']
+
+
+@app.route('/<company_key>/estimates/<int:estimate_id>/pdf')
+@login_required
+@company_access_required
+def estimate_pdf(company_key, estimate_id):
+    if session.get('user_role') not in ESTIMATE_ROLES:
+        abort(403)
+    pdf_bytes, cust_name = generate_estimate_pdf(company_key, estimate_id)
+    if pdf_bytes is None:
+        abort(404)
+    return Response(pdf_bytes, mimetype='application/pdf',
+                     headers={'Content-Disposition': f'inline; filename="{_sanitize_filename(cust_name)}_estimate.pdf"'})
+
+
+# ============================================================================
+# Public estimate request form  (no login; Increment 3.1)
+# ============================================================================
+
+# In-memory per-IP rate limit -- no external service, resets on app restart.
+# {(company_key, ip): [timestamp, ...]}. Good enough for a low-volume public
+# form; a real abuse spike would need something sturdier, but that's not
+# what this guards against (the honeypot field is the actual bot deterrent).
+_ESTIMATE_REQUEST_RATE_LIMIT = {}
+ESTIMATE_REQUEST_RATE_LIMIT_PER_HOUR = 5
+
+
+def _estimate_request_rate_limited(company_key, ip):
+    key = (company_key, ip)
+    now = datetime.now()
+    window = [t for t in _ESTIMATE_REQUEST_RATE_LIMIT.get(key, []) if (now - t) < timedelta(hours=1)]
+    _ESTIMATE_REQUEST_RATE_LIMIT[key] = window
+    return len(window) >= ESTIMATE_REQUEST_RATE_LIMIT_PER_HOUR
+
+
+@app.route('/request/<company_key>', methods=['GET', 'POST'])
+def public_estimate_request(company_key):
+    if company_key not in DB_CONFIG:
+        abort(404)
+    branding = COMPANY_BRANDING.get(company_key, {})
+    error = None
+    submitted = False
+
+    if request.method == 'POST':
+        if request.form.get('website', ''):  # honeypot — real users never fill this
+            return render_template('public_estimate_request.html', branding=branding,
+                                    company_key=company_key, error=None, submitted=True,
+                                    catalog_categories=[])
+        ip = request.headers.get('X-Forwarded-For', request.remote_addr or '').split(',')[0].strip()
+        if _estimate_request_rate_limited(company_key, ip):
+            error = 'Too many requests from this connection — please try again later.'
+        else:
+            name = request.form.get('name', '').strip()
+            if not name:
+                error = 'Name is required.'
+            else:
+                conn = get_db_connection(company_key)
+                cur = conn.cursor()
+                cur.execute("""
+                    INSERT INTO estimate_requests (name, email, phone, property_name, address, city, state, zip,
+                        customer_type, services, description, preferred_dates, source_ip)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id
+                """, (name, request.form.get('email', '').strip() or None,
+                      request.form.get('phone', '').strip() or None,
+                      request.form.get('property_name', '').strip() or None,
+                      request.form.get('address', '').strip() or None,
+                      request.form.get('city', '').strip() or None,
+                      request.form.get('state', '').strip().upper()[:2] or None,
+                      request.form.get('zip', '').strip() or None,
+                      request.form.get('customer_type', '').strip() or None,
+                      ', '.join(request.form.getlist('services')) or None,
+                      request.form.get('description', '').strip() or None,
+                      request.form.get('preferred_dates', '').strip() or None, ip))
+                request_id = cur.fetchone()['id']
+                cur.execute("SELECT alert_email FROM company_settings WHERE deleted_at IS NULL LIMIT 1")
+                cs = cur.fetchone()
+                conn.commit(); cur.close(); conn.close()
+                _ESTIMATE_REQUEST_RATE_LIMIT.setdefault((company_key, ip), []).append(datetime.now())
+                if cs and cs['alert_email']:
+                    _send_email_via_resend(
+                        [cs['alert_email']], f"[{branding.get('name', company_key)}] New estimate request: {name}",
+                        f"<p>New estimate request from {name}.</p><p>View it in the Estimate Requests queue.</p>",
+                        from_name=branding.get('name'),
+                    )
+                submitted = True
+
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("SELECT DISTINCT category FROM catalog_items WHERE deleted_at IS NULL AND category IS NOT NULL ORDER BY category")
+    categories = [r['category'] for r in cur.fetchall()]
+    cur.close(); conn.close()
+
+    return render_template('public_estimate_request.html',
+        branding=branding, company_key=company_key, error=error, submitted=submitted,
+        catalog_categories=categories,
+    )
+
+
+@app.route('/<company_key>/estimates/requests')
+@login_required
+@company_access_required
+@with_branding
+def estimate_requests_queue(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in ESTIMATE_ROLES:
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT * FROM estimate_requests WHERE deleted_at IS NULL
+        ORDER BY (status = 'new') DESC, created_at DESC LIMIT 200
+    """)
+    requests_rows = cur.fetchall()
+    cur.close(); conn.close()
+    return render_template('estimate_requests_queue.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        requests=requests_rows,
+    )
+
+
+@app.route('/<company_key>/estimates/requests/<int:request_id>/mark', methods=['POST'])
+@login_required
+@company_access_required
+def estimate_request_mark(company_key, request_id):
+    if session.get('user_role') not in ESTIMATE_ROLES:
+        abort(403)
+    new_status = request.form.get('status')
+    if new_status not in ('contacted', 'spam'):
+        abort(400)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        UPDATE estimate_requests SET status=%s, assigned_to_username=%s, updated_at=CURRENT_TIMESTAMP, updated_by=%s
+        WHERE id=%s AND deleted_at IS NULL
+    """, (new_status, session.get('username'), session.get('username'), request_id))
+    conn.commit(); cur.close(); conn.close()
+    return redirect(f'/{company_key}/estimates/requests')
+
+
+@app.route('/<company_key>/estimates/requests/<int:request_id>/create-customer', methods=['POST'])
+@login_required
+@company_access_required
+def estimate_request_create_customer(company_key, request_id):
+    """'Create customer + estimate' — pre-fills both from the request, per
+    the directive. Creates a real customer row (office can correct any
+    field afterward) and redirects into a pre-filled new-estimate form."""
+    if session.get('user_role') not in ESTIMATE_ROLES:
+        abort(403)
+    username = session.get('username')
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("SELECT * FROM estimate_requests WHERE id = %s AND deleted_at IS NULL", (request_id,))
+    req = cur.fetchone()
+    if not req:
+        cur.close(); conn.close(); abort(404)
+
+    customer_type = req['customer_type'] if req['customer_type'] in WORK_SITE_LABELS else 'Residential'
+    cur.execute("""
+        INSERT INTO customers (property_name, customer_type, address, city, state, zip, status,
+            payment_terms, created_by, updated_by)
+        VALUES (%s, %s, %s, %s, %s, %s, 'Active', 'Net 30', %s, %s) RETURNING id
+    """, (req['property_name'] or req['name'], customer_type, req['address'], req['city'],
+          req['state'], req['zip'], username, username))
+    customer_id = cur.fetchone()['id']
+    if req['email'] or req['phone']:
+        cur.execute("""
+            INSERT INTO customer_contacts (customer_id, first_name, last_name, office_email, mobile_phone,
+                is_primary, accepts_billing, created_by, updated_by)
+            VALUES (%s, %s, '', %s, %s, TRUE, TRUE, %s, %s)
+        """, (customer_id, req['name'], req['email'], req['phone'], username, username))
+    cur.execute("""
+        UPDATE estimate_requests SET status='converted', linked_customer_id=%s,
+            assigned_to_username=%s, updated_at=CURRENT_TIMESTAMP, updated_by=%s
+        WHERE id=%s
+    """, (customer_id, username, username, request_id))
+    conn.commit(); cur.close(); conn.close()
+    flash('Customer created from the estimate request.', 'success')
+    return redirect(f'/{company_key}/estimates/new?customer_id={customer_id}')
 
 
 # ============================================================================
