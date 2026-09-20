@@ -130,8 +130,18 @@ units, outstanding A/R + 90+ + unapplied credits (read from the `customer_flags`
 nightly cache rather than a live per-customer walk — see D-088), follow-ups due,
 pending approvals, last-15 recent activity, role-gated Quick Actions. No
 migration — every table read already existed. 21/21 smoke checks
-(`tests/smoke_dashboard.py`), full 21-file regression suite green. Next:
-5.2 (customer merge + duplicate detection).
+(`tests/smoke_dashboard.py`), full 21-file regression suite green.
+Increment 5.2 (customer merge + duplicate detection, migration 026) complete —
+non-blocking duplicate-customer banner on the customer form (reuses the
+double-booking brick's normalized-match SQL); admin-only merge tool with a
+search-and-pick target picker, AJAX side-by-side preview, and a one-transaction
+merge that re-points every referencing table (with explicit collision handling
+for the three UNIQUE-constrained ones), soft-deletes the source with
+`merged_into_customer_id` set, notes both customers, and logs to
+`customer_merge_log`; visiting a merged customer's old URL now redirects to the
+target instead of 404ing. See D-089. 24/24 smoke checks
+(`tests/smoke_customer_merge.py`), full 22-file regression suite green. Next:
+5.3 (audit trail).
 
 Decisions Chris has already made for this build (delinquent threshold = 90 days past
 invoice date, FL tax left empty/exempt for Kleanit SF, SF-import receivables excluded

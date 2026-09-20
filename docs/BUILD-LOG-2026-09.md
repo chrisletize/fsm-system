@@ -1250,3 +1250,31 @@ live browser walkthrough).
 21-file regression suite re-run clean.
 
 **Deferred:** nothing from this increment's own scope.
+
+## Increment 5.2 — Customer merge + duplicate detection
+
+- **Duplicate detection** at customer create/edit: `GET /customers/dupe_check`
+  reuses the double-booking brick's normalized-match SQL, non-blocking
+  banner on `customer_form.html` (same look/timing as the WO form's).
+- **Merge** `/<company>/customers/<id>/merge` (admin only): search-and-pick
+  target, AJAX side-by-side preview (`GET /customers/merge_preview`) showing
+  every table's row count on both sides before confirming, then one
+  transaction (`_merge_customers`) re-points contacts, service locations,
+  notes, custom field values, compliance portals, work orders, estimates,
+  invoices, payments, job-history dates, and the three sales_* polymorphic
+  tables onto the target, handles three UNIQUE-constrained tables' collision
+  case explicitly (target's existing row wins, source's duplicate is left
+  on the soft-deleted source rather than deleted), writes a note on both
+  customers, soft-deletes the source with `merged_into_customer_id` set, and
+  logs the whole thing to `customer_merge_log`. Visiting a merged customer's
+  old URL now redirects to the target instead of 404ing. See D-089.
+- **Migration 026**: `customer_merge_log` (append-only) +
+  `customers.merged_into_customer_id`.
+
+**Migration:** 026 (`026_customer_merge.sql`), applied to all four DBs,
+verified idempotent. Pre-migration backups in `~/db-backups/2026-09-20f/`.
+
+**Smoke test:** `tests/smoke_customer_merge.py` — 24/24 checks (see D-089).
+Full 22-file regression suite re-run clean.
+
+**Deferred:** nothing from this increment's own scope.

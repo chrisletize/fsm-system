@@ -581,7 +581,13 @@ def customer_detail(company_key, customer_id, branding, all_companies, company_a
     """, (customer_id,))
     customer = cur.fetchone()
     if not customer:
-        cur.close(); conn.close(); abort(404)
+        cur.execute("SELECT merged_into_customer_id FROM customers WHERE id = %s", (customer_id,))
+        merged = cur.fetchone()
+        cur.close(); conn.close()
+        if merged and merged['merged_into_customer_id']:
+            flash('This customer was merged into another record.', 'info')
+            return redirect(f'/{company_key}/customers/{merged["merged_into_customer_id"]}')
+        abort(404)
 
     cur.execute("""
         SELECT * FROM customer_contacts
@@ -868,6 +874,236 @@ def customer_edit(company_key, customer_id, branding, all_companies, company_acc
         management_companies=management_companies,
         field_values=field_values, nc_counties=NC_COUNTIES, error=None,
     )
+
+# ============================================================================
+# Customers — duplicate detection (directive §5.2)
+# ============================================================================
+
+@app.route('/<company_key>/customers/dupe_check')
+@login_required
+@company_access_required
+def customer_dupe_check(company_key):
+    """Duplicate-customer detection: normalized-name + normalized-address
+    match, same non-blocking-banner pattern as workorder_dupe_check (the
+    directive's "double-booking brick"). No role gate -- customer_new/
+    customer_edit have none either, so this mirrors whatever can already
+    reach the form it's called from."""
+    name    = (request.args.get('name') or '').strip()
+    address = (request.args.get('address') or '').strip()
+    exclude_id = _opt_num(request.args.get('exclude_id'))
+    if not name:
+        return jsonify({'matches': []})
+
+    params = [name]
+    address_clause = ""
+    if address:
+        address_clause = """AND (address = '' OR address IS NULL OR
+            lower(regexp_replace(address, '[^a-zA-Z0-9]', '', 'g')) =
+            lower(regexp_replace(%s,      '[^a-zA-Z0-9]', '', 'g')))"""
+        params.append(address)
+    exclude_clause = ""
+    if exclude_id:
+        exclude_clause = "AND id <> %s"
+        params.append(exclude_id)
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute(f"""
+        SELECT id, property_name, address, city, state, status
+        FROM customers
+        WHERE deleted_at IS NULL
+          AND lower(regexp_replace(property_name, '[^a-zA-Z0-9]', '', 'g')) =
+              lower(regexp_replace(%s,            '[^a-zA-Z0-9]', '', 'g'))
+          {address_clause}
+          {exclude_clause}
+        ORDER BY property_name
+        LIMIT 5
+    """, params)
+    matches = cur.fetchall()
+    cur.close(); conn.close()
+    return jsonify({'matches': matches})
+
+# ============================================================================
+# Customers — merge (directive §5.2, admin only)
+# ============================================================================
+
+# Every table referencing customers.id that a merge must re-point. Tuples of
+# (table, column) except the three sales_* polymorphic tables, which also
+# need "AND property_type = 'customer'" -- handled separately below.
+_MERGE_SIMPLE_TABLES = [
+    ('customer_contacts', 'customer_id'),
+    ('service_locations', 'customer_id'),
+    ('customer_notes', 'customer_id'),
+    ('work_orders', 'customer_id'),
+    ('estimates', 'customer_id'),
+    ('invoices', 'customer_id'),
+    ('payments', 'customer_id'),
+]
+# Tables with a UNIQUE constraint that includes customer_id -- a straight
+# UPDATE can collide if both source and target already have a row for the
+# same key. Re-point the ones that don't collide; the leftover (genuine
+# duplicate) rows on the source side are simply left pointing at the
+# soft-deleted source customer rather than deleted, since they're not
+# app-visible there (every list query filters deleted_at IS NULL) and
+# deleting is not what a soft-delete-everywhere codebase does casually.
+_MERGE_UNIQUE_TABLES = [
+    ('customer_field_values', 'customer_id', 'field_definition_id'),
+    ('customer_compliance_portals', 'customer_id', 'portal_type, property_client_id'),
+    ('customer_job_dates', 'customer_id', 'job_date'),
+]
+_MERGE_SALES_TABLES = [
+    ('sales_contacts', 'current_property_id', 'current_property_type'),
+    ('contact_property_history', 'property_id', 'property_type'),
+    ('sales_visits', 'property_id', 'property_type'),
+]
+
+
+def _merge_customers(cur, source_id, target_id, username):
+    """Re-points every table CLAUDE.md's schema references customers from,
+    in the caller's transaction (commit/rollback is the caller's job). See
+    migration 026 for the merge_log/merged_into_customer_id schema notes.
+    Returns the {table: rows_repointed} dict used both for the log's
+    `details` JSONB and the confirmation flash message."""
+    details = {}
+    for table, col in _MERGE_SIMPLE_TABLES:
+        cur.execute(f"UPDATE {table} SET {col} = %s WHERE {col} = %s", (target_id, source_id))
+        details[table] = cur.rowcount
+
+    for table, col, key_cols in _MERGE_UNIQUE_TABLES:
+        cur.execute(f"""
+            UPDATE {table} SET {col} = %s
+            WHERE {col} = %s AND ({key_cols}) NOT IN (
+                SELECT {key_cols} FROM {table} WHERE {col} = %s
+            )
+        """, (target_id, source_id, target_id))
+        details[table] = cur.rowcount
+
+    for table, id_col, type_col in _MERGE_SALES_TABLES:
+        cur.execute(f"""
+            UPDATE {table} SET {id_col} = %s
+            WHERE {id_col} = %s AND {type_col} = 'customer'
+        """, (target_id, source_id))
+        details[table] = cur.rowcount
+
+    cur.execute("SELECT property_name FROM customers WHERE id = %s", (source_id,))
+    source_name = cur.fetchone()['property_name']
+    cur.execute("SELECT property_name FROM customers WHERE id = %s", (target_id,))
+    target_name = cur.fetchone()['property_name']
+
+    cur.execute("""
+        INSERT INTO customer_notes (customer_id, note_text, note_type, created_by)
+        VALUES (%s, %s, 'Merge', %s)
+    """, (target_id, f"Merged in \"{source_name}\" (#{source_id}).", username))
+    cur.execute("""
+        INSERT INTO customer_notes (customer_id, note_text, note_type, created_by)
+        VALUES (%s, %s, 'Merge', %s)
+    """, (source_id, f"Merged into \"{target_name}\" (#{target_id}).", username))
+
+    cur.execute("""
+        UPDATE customers SET deleted_at = CURRENT_TIMESTAMP, deleted_by = %s,
+            merged_into_customer_id = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s
+    """, (username, target_id, username, source_id))
+
+    cur.execute("""
+        INSERT INTO customer_merge_log (source_customer_id, source_property_name,
+            target_customer_id, target_property_name, details, merged_by)
+        VALUES (%s, %s, %s, %s, %s, %s)
+    """, (source_id, source_name, target_id, target_name, json.dumps(details), username))
+
+    return details
+
+
+@app.route('/<company_key>/customers/<int:customer_id>/merge', methods=['GET', 'POST'])
+@login_required
+@company_access_required
+@with_branding
+def customer_merge(company_key, customer_id, branding, all_companies, company_access):
+    if session.get('user_role') != 'admin':
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("SELECT * FROM customers WHERE id = %s AND deleted_at IS NULL", (customer_id,))
+    customer = cur.fetchone()
+    if not customer:
+        cur.close(); conn.close(); abort(404)
+
+    if request.method == 'POST':
+        target_id = _opt_num(request.form.get('target_customer_id'))
+        if not target_id or target_id == customer_id:
+            cur.close(); conn.close()
+            flash('Pick a different customer to merge into.', 'error')
+            return redirect(f'/{company_key}/customers/{customer_id}/merge')
+        cur.execute("SELECT id FROM customers WHERE id = %s AND deleted_at IS NULL", (target_id,))
+        if not cur.fetchone():
+            cur.close(); conn.close()
+            flash('Target customer not found.', 'error')
+            return redirect(f'/{company_key}/customers/{customer_id}/merge')
+        try:
+            details = _merge_customers(cur, customer_id, target_id, session.get('username'))
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            cur.close(); conn.close()
+            flash(f'Merge failed: {e}', 'error')
+            return redirect(f'/{company_key}/customers/{customer_id}/merge')
+        cur.close(); conn.close()
+        moved = sum(v for v in details.values() if v)
+        flash(f'Merged "{customer["property_name"]}" into the target customer ({moved} record(s) re-pointed).', 'success')
+        return redirect(f'/{company_key}/customers/{target_id}')
+
+    cur.close(); conn.close()
+    return render_template('customer_merge.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        customer=customer,
+    )
+
+
+@app.route('/<company_key>/customers/merge_preview')
+@login_required
+@company_access_required
+def customer_merge_preview(company_key):
+    """JSON: side-by-side counts for the merge confirmation screen. Counts
+    reuse the same table list _merge_customers writes to, so the preview
+    can never promise a different set of changes than the merge performs."""
+    if session.get('user_role') != 'admin':
+        abort(403)
+    source_id = _opt_num(request.args.get('source_id'))
+    target_id = _opt_num(request.args.get('target_id'))
+    if not source_id or not target_id or source_id == target_id:
+        return jsonify({'error': 'invalid'}), 400
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+
+    def one(cid):
+        cur.execute("""
+            SELECT id, property_name, address, city, state, customer_type, status,
+                   created_at::text AS created_at
+            FROM customers WHERE id = %s AND deleted_at IS NULL
+        """, (cid,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        counts = {}
+        for table, col in _MERGE_SIMPLE_TABLES:
+            cur.execute(f"SELECT COUNT(*) AS n FROM {table} WHERE {col} = %s", (cid,))
+            counts[table] = cur.fetchone()['n']
+        for table, col, _ in _MERGE_UNIQUE_TABLES:
+            cur.execute(f"SELECT COUNT(*) AS n FROM {table} WHERE {col} = %s", (cid,))
+            counts[table] = cur.fetchone()['n']
+        for table, id_col, type_col in _MERGE_SALES_TABLES:
+            cur.execute(f"SELECT COUNT(*) AS n FROM {table} WHERE {id_col} = %s AND {type_col} = 'customer'", (cid,))
+            counts[table] = cur.fetchone()['n']
+        return {**dict(row), 'counts': counts}
+
+    source = one(source_id)
+    target = one(target_id)
+    cur.close(); conn.close()
+    if not source or not target:
+        return jsonify({'error': 'not_found'}), 404
+    return jsonify({'source': source, 'target': target})
 
 # ============================================================================
 # Service Locations — new

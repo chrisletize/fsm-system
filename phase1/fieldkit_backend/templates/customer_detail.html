@@ -213,6 +213,9 @@
     </div>
     <div class="header-actions">
         <a href="/{{ company_key }}/customers/{{ customer.id }}/edit" class="btn btn-outline">Edit</a>
+        {% if session.user_role == 'admin' %}
+        <a href="/{{ company_key }}/customers/{{ customer.id }}/merge" class="btn btn-outline">Merge…</a>
+        {% endif %}
     </div>
 </div>
 

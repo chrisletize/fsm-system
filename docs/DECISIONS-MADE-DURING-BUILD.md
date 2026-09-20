@@ -1057,6 +1057,88 @@ Full 21-file regression suite re-run clean.
 
 ---
 
+D-089 — Increment 5.2 (Customer merge + duplicate detection, directive §5.2,
+migration 026). 
+
+- **Duplicate detection reuses the double-booking brick's exact SQL pattern**
+  (`workorder_dupe_check`, Increment 1.x/2.x): `lower(regexp_replace(x,
+  '[^a-zA-Z0-9]', '', 'g'))` equality, non-blocking banner, 400ms debounce, a
+  small `/customers/dupe_check` JSON endpoint. Matches on normalized
+  `property_name` always; normalized `address` only when the new customer's
+  address field is non-empty (an empty address shouldn't suppress a same-name
+  match just because nobody's typed the address yet). No role gate on the
+  endpoint — `customer_new`/`customer_edit` have none either (pre-existing;
+  same category of gap as D-087's `'office'`-role finding, left for §5.4's
+  permissions sweep rather than invented here).
+- **Merge is one Python transaction (`_merge_customers`), not a stored
+  procedure or per-table routes** — same style as `sales_approval_approve`'s
+  create-customer-in-one-transaction from Increment 3.5. Three tiers of
+  tables: plain FK re-point (`customer_contacts`, `service_locations`,
+  `customer_notes`, `work_orders`, `estimates`, `invoices`, `payments`);
+  UNIQUE-constrained tables (`customer_field_values`,
+  `customer_compliance_portals`, `customer_job_dates`) where a straight
+  UPDATE could collide with a row the target already has for the same key —
+  those re-point only the non-colliding rows, `NOT IN (SELECT ... WHERE
+  customer_id = target)`, and leave genuine duplicates on the soft-deleted
+  source rather than deleting them (a soft-delete-everywhere codebase doesn't
+  invent a hard-delete here just because it's convenient — they're simply
+  not app-visible any more, same as everything else under a `deleted_at`);
+  and the three `sales_*` polymorphic tables (`sales_contacts`,
+  `contact_property_history`, `sales_visits`) re-pointed with an added
+  `AND property_type = 'customer'` guard since their `property_id` column
+  can also mean a `sales_prospects` row. `approval_queue` was deliberately
+  left out of the re-point list — its `target_id`/`target_type` rows are
+  already-resolved historical requests (D-087 established `approval_queue`
+  only ever writes `convert_prospect` rows today), not live references a
+  future page reads by customer id.
+- **The merge preview endpoint counts from the exact same three table lists**
+  `_merge_customers` writes to (`_MERGE_SIMPLE_TABLES`/`_MERGE_UNIQUE_TABLES`/
+  `_MERGE_SALES_TABLES` are module-level, shared by both), so the preview
+  screen can never promise a different set of changes than the merge
+  actually performs.
+- **Viewing a merged (soft-deleted) customer redirects to the target**
+  instead of 404ing — `customer_detail`'s not-found branch now checks
+  `merged_into_customer_id` before giving up. Not directive text, but without
+  it every existing link/bookmark to a merged-away customer (dispatch board
+  history, old emails, browser back-button) would silently 404 right after
+  the very re-pointing operation that's supposed to make the target the new
+  home for that data. Minimal addition, same "don't leave a link that used
+  to work now dead-ending" instinct as D-071's extraction gate leaving old
+  data intact rather than orphaning it.
+- **A `customer_notes` row is written on both sides** (target: "Merged in
+  X"; source: "Merged into Y") per the directive's "a note on both" —
+  the source's own note is still reachable by anyone looking directly at
+  `customer_notes` for that id (e.g. from `customer_merge_log`), even though
+  the source customer's detail page itself now redirects away.
+- No role check exists yet on `customer_new`/`customer_edit` themselves
+  (pre-existing, not touched) but the merge route and preview endpoint are
+  both admin-only per the directive's explicit "(admin)" — the one new
+  route in this increment that does get a role gate, gets the right one.
+
+**Migration:** 026 (`026_customer_merge.sql`) — `customer_merge_log`
+(append-only, same convention as `contact_property_history`) and
+`customers.merged_into_customer_id` — applied to all four DBs, verified
+idempotent. Pre-migration backups in `~/db-backups/2026-09-20f/`.
+
+**Smoke test:** `tests/smoke_customer_merge.py` — 24/24 checks: dupe_check
+matches on normalized name+address and respects `exclude_id`; merge preview
+counts match real fixture data; a manager is blocked (403) from both the
+merge page and the merge POST; after confirming, a WO/contact/service
+location land on the target; the `customer_field_values` collision case
+(target keeps its own value, doesn't get clobbered by the source's) and the
+`customer_job_dates` collision case (a shared date isn't duplicated, a
+non-shared one moves over) both verified directly against the DB, not just
+"the merge didn't error"; source ends up soft-deleted with
+`merged_into_customer_id` set; notes written on both sides; the
+`customer_merge_log` row's `details` JSONB matches the real per-table
+counts; and visiting the now-merged source customer's URL redirects to the
+target with a flash message instead of 404ing. Full 22-file regression
+suite re-run clean.
+
+**Deferred:** nothing from this increment's own scope.
+
+---
+
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:
 #33 (OPS/VendorCafe export templates), #50 (SMS alerts via Twilio), and Stage 5.6
 (ServiceFusion price-list exports, company legal names/remit-to/reply-to/alert emails).

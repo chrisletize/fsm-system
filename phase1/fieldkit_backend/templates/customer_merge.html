@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}Merge Customer — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .breadcrumb { font-size:.9rem; color:#888; margin-bottom:1.25rem; }
+    .breadcrumb a { color:{{ branding.color_primary }}; text-decoration:none; }
+    .breadcrumb span { margin:0 .4rem; }
+    .page-header { margin-bottom:1.5rem; }
+    .page-header h1 { font-size:1.75rem; color:{{ branding.color_primary }}; }
+    .warning-banner {
+        background:#fdecea; border:1px solid #f3c1bc; color:#8a2f2a; border-radius:4px;
+        padding:.8rem 1rem; margin-bottom:1.5rem; font-size:.9rem;
+    }
+    .search-box { position:relative; margin-bottom:1rem; }
+    .search-box input { width:100%; padding:.7rem 1rem; border:1px solid #ddd; border-radius:4px; font-size:.95rem; }
+    .search-results { border:1px solid #eee; border-radius:4px; margin-top:.5rem; max-height:260px; overflow-y:auto; }
+    .search-result-row {
+        display:flex; justify-content:space-between; align-items:center; padding:.7rem 1rem;
+        border-bottom:1px solid #f2f2f2; cursor:pointer;
+    }
+    .search-result-row:last-child { border-bottom:none; }
+    .search-result-row:hover { background:#f8f9fa; }
+    .search-result-row.selected { background:{{ branding.color_primary }}15; }
+    .compare-grid { display:grid; grid-template-columns:1fr 1fr; gap:1.25rem; margin-top:1.5rem; }
+    @media (max-width:768px) { .compare-grid { grid-template-columns:1fr; } }
+    .compare-col h3 { font-size:1rem; margin-bottom:.75rem; }
+    .compare-col.source h3 { color:#a32d2d; }
+    .compare-col.target h3 { color:#2e7d32; }
+    .field-row { display:flex; justify-content:space-between; padding:.4rem 0; border-bottom:1px solid #f2f2f2; font-size:.88rem; }
+    .field-row .label { color:#888; }
+    .btn { display:inline-block; padding:.7rem 1.4rem; border-radius:4px; text-decoration:none; font-weight:500; border:none; font-size:.95rem; cursor:pointer; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-primary:disabled { opacity:.4; cursor:not-allowed; }
+    .btn-outline { background:white; color:{{ branding.color_primary }}; border:1px solid {{ branding.color_primary }}; }
+    .empty { color:#aaa; padding:1rem 0; text-align:center; font-size:.9rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="/{{ company_key }}/customers">Customers</a>
+    <span>›</span>
+    <a href="/{{ company_key }}/customers/{{ customer.id }}">{{ customer.property_name }}</a>
+    <span>›</span>
+    <span>Merge</span>
+</div>
+
+<div class="page-header">
+    <h1>Merge "{{ customer.property_name }}" into…</h1>
+</div>
+
+<div class="warning-banner">
+    ⚠️ Merging re-points every work order, invoice, payment, estimate, contact, note,
+    service location, and sales record from <strong>{{ customer.property_name }}</strong> onto
+    the customer you pick below, then soft-deletes {{ customer.property_name }}. This cannot be
+    undone from the UI. Review the side-by-side counts before confirming.
+</div>
+
+<div class="card">
+    <div class="section-title">Find the target customer</div>
+    <div class="search-box">
+        <input type="text" id="targetSearch" placeholder="Search by property name…" autocomplete="off">
+    </div>
+    <div class="search-results" id="searchResults" style="display:none;"></div>
+</div>
+
+<div class="card" id="previewCard" style="display:none;">
+    <div class="section-title">Preview</div>
+    <div class="compare-grid" id="compareGrid"></div>
+</div>
+
+<form method="POST" id="mergeForm" style="margin-top:1.5rem;">
+    <input type="hidden" name="target_customer_id" id="targetIdField">
+    <button type="submit" class="btn btn-primary" id="confirmBtn" disabled>Confirm Merge</button>
+    <a href="/{{ company_key }}/customers/{{ customer.id }}" class="btn btn-outline">Cancel</a>
+</form>
+
+<script>
+(function () {
+    const companyKey = "{{ company_key }}";
+    const sourceId = {{ customer.id }};
+    const searchInput = document.getElementById('targetSearch');
+    const resultsBox = document.getElementById('searchResults');
+    const previewCard = document.getElementById('previewCard');
+    const compareGrid = document.getElementById('compareGrid');
+    const targetIdField = document.getElementById('targetIdField');
+    const confirmBtn = document.getElementById('confirmBtn');
+    let searchTimer;
+
+    function esc(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g,
+            c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    const TABLE_LABELS = {
+        customer_contacts: 'Contacts', service_locations: 'Service Locations',
+        customer_notes: 'Notes', work_orders: 'Work Orders', estimates: 'Estimates',
+        invoices: 'Invoices', payments: 'Payments', customer_field_values: 'Custom Field Values',
+        customer_compliance_portals: 'Compliance Portals', customer_job_dates: 'Job History Dates',
+        sales_contacts: 'Sales Contacts', contact_property_history: 'Contact Property History',
+        sales_visits: 'Sales Visits',
+    };
+
+    searchInput.addEventListener('input', () => {
+        clearTimeout(searchTimer);
+        const q = searchInput.value.trim();
+        if (q.length < 2) { resultsBox.style.display = 'none'; return; }
+        searchTimer = setTimeout(() => {
+            fetch(`/${companyKey}/customers/search?search=${encodeURIComponent(q)}&status=`)
+                .then(r => r.json())
+                .then(data => {
+                    const rows = (data.customers || []).filter(c => c.id !== sourceId);
+                    if (rows.length === 0) {
+                        resultsBox.innerHTML = '<div class="empty">No matches.</div>';
+                        resultsBox.style.display = 'block';
+                        return;
+                    }
+                    resultsBox.innerHTML = rows.map(c => `
+                        <div class="search-result-row" data-id="${c.id}">
+                            <div><strong>${esc(c.property_name)}</strong>
+                                <span style="color:#888; font-size:.85rem;"> ${esc(c.city || '')} ${esc(c.state || '')}</span>
+                            </div>
+                            <span style="color:#888; font-size:.85rem;">${esc(c.status)}</span>
+                        </div>
+                    `).join('');
+                    resultsBox.style.display = 'block';
+                    resultsBox.querySelectorAll('.search-result-row').forEach(row => {
+                        row.addEventListener('click', () => selectTarget(parseInt(row.dataset.id, 10), row));
+                    });
+                })
+                .catch(() => {});
+        }, 300);
+    });
+
+    function selectTarget(targetId, rowEl) {
+        resultsBox.querySelectorAll('.search-result-row').forEach(r => r.classList.remove('selected'));
+        rowEl.classList.add('selected');
+        fetch(`/${companyKey}/customers/merge_preview?source_id=${sourceId}&target_id=${targetId}`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) { return; }
+                compareGrid.innerHTML = renderCol('source', data.source) + renderCol('target', data.target);
+                previewCard.style.display = 'block';
+                targetIdField.value = targetId;
+                confirmBtn.disabled = false;
+            })
+            .catch(() => {});
+    }
+
+    function renderCol(kind, c) {
+        const title = kind === 'source' ? 'This record (will be soft-deleted)' : 'Merges into this record';
+        const rows = Object.keys(TABLE_LABELS).map(t => `
+            <div class="field-row"><span class="label">${TABLE_LABELS[t]}</span><span>${c.counts[t] || 0}</span></div>
+        `).join('');
+        return `
+            <div class="compare-col ${kind}">
+                <h3>${title}</h3>
+                <div class="field-row"><span class="label">Property Name</span><span>${esc(c.property_name)}</span></div>
+                <div class="field-row"><span class="label">Address</span><span>${esc(c.address || '—')}</span></div>
+                <div class="field-row"><span class="label">City / State</span><span>${esc(c.city || '—')} ${esc(c.state || '')}</span></div>
+                <div class="field-row"><span class="label">Type</span><span>${esc(c.customer_type || '—')}</span></div>
+                <div class="field-row"><span class="label">Status</span><span>${esc(c.status)}</span></div>
+                ${rows}
+            </div>
+        `;
+    }
+})();
+</script>
+{% endblock %}
