@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Sales — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:1.25rem; flex-wrap:wrap; gap:.75rem; }
+    .page-header h1 { font-size:1.75rem; color:{{ branding.color_primary }}; }
+    .btn { display:inline-block; padding:.7rem 1.4rem; border-radius:4px; text-decoration:none; font-weight:500; border:none; font-size:.95rem; cursor:pointer; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-outline { background:white; color:{{ branding.color_primary }}; border:1px solid {{ branding.color_primary }}; }
+    .sales-grid { display:grid; grid-template-columns:1fr 1fr; gap:1.25rem; }
+    @media (max-width:768px) { .sales-grid { grid-template-columns:1fr; } }
+    .card h2 { font-size:1rem; color:#444; margin-bottom:.9rem; }
+    .row-item { display:flex; justify-content:space-between; align-items:center; padding:.6rem 0; border-bottom:1px solid #f2f2f2; gap:.75rem; }
+    .row-item:last-child { border-bottom:none; }
+    .row-name { font-weight:500; }
+    .row-sub { font-size:.8rem; color:#888; }
+    .badge { display:inline-block; padding:.2rem .7rem; border-radius:10px; font-size:.76rem; font-weight:500; }
+    .badge-overdue { background:#fcebeb; color:#a32d2d; }
+    .badge-today { background:#fff3d6; color:#8a6100; }
+    .badge-dormant { background:#f1efe8; color:#5f5e5a; }
+    .empty { color:#aaa; padding:1rem 0; text-align:center; font-size:.9rem; }
+    .quick-actions { display:flex; gap:.75rem; flex-wrap:wrap; margin-bottom:1.5rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Sales</h1>
+    {% if session.user_role in ('admin', 'manager') %}
+    <a href="/{{ company_key }}/sales/approvals" class="btn btn-outline">
+        Approvals{% if pending_approvals %} ({{ pending_approvals }}){% endif %}
+    </a>
+    {% endif %}
+</div>
+
+<div class="quick-actions">
+    <a href="/{{ company_key }}/sales/prospects/new" class="btn btn-primary">+ New Prospect</a>
+    <a href="/{{ company_key }}/sales/contacts/new" class="btn btn-outline">+ New Contact</a>
+    <a href="/{{ company_key }}/sales/prospects" class="btn btn-outline">Prospects</a>
+    <a href="/{{ company_key }}/sales/contacts" class="btn btn-outline">Contacts</a>
+    <a href="/{{ company_key }}/sales/followups" class="btn btn-outline">Follow-Ups</a>
+</div>
+
+<div class="sales-grid">
+    <div class="card">
+        <h2>Follow-Ups Due Today / Overdue ({{ followups|length }})</h2>
+        {% for f in followups %}
+        <div class="row-item">
+            <div>
+                <div class="row-name">{{ f.property_name or 'Unknown property' }}</div>
+                <div class="row-sub">{{ f.visit_tag or '' }} — last visit {{ f.visit_date.strftime('%b %-d, %Y') if f.visit_date else '—' }}</div>
+            </div>
+            <div style="display:flex; align-items:center; gap:.5rem;">
+                <span class="badge {{ 'badge-overdue' if f.is_overdue else 'badge-today' }}">
+                    {{ 'Overdue' if f.is_overdue else 'Today' }}
+                </span>
+                <a href="/{{ company_key }}/sales/visits/log?property_type={{ f.property_type }}&property_id={{ f.property_id }}"
+                   class="btn btn-outline" style="padding:.4rem .8rem; font-size:.82rem;">Log Visit</a>
+            </div>
+        </div>
+        {% else %}
+        <div class="empty">Nothing due — you're caught up.</div>
+        {% endfor %}
+    </div>
+
+    <div class="card">
+        <h2>Dormant Customers ({{ dormant|length }})</h2>
+        {% for d in dormant %}
+        <div class="row-item">
+            <div>
+                <div class="row-name">{{ d.name }}</div>
+                <div class="row-sub">
+                    {% if d.last_service_date %}Last job: {{ d.last_service_date.strftime('%b %-d, %Y') }} ({{ d.days }} days ago)
+                    {% else %}Never serviced{% endif %}
+                </div>
+            </div>
+            <a href="/{{ company_key }}/sales/visits/log?property_type=customer&property_id={{ d.id }}&investigate=1"
+               class="btn btn-outline" style="padding:.4rem .8rem; font-size:.82rem;">Investigate</a>
+        </div>
+        {% else %}
+        <div class="empty">No dormant customers past this company's threshold.</div>
+        {% endfor %}
+    </div>
+
+    <div class="card" style="grid-column:1 / -1;">
+        <h2>Recent Visits</h2>
+        {% for v in recent_visits %}
+        <div class="row-item">
+            <div>
+                <div class="row-name">
+                    {% if v.property_type == 'prospect' %}
+                    <a href="/{{ company_key }}/sales/prospects/{{ v.property_id }}"
+                       style="color:{{ branding.color_primary }}; text-decoration:none;">{{ v.property_name or 'Unknown property' }}</a>
+                    <span class="row-sub">○ prospect</span>
+                    {% else %}
+                    <a href="/{{ company_key }}/customers/{{ v.property_id }}"
+                       style="color:{{ branding.color_primary }}; text-decoration:none;">{{ v.property_name or 'Unknown property' }}</a>
+                    <span class="row-sub">✓ customer</span>
+                    {% endif %}
+                </div>
+                <div class="row-sub">{{ v.visit_tag or '' }} — {{ v.notes[:80] ~ '…' if v.notes and v.notes|length > 80 else (v.notes or '') }}</div>
+            </div>
+            <div class="row-sub">{{ v.visit_date.strftime('%b %-d') if v.visit_date else '' }} · {{ v.created_by }}</div>
+        </div>
+        {% else %}
+        <div class="empty">No visits logged yet.</div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

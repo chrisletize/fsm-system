@@ -887,6 +887,120 @@ touches the WO list's date/tech filters.
 
 ---
 
+D-086 — Increment 3.5 (Sales CRM, directive §4.5, migration 025). Schema decisions
+built against `docs/SALES-SYSTEM.md` column-for-column, with deliberate additions:
+
+- Every new table gets the full six-column audit+soft-delete set (created_at/by,
+  updated_at/by, deleted_at/by) per CLAUDE.md's blanket rule, even where the spec's
+  own DDL omitted `deleted_at` (`sales_visits`, `approval_queue`) or the full set
+  (`visit_tags_config`, `dormancy_alerts_config`) — matching `catalog_items`'
+  existing precedent of `is_active` (business toggle) and `deleted_at` (actual
+  removal) coexisting on the same table. `contact_property_history` is the one
+  deliberate exception: an append-only log, `created_at`/`created_by` only, same
+  convention as `estimate_status_history`/`work_order_status_history` — a log entry
+  is never edited or soft-deleted, only added to.
+- `sales_prospects.customer_id` is dual-purpose, matching the spec's own narrative
+  exactly: before conversion, if `is_former_customer`, it links to the customer
+  record they used to be; after conversion (`converted_to_customer = TRUE`), the
+  approval workflow populates the same column with the newly created customer's id
+  (spec's own words: "Prospect record gets customer_id field populated"). One
+  column serves both cases because they're mutually exclusive in practice.
+- `dormancy_alerts_config` is seeded company-aware via `current_database()`, same
+  technique migration 009 used for `company_settings` — one script, run identically
+  against all four DBs, produces the right `alert_after_weeks` per company (GAG 8wk
+  / KC 3wk / CTS 4wk / KSF 3wk, per directive + the spec's own rationale: GAG's
+  multi-year resurfacing cycle vs. Kleanit's high-volume regular cleaning). Verified
+  live against all four DBs at migration time.
+- `property_id`/`property_type` polymorphism (`sales_contacts.current_property_id`,
+  `sales_visits.property_id`, `contact_property_history.property_id`, each paired
+  with a `'prospect'`/`'customer'` type column) has no FK on either column, same
+  non-FK pattern as `work_order_techs.username`/`callback_responsible_username`
+  elsewhere in this schema — a column that can point into either of two tables
+  can't be a foreign key to either one.
+- `approval_queue.requires_cross_db_sync`/`target_databases` are kept as unused
+  Phase-2 columns (cross-database contact sync is explicitly "not in MVP" per the
+  spec) — present so a future increment doesn't need a schema change, but nothing
+  in this increment writes them.
+
+D-087 — Increment 3.5 (Sales CRM), behavior/route decisions not specified by the
+directive's own text:
+
+- **`approval_queue` scope is `convert_prospect` only** this increment. The spec's
+  other example `request_type` (`add_contact` — a salesperson updating an existing
+  real customer's contact through approval) isn't in the directive's §4.5 route
+  list, and `sales_contacts` is a fully sales-owned table regardless of whether
+  `current_property_type` is `'prospect'` or `'customer'` — so ordinary
+  `sales_contacts` CRUD never needs an approval step; only the prospect-to-customer
+  conversion ever touches the real `customers`/`customer_contacts` tables.
+- **The directive's "reject/edit with notes" is folded into one approve action**,
+  not a separate `'edited'` status. The manager's approval form lets them adjust
+  property name/type/address/management company inline before submitting; clicking
+  Approve creates the customer with whatever is in the form at that moment. An edit
+  that isn't approved is just a rejection with notes explaining what needed to
+  change — there's no case where "edited, not yet approved" is a useful state to
+  sit in, so `approval_queue.status` stays `pending`/`approved`/`rejected` in
+  practice (the `'edited'` value from the spec's own CHECK constraint is kept in
+  the migration for schema completeness but this increment never writes it).
+- **Weekly report recipients** = `company_settings.alert_email` (if set) + every
+  active admin/manager user with this company in their `company_access` (queried
+  from `fieldkit_getagrip.users`, the canonical source per D-003) — directive text:
+  "Monday email to alert_email + all managers/admins for the company." Data
+  (visit/prospect/dormancy counts) is always computed and written to `job_runs`
+  regardless of the master switch, same `_job_alerts_enabled_and_recipient` gate
+  every other scheduled email in this build already uses — only the send itself is
+  conditional.
+- **Dormant-customer "Dismiss"** (mentioned in the spec's own mockup) was not
+  built — the directive's route list for 3.5 only asks for "dormant customers list
+  computed from the recency data vs the threshold" on the dashboard, not a
+  persisted dismiss state. Chris O's "Investigate" action (pre-fills the visit-log
+  form with `is_dormant_investigation` checked) is the only dormant-list
+  interaction this increment implements.
+- **Unified property search** (`GET /<company>/sales/search`) is a live AJAX
+  endpoint against the DB, not a client-side preloaded combobox like the existing
+  `restricted_combo_field` macro uses elsewhere — getagrip alone has 5,307
+  customers (per the 3.2 rating run), too many to embed in a page's `data-options`
+  attribute. A small standalone type-ahead script (not the shared
+  `js-combo-restricted` brick, which assumes a bounded preloaded option list) is
+  duplicated across the two templates that need it (contact form's property
+  picker, visit-log form's property picker) rather than building a new shared
+  brick this increment, matching this build's existing pattern of small
+  per-usage JS over premature shared abstractions.
+- Responsive verification at 768px (directive: "Chris O uses a tablet... verify at
+  768px") was done by CSS review — every new grid layout collapses to a single
+  column under a `@media (max-width:768px)` breakpoint, matching `base.html`'s
+  existing responsive pattern — not a live browser walkthrough. Flagged here as a
+  disclosed gap, not a silent skip.
+- Pre-existing, not touched: `app.py`/`base.html` already check `session.user_role`
+  against an `'office'` role in several places (e.g. the Work Orders nav link,
+  `workorder_dupe_check`), but the `users.role` CHECK constraint
+  (`01_core_tables.sql`) never included `'office'` — only
+  `admin`/`manager`/`salesperson`/`technician` are real roles. Those checks are
+  simply unreachable for any real user; noticed while adding the Sales nav link
+  next to the existing Estimates one, not something this increment introduced or
+  fixed.
+
+**Migration:** 025 (`025_sales_crm.sql`), applied to all four DBs, verified
+idempotent (re-run against getagrip produced only `NOTICE: ... already exists,
+skipping` and `INSERT 0 0`). Pre-migration backups in `~/db-backups/2026-09-20e/`.
+
+**Smoke test:** `tests/smoke_sales_crm.py` — 40/40 checks: prospect CRUD + search,
+contact CRUD + `contact_property_history` open/close on property change, visit
+logging with tag-driven follow-up date auto-calculation, dormancy-reason
+validation, a never-serviced customer appearing in the dormant list, the weekly
+report computing real data with alerts off and actually emailing (mocked) with
+alerts on, the full convert → pending approval → manager notification → approve
+→ customer+contact creation → prospect-linked chain, and a separate reject-with-
+notes path. Updated `smoke_scheduled_jobs.py`'s `job_weekly_sales_report`
+assertions, which predated this increment and still expected the old
+Stage-3-not-built-yet `'skipped'` stub — same category of fix as D-083, a prior
+test that didn't know a placeholder had become real. Full 20-file regression
+suite re-run clean.
+
+**Deferred:** nothing from this increment's own scope (see D-087 for what was
+deliberately left out as directive-scope decisions, not deferrals).
+
+---
+
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:
 #33 (OPS/VendorCafe export templates), #50 (SMS alerts via Twilio), and Stage 5.6
 (ServiceFusion price-list exports, company legal names/remit-to/reply-to/alert emails).

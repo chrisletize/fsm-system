@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block title %}{% if contact %}Edit{% else %}New{% endif %} Contact — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { margin-bottom:1.5rem; }
+    .page-header h1 { font-size:1.6rem; color:{{ branding.color_primary }}; }
+    .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:1.1rem 1.5rem; margin-bottom:1.5rem; }
+    @media (max-width:768px) { .form-grid { grid-template-columns:1fr; } }
+    .form-group { display:flex; flex-direction:column; gap:.35rem; }
+    .form-group.full { grid-column:1 / -1; }
+    .form-group label { font-size:.85rem; font-weight:600; color:#555; }
+    input[type=text], select, textarea {
+        padding:.6rem .75rem; border:1px solid #ddd; border-radius:4px; font-size:.92rem; font-family:inherit;
+    }
+    .btn { display:inline-block; padding:.6rem 1.2rem; border-radius:4px; text-decoration:none;
+           font-weight:500; cursor:pointer; border:none; font-size:.9rem; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-secondary { background:#6c757d; color:white; }
+    .flash.error { background:#fee; color:#c33; border:1px solid #fcc; padding:.8rem 1rem; border-radius:4px; margin-bottom:1.25rem; }
+    .form-actions { margin-top:1.5rem; display:flex; gap:.75rem; align-items:center; }
+    .ac-wrap { position:relative; }
+    .ac-panel { display:none; position:absolute; top:100%; left:0; right:0; background:white; border:1px solid #ddd;
+                border-radius:4px; max-height:220px; overflow-y:auto; z-index:20; box-shadow:0 4px 10px rgba(0,0,0,.08); }
+    .ac-panel.open { display:block; }
+    .ac-item { padding:.55rem .75rem; cursor:pointer; font-size:.9rem; }
+    .ac-item:hover, .ac-item.active { background:#f5f5f5; }
+    .history-table { width:100%; border-collapse:collapse; margin-top:.5rem; }
+    .history-table th { text-align:left; padding:.5rem; font-size:.75rem; text-transform:uppercase; color:#888; border-bottom:1px solid #eee; }
+    .history-table td { padding:.5rem; border-bottom:1px solid #f2f2f2; font-size:.86rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header"><h1>{% if contact %}Edit {{ contact.first_name }} {{ contact.last_name }}{% else %}New Contact{% endif %}</h1></div>
+
+{% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+
+<form method="POST" class="card">
+    {% if return_to %}<input type="hidden" name="return_to" value="{{ return_to }}">{% endif %}
+    <div class="form-grid">
+        <div class="form-group">
+            <label>First Name <span style="color:#999;font-weight:400;">(required)</span></label>
+            <input type="text" name="first_name" value="{{ contact.first_name if contact else '' }}" required>
+        </div>
+        <div class="form-group">
+            <label>Last Name <span style="color:#999;font-weight:400;">(required)</span></label>
+            <input type="text" name="last_name" value="{{ contact.last_name if contact else '' }}" required>
+        </div>
+        <div class="form-group">
+            <label>Title</label>
+            <input type="text" name="title" value="{{ contact.title if contact else '' }}" placeholder="Property Manager, Maintenance Supervisor…">
+        </div>
+        <div class="form-group full">
+            <label>Property</label>
+            <div class="ac-wrap">
+                <input type="text" id="propertySearch" autocomplete="off"
+                       value="{{ prefill_property_name or '' }}"
+                       placeholder="Type a property name…">
+                <div class="ac-panel" id="propertyPanel"></div>
+            </div>
+            <input type="hidden" name="current_property_id" id="propertyIdInput" value="{{ prefill_property_id or '' }}">
+            <input type="hidden" name="current_property_type" id="propertyTypeInput" value="{{ prefill_property_type or '' }}">
+        </div>
+        <div class="form-group">
+            <label>Office Phone</label>
+            <input type="text" name="office_phone" value="{{ contact.office_phone if contact else '' }}">
+        </div>
+        <div class="form-group">
+            <label>Office Email</label>
+            <input type="text" name="office_email" value="{{ contact.office_email if contact else '' }}">
+        </div>
+        <div class="form-group">
+            <label>Personal Phone</label>
+            <input type="text" name="personal_phone" value="{{ contact.personal_phone if contact else '' }}">
+        </div>
+        <div class="form-group">
+            <label>Personal Email</label>
+            <input type="text" name="personal_email" value="{{ contact.personal_email if contact else '' }}">
+        </div>
+        <div class="form-group full">
+            <label>Notes</label>
+            <textarea name="notes" rows="3">{{ contact.notes if contact else '' }}</textarea>
+        </div>
+    </div>
+    <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Save</button>
+        <a href="{{ return_to or '/' + company_key + '/sales/contacts' }}" class="btn btn-secondary">Cancel</a>
+    </div>
+</form>
+
+{% if contact and history %}
+<div class="card" style="margin-top:1.25rem;">
+    <h2 style="font-size:1rem;color:#444;margin-bottom:.5rem;">Property History</h2>
+    <table class="history-table">
+        <thead><tr><th>Property</th><th>Started</th><th>Ended</th><th>Notes</th></tr></thead>
+        <tbody>
+            {% for h in history %}
+            <tr>
+                <td>{{ h.property_name or '—' }}</td>
+                <td>{{ h.started_date.strftime('%b %-d, %Y') if h.started_date else '—' }}</td>
+                <td>{{ h.ended_date.strftime('%b %-d, %Y') if h.ended_date else 'Current' }}</td>
+                <td>{{ h.notes or '' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<script>
+(function() {
+    var input = document.getElementById('propertySearch');
+    var panel = document.getElementById('propertyPanel');
+    var idInput = document.getElementById('propertyIdInput');
+    var typeInput = document.getElementById('propertyTypeInput');
+    var timer = null;
+
+    function esc(s) {
+        return String(s).replace(/[&<>"']/g, function(c){
+            return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+        });
+    }
+    function close() { panel.classList.remove('open'); panel.innerHTML = ''; }
+    function search(q) {
+        fetch('/{{ company_key }}/sales/search?q=' + encodeURIComponent(q))
+            .then(function(r){ return r.json(); })
+            .then(function(data){
+                var results = data.results || [];
+                if (results.length === 0) { close(); return; }
+                panel.innerHTML = results.map(function(r){
+                    var marker = r.type === 'prospect' ? '○' : '✓';
+                    return '<div class="ac-item" data-id="' + r.id + '" data-type="' + r.type + '" data-name="' + esc(r.name) + '">' +
+                           marker + ' ' + esc(r.name) + (r.city ? ' — ' + esc(r.city) : '') + '</div>';
+                }).join('');
+                panel.classList.add('open');
+            });
+    }
+    input.addEventListener('input', function() {
+        idInput.value = ''; typeInput.value = '';
+        var q = input.value.trim();
+        clearTimeout(timer);
+        if (q.length < 2) { close(); return; }
+        timer = setTimeout(function(){ search(q); }, 200);
+    });
+    input.addEventListener('focus', function() { if (input.value.trim().length >= 2) search(input.value.trim()); });
+    panel.addEventListener('mousedown', function(e) {
+        var item = e.target.closest('.ac-item');
+        if (!item) return;
+        e.preventDefault();
+        input.value = item.dataset.name;
+        idInput.value = item.dataset.id;
+        typeInput.value = item.dataset.type;
+        close();
+    });
+    input.addEventListener('blur', function() { setTimeout(close, 150); });
+})();
+</script>
+{% endblock %}

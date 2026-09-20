@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Sales Approvals — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { margin-bottom:1.25rem; }
+    .page-header h1 { font-size:1.75rem; color:{{ branding.color_primary }}; }
+    .approval-card { border:1px solid #eee; border-radius:8px; padding:1.1rem; margin-bottom:1rem; }
+    .approval-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:.75rem; flex-wrap:wrap; gap:.5rem; }
+    .approval-head h3 { font-size:1.05rem; color:#333; }
+    .badge { display:inline-block; padding:.2rem .7rem; border-radius:10px; font-size:.76rem; font-weight:500; }
+    .badge-pending { background:#fff3d6; color:#8a6100; }
+    .badge-approved { background:#eaf3de; color:#3b6d11; }
+    .badge-rejected { background:#fcebeb; color:#a32d2d; }
+    .meta { font-size:.85rem; color:#888; margin-bottom:.75rem; }
+    .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:.75rem 1rem; margin-bottom:.9rem; }
+    @media (max-width:768px) { .form-grid { grid-template-columns:1fr; } }
+    .form-group { display:flex; flex-direction:column; gap:.3rem; }
+    .form-group label { font-size:.78rem; font-weight:600; color:#666; }
+    input[type=text], select, textarea { padding:.5rem .65rem; border:1px solid #ddd; border-radius:4px; font-size:.88rem; font-family:inherit; }
+    .contacts-list { font-size:.85rem; color:#555; margin-bottom:.75rem; }
+    .btn { display:inline-block; padding:.55rem 1.1rem; border-radius:4px; text-decoration:none; font-weight:500; border:none; font-size:.87rem; cursor:pointer; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-danger { background:#a32d2d; color:white; }
+    .approval-actions { display:flex; gap:.6rem; flex-wrap:wrap; align-items:flex-end; }
+    .empty { color:#aaa; padding:2rem; text-align:center; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header"><h1>Sales Approvals</h1></div>
+
+{% for a in approvals %}
+<div class="approval-card">
+    <div class="approval-head">
+        <h3>Convert prospect "{{ a.target_name }}" to customer</h3>
+        <span class="badge badge-{{ a.status }}">{{ a.status|capitalize }}</span>
+    </div>
+    <div class="meta">
+        Submitted by {{ a.submitted_by }} on {{ a.submitted_at.strftime('%b %-d, %Y') if a.submitted_at else '—' }}
+        {% if a.status != 'pending' %} · reviewed by {{ a.reviewed_by }} on {{ a.reviewed_at.strftime('%b %-d, %Y') if a.reviewed_at else '—' }}{% endif %}
+    </div>
+    {% if a.request_details.submitted_reason %}<div class="meta">Note: {{ a.request_details.submitted_reason }}</div>{% endif %}
+    <div class="contacts-list">
+        {% for c in a.request_details.contacts %}
+        {{ c.first_name }} {{ c.last_name }}{% if c.title %} ({{ c.title }}){% endif %}
+        {% if c.id == a.request_details.primary_contact_id %}— primary{% endif %}<br>
+        {% else %}
+        No contacts on file.
+        {% endfor %}
+    </div>
+
+    {% if a.status == 'pending' %}
+    <form method="POST" action="/{{ company_key }}/sales/approvals/{{ a.id }}/approve">
+        <div class="form-grid">
+            <div class="form-group"><label>Property Name</label><input type="text" name="property_name" value="{{ a.request_details.prospect_name }}"></div>
+            <div class="form-group">
+                <label>Customer Type</label>
+                <select name="customer_type">
+                    {% for t in ('Multi Family', 'Contractors', 'Residential', 'Commercial') %}
+                    <option value="{{ t }}" {% if a.request_details.customer_type == t %}selected{% endif %}>{{ t }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group"><label>Address</label><input type="text" name="address" value="{{ a.request_details.address or '' }}"></div>
+            <div class="form-group"><label>City</label><input type="text" name="city" value="{{ a.request_details.city or '' }}"></div>
+            <div class="form-group"><label>State</label><input type="text" name="state" maxlength="2" value="{{ a.request_details.state or '' }}"></div>
+            <div class="form-group"><label>Zip</label><input type="text" name="zip" value="{{ a.request_details.zip or '' }}"></div>
+            <div class="form-group">
+                <label>Management Company</label>
+                <select name="management_company_id">
+                    <option value="">— None —</option>
+                    {% for mc in management_companies %}
+                    <option value="{{ mc.id }}" {% if a.request_details.management_company_id == mc.id %}selected{% endif %}>{{ mc.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group full" style="grid-column:1/-1;"><label>Review Notes</label><textarea name="review_notes" rows="2"></textarea></div>
+        </div>
+        <div class="approval-actions">
+            <button type="submit" class="btn btn-primary">Approve &amp; Create Customer</button>
+        </div>
+    </form>
+    <form method="POST" action="/{{ company_key }}/sales/approvals/{{ a.id }}/reject" style="margin-top:.6rem;"
+          onsubmit="return confirm('Reject this conversion request?');">
+        <div class="form-group" style="margin-bottom:.5rem;"><label>Rejection note (required)</label><textarea name="review_notes" rows="2" required></textarea></div>
+        <button type="submit" class="btn btn-danger">Reject</button>
+    </form>
+    {% elif a.review_notes %}
+    <div class="meta">Review notes: {{ a.review_notes }}</div>
+    {% endif %}
+</div>
+{% else %}
+<div class="empty">No approval requests yet.</div>
+{% endfor %}
+{% endblock %}

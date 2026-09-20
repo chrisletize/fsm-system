@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+{% block title %}Log Visit — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { margin-bottom:1.25rem; }
+    .page-header h1 { font-size:1.5rem; color:{{ branding.color_primary }}; }
+    .sub { color:#888; font-size:.9rem; }
+    .form-group { display:flex; flex-direction:column; gap:.4rem; margin-bottom:1.25rem; }
+    .form-group label { font-size:.9rem; font-weight:600; color:#555; }
+    input[type=text], select, textarea {
+        padding:.75rem .9rem; border:1px solid #ddd; border-radius:6px; font-size:1rem; font-family:inherit;
+    }
+    .btn { display:inline-block; padding:.85rem 1.4rem; border-radius:6px; text-decoration:none;
+           font-weight:600; cursor:pointer; border:none; font-size:1rem; min-height:44px; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; width:100%; }
+    .btn-secondary { background:#6c757d; color:white; }
+    .flash.error { background:#fee; color:#c33; border:1px solid #fcc; padding:.8rem 1rem; border-radius:4px; margin-bottom:1.25rem; }
+    .tag-grid { display:grid; grid-template-columns:1fr 1fr; gap:.6rem; }
+    @media (min-width:600px) { .tag-grid { grid-template-columns:1fr 1fr 1fr; } }
+    .tag-btn { min-height:56px; border:2px solid #ddd; border-radius:8px; background:white; cursor:pointer;
+               font-size:.9rem; font-weight:600; color:#444; padding:.5rem; text-align:center; }
+    .tag-btn.selected { border-color:{{ branding.color_primary }}; background:{{ branding.color_primary }}; color:white; }
+    .checkbox-row { display:flex; align-items:center; gap:.6rem; }
+    .checkbox-row input[type=checkbox] { width:22px; height:22px; }
+    .dormant-block { border:1px solid #f0c5c5; background:#fff6f6; border-radius:8px; padding:1rem; margin-top:.5rem; display:none; }
+    .dormant-block.open { display:block; }
+    .ac-wrap { position:relative; }
+    .ac-panel { display:none; position:absolute; top:100%; left:0; right:0; background:white; border:1px solid #ddd;
+                border-radius:4px; max-height:220px; overflow-y:auto; z-index:20; box-shadow:0 4px 10px rgba(0,0,0,.08); }
+    .ac-panel.open { display:block; }
+    .ac-item { padding:.65rem .75rem; cursor:pointer; font-size:.95rem; }
+    .ac-item:hover, .ac-item.active { background:#f5f5f5; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Log Visit</h1>
+    {% if property_name %}<div class="sub">{{ property_name }} {% if property_type == 'prospect' %}○ prospect{% else %}✓ customer{% endif %}</div>{% endif %}
+</div>
+
+{% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+
+<form method="POST" class="card" id="visitForm">
+    <div class="form-group">
+        <label>Property {% if not property_name %}<span style="color:#999;font-weight:400;">(search below)</span>{% endif %}</label>
+        {% if property_name %}
+        <input type="text" value="{{ property_name }}" disabled>
+        <input type="hidden" name="property_id" value="{{ property_id }}">
+        <input type="hidden" name="property_type" value="{{ property_type }}">
+        {% else %}
+        <div class="ac-wrap">
+            <input type="text" id="propertySearch" autocomplete="off" placeholder="Type a property name…" required>
+            <div class="ac-panel" id="propertyPanel"></div>
+        </div>
+        <input type="hidden" name="property_id" id="propertyIdInput">
+        <input type="hidden" name="property_type" id="propertyTypeInput">
+        {% endif %}
+    </div>
+
+    <div class="form-group">
+        <label>Who did you meet?</label>
+        <select name="contact_id" id="contactSelect">
+            <option value="">— No one / didn't get a name —</option>
+            {% for c in contacts %}
+            <option value="{{ c.id }}" {% if c.id == last_contact_id %}selected{% endif %}>{{ c.first_name }} {{ c.last_name }}{% if c.title %} ({{ c.title }}){% endif %}</option>
+            {% endfor %}
+        </select>
+        {% if not property_name %}<div class="sub">Pick a property first to see its contacts.</div>{% endif %}
+    </div>
+
+    <div class="form-group">
+        <label>Visit Type</label>
+        <div class="tag-grid" id="tagGrid">
+            {% for t in tags %}
+            <button type="button" class="tag-btn" data-tag="{{ t.tag_name }}" data-days="{{ t.default_followup_days or '' }}">{{ t.tag_name }}</button>
+            {% endfor %}
+        </div>
+        <input type="hidden" name="visit_tag" id="visitTagInput">
+    </div>
+
+    <div class="form-group">
+        <label>Notes</label>
+        <textarea name="notes" rows="4" placeholder="What happened…"></textarea>
+    </div>
+
+    <div class="form-group">
+        <div class="checkbox-row">
+            <input type="checkbox" id="followUpNeeded" name="follow_up_needed" checked>
+            <label for="followUpNeeded" style="font-weight:400;">Follow-up needed</label>
+        </div>
+        <input type="text" name="follow_up_date" id="followUpDate" placeholder="YYYY-MM-DD (auto-filled from visit type)">
+    </div>
+
+    <div class="form-group">
+        <div class="checkbox-row">
+            <input type="checkbox" id="dormantCheck" name="is_dormant_investigation" {% if investigate %}checked{% endif %}>
+            <label for="dormantCheck" style="font-weight:400;">This is a dormant-customer investigation</label>
+        </div>
+        <div class="dormant-block {% if investigate %}open{% endif %}" id="dormantBlock">
+            <div class="form-group">
+                <label>Why did they go quiet?</label>
+                <textarea name="dormancy_reason" rows="3"></textarea>
+            </div>
+            <div class="checkbox-row">
+                <input type="checkbox" name="dormancy_reported_to_management" id="dormancyReported">
+                <label for="dormancyReported" style="font-weight:400;">Send to management (Monday report)</label>
+            </div>
+        </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary">Log Visit</button>
+</form>
+
+<script>
+(function() {
+    var tagGrid = document.getElementById('tagGrid');
+    var tagInput = document.getElementById('visitTagInput');
+    var followUpDate = document.getElementById('followUpDate');
+    tagGrid.addEventListener('click', function(e) {
+        var btn = e.target.closest('.tag-btn');
+        if (!btn) return;
+        tagGrid.querySelectorAll('.tag-btn').forEach(function(b){ b.classList.remove('selected'); });
+        btn.classList.add('selected');
+        tagInput.value = btn.dataset.tag;
+        if (btn.dataset.days && !followUpDate.value) {
+            var d = new Date();
+            d.setDate(d.getDate() + parseInt(btn.dataset.days, 10));
+            followUpDate.placeholder = d.toISOString().slice(0, 10) + ' (auto)';
+        }
+    });
+
+    var dormantCheck = document.getElementById('dormantCheck');
+    var dormantBlock = document.getElementById('dormantBlock');
+    function syncDormant() { dormantBlock.classList.toggle('open', dormantCheck.checked); }
+    dormantCheck.addEventListener('change', syncDormant);
+    syncDormant();
+
+    {% if not property_name %}
+    var input = document.getElementById('propertySearch');
+    var panel = document.getElementById('propertyPanel');
+    var idInput = document.getElementById('propertyIdInput');
+    var typeInput = document.getElementById('propertyTypeInput');
+    var timer = null;
+    function esc(s) {
+        return String(s).replace(/[&<>"']/g, function(c){
+            return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+        });
+    }
+    function close() { panel.classList.remove('open'); panel.innerHTML = ''; }
+    function search(q) {
+        fetch('/{{ company_key }}/sales/search?q=' + encodeURIComponent(q))
+            .then(function(r){ return r.json(); })
+            .then(function(data){
+                var results = data.results || [];
+                if (results.length === 0) { close(); return; }
+                panel.innerHTML = results.map(function(r){
+                    var marker = r.type === 'prospect' ? '○' : '✓';
+                    return '<div class="ac-item" data-id="' + r.id + '" data-type="' + r.type + '" data-name="' + esc(r.name) + '">' +
+                           marker + ' ' + esc(r.name) + (r.city ? ' — ' + esc(r.city) : '') + '</div>';
+                }).join('');
+                panel.classList.add('open');
+            });
+    }
+    input.addEventListener('input', function() {
+        idInput.value = ''; typeInput.value = '';
+        var q = input.value.trim();
+        clearTimeout(timer);
+        if (q.length < 2) { close(); return; }
+        timer = setTimeout(function(){ search(q); }, 200);
+    });
+    panel.addEventListener('mousedown', function(e) {
+        var item = e.target.closest('.ac-item');
+        if (!item) return;
+        e.preventDefault();
+        input.value = item.dataset.name;
+        idInput.value = item.dataset.id;
+        typeInput.value = item.dataset.type;
+        close();
+    });
+    input.addEventListener('blur', function() { setTimeout(close, 150); });
+    {% endif %}
+})();
+</script>
+{% endblock %}

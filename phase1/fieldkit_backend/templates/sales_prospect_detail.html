@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}{{ prospect.property_name }} — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:1.25rem; flex-wrap:wrap; gap:.75rem; }
+    .page-header h1 { font-size:1.6rem; color:{{ branding.color_primary }}; }
+    .sub { color:#888; font-size:.9rem; margin-top:.25rem; }
+    .btn { display:inline-block; padding:.6rem 1.2rem; border-radius:4px; text-decoration:none;
+           font-weight:500; cursor:pointer; border:none; font-size:.9rem; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-outline { background:white; color:{{ branding.color_primary }}; border:1px solid {{ branding.color_primary }}; }
+    .sales-grid { display:grid; grid-template-columns:1fr 1fr; gap:1.25rem; }
+    @media (max-width:768px) { .sales-grid { grid-template-columns:1fr; } }
+    .card h2 { font-size:1rem; color:#444; margin-bottom:.9rem; }
+    .row-item { padding:.6rem 0; border-bottom:1px solid #f2f2f2; }
+    .row-item:last-child { border-bottom:none; }
+    .row-sub { font-size:.8rem; color:#888; }
+    .badge { display:inline-block; padding:.2rem .7rem; border-radius:10px; font-size:.76rem; font-weight:500; }
+    .badge-pending { background:#fff3d6; color:#8a6100; }
+    .badge-converted { background:#eaf3de; color:#3b6d11; }
+    .badge-dormant { background:#fcebeb; color:#a32d2d; }
+    .empty { color:#aaa; padding:1rem 0; text-align:center; font-size:.9rem; }
+    .quick-actions { display:flex; gap:.75rem; flex-wrap:wrap; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>{{ prospect.property_name }}</h1>
+        <div class="sub">
+            {{ prospect.customer_type or '' }}
+            {% if prospect.management_company_name %} · {{ prospect.management_company_name }}{% endif %}
+            {% if prospect.is_former_customer %} · Former customer{% endif %}
+        </div>
+        {% if map_query %}
+        <div class="sub"><a href="https://www.google.com/maps/search/?api=1&query={{ map_query|urlencode }}" target="_blank" rel="noopener" style="color:{{ branding.color_primary }};">{{ prospect.address }}{% if prospect.city %}, {{ prospect.city }}, {{ prospect.state }}{% endif %} ↗</a></div>
+        {% endif %}
+    </div>
+    <div class="quick-actions">
+        <a href="/{{ company_key }}/sales/visits/log?property_type=prospect&property_id={{ prospect.id }}" class="btn btn-primary">Log Visit</a>
+        <a href="/{{ company_key }}/sales/prospects/{{ prospect.id }}/edit" class="btn btn-outline">Edit</a>
+        {% if prospect.converted_to_customer %}
+        <span class="badge badge-converted">Converted to Customer</span>
+        {% elif pending_approval %}
+        <span class="badge badge-pending">Conversion Pending Approval</span>
+        {% else %}
+        <a href="/{{ company_key }}/sales/prospects/{{ prospect.id }}/convert" class="btn btn-outline">Convert to Customer</a>
+        {% endif %}
+    </div>
+</div>
+
+<div class="sales-grid">
+    <div class="card">
+        <h2>Contacts</h2>
+        {% for c in contacts %}
+        <div class="row-item">
+            <div><strong>{{ c.first_name }} {{ c.last_name }}</strong>{% if c.title %} — {{ c.title }}{% endif %}</div>
+            <div class="row-sub">
+                {% if c.office_email or c.personal_email %}{{ c.office_email or c.personal_email }}{% endif %}
+                {% if c.office_phone or c.personal_phone %} · {{ c.office_phone or c.personal_phone }}{% endif %}
+            </div>
+            <a href="/{{ company_key }}/sales/contacts/{{ c.id }}/edit" style="font-size:.8rem; color:{{ branding.color_primary }};">Edit</a>
+        </div>
+        {% else %}
+        <div class="empty">No contacts yet.</div>
+        {% endfor %}
+        <div style="margin-top:.75rem;">
+            <a href="/{{ company_key }}/sales/contacts/new?property_type=prospect&property_id={{ prospect.id }}&return_to=/{{ company_key }}/sales/prospects/{{ prospect.id }}"
+               class="btn btn-outline" style="padding:.4rem .8rem; font-size:.82rem;">+ Add Contact</a>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Visit History</h2>
+        {% for v in visits %}
+        <div class="row-item">
+            <div>
+                <strong>{{ v.visit_date.strftime('%b %-d, %Y') if v.visit_date else '—' }}</strong>
+                {% if v.visit_tag %} — {{ v.visit_tag }}{% endif %}
+                {% if v.is_dormant_investigation %}<span class="badge badge-dormant">Dormancy</span>{% endif %}
+            </div>
+            {% if v.contact_first %}<div class="row-sub">Met: {{ v.contact_first }} {{ v.contact_last }}</div>{% endif %}
+            {% if v.notes %}<div class="row-sub">{{ v.notes }}</div>{% endif %}
+            {% if v.follow_up_needed %}
+            <div class="row-sub">Follow-up: {{ v.follow_up_date.strftime('%b %-d, %Y') if v.follow_up_date else '—' }}{% if v.follow_up_completed %} (done){% endif %}</div>
+            {% endif %}
+        </div>
+        {% else %}
+        <div class="empty">No visits logged yet.</div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

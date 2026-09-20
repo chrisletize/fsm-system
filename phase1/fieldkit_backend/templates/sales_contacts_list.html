@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Contacts — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:1.25rem; flex-wrap:wrap; gap:.75rem; }
+    .page-header h1 { font-size:1.75rem; color:{{ branding.color_primary }}; }
+    .toolbar { display:flex; gap:1rem; align-items:center; margin-bottom:1.25rem; flex-wrap:wrap; }
+    .toolbar input { padding:.6rem 1rem; border:1px solid #ddd; border-radius:4px; font-size:.92rem; }
+    .btn { display:inline-block; padding:.7rem 1.4rem; border-radius:4px; text-decoration:none; font-weight:500; border:none; font-size:.95rem; cursor:pointer; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-outline { background:white; color:{{ branding.color_primary }}; border:1px solid {{ branding.color_primary }}; }
+    table { width:100%; border-collapse:collapse; }
+    th { text-align:left; padding:.75rem; font-size:.8rem; text-transform:uppercase; color:#888; border-bottom:2px solid #eee; }
+    td { padding:.75rem; border-bottom:1px solid #f2f2f2; font-size:.92rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Contacts</h1>
+    <a href="/{{ company_key }}/sales/contacts/new" class="btn btn-primary">+ New Contact</a>
+</div>
+
+<form method="GET" class="toolbar">
+    <input type="text" name="search" value="{{ search }}" placeholder="Search name…">
+    <button type="submit" class="btn btn-outline">Filter</button>
+</form>
+
+<div class="card">
+    <table>
+        <thead><tr><th>Name</th><th>Title</th><th>Property</th><th>Phone</th><th>Email</th></tr></thead>
+        <tbody>
+            {% for c in contacts %}
+            <tr>
+                <td><a href="/{{ company_key }}/sales/contacts/{{ c.id }}/edit" style="color:{{ branding.color_primary }}; text-decoration:none; font-weight:500;">{{ c.first_name }} {{ c.last_name }}</a></td>
+                <td>{{ c.title or '—' }}</td>
+                <td>
+                    {% if c.current_property_name %}
+                    {{ c.current_property_name }} {% if c.current_property_type == 'prospect' %}○{% else %}✓{% endif %}
+                    {% else %}—{% endif %}
+                </td>
+                <td>{{ c.office_phone or c.personal_phone or '—' }}</td>
+                <td>{{ c.office_email or c.personal_email or '—' }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5" style="text-align:center; color:#aaa; padding:2rem;">No contacts yet.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

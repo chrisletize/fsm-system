@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Convert {{ prospect.property_name }} — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { margin-bottom:1.5rem; }
+    .page-header h1 { font-size:1.6rem; color:{{ branding.color_primary }}; }
+    .form-group { display:flex; flex-direction:column; gap:.35rem; margin-bottom:1.1rem; }
+    .form-group label { font-size:.85rem; font-weight:600; color:#555; }
+    select, textarea { padding:.6rem .75rem; border:1px solid #ddd; border-radius:4px; font-size:.92rem; font-family:inherit; width:100%; }
+    .btn { display:inline-block; padding:.6rem 1.2rem; border-radius:4px; text-decoration:none;
+           font-weight:500; cursor:pointer; border:none; font-size:.9rem; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-secondary { background:#6c757d; color:white; }
+    .summary-row { display:flex; justify-content:space-between; padding:.4rem 0; border-bottom:1px solid #f2f2f2; font-size:.9rem; }
+    .form-actions { margin-top:1.5rem; display:flex; gap:.75rem; align-items:center; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header"><h1>Convert to Customer</h1></div>
+
+<div class="card" style="margin-bottom:1.25rem;">
+    <div class="summary-row"><span>Property</span><strong>{{ prospect.property_name }}</strong></div>
+    <div class="summary-row"><span>Address</span><span>{{ prospect.address or '—' }}{% if prospect.city %}, {{ prospect.city }}, {{ prospect.state }}{% endif %}</span></div>
+    <div class="summary-row"><span>Type</span><span>{{ prospect.customer_type or '—' }}</span></div>
+</div>
+
+<form method="POST" class="card">
+    <div class="form-group">
+        <label>Primary Contact</label>
+        <select name="primary_contact_id">
+            <option value="">— None —</option>
+            {% for c in contacts %}
+            <option value="{{ c.id }}">{{ c.first_name }} {{ c.last_name }}{% if c.title %} ({{ c.title }}){% endif %}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="form-group">
+        <label>Note for the approving manager</label>
+        <textarea name="submitted_reason" rows="3" placeholder="e.g. Hot lead, wants immediate service"></textarea>
+    </div>
+    <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Submit for Approval</button>
+        <a href="/{{ company_key }}/sales/prospects/{{ prospect.id }}" class="btn btn-secondary">Cancel</a>
+    </div>
+</form>
+{% endblock %}

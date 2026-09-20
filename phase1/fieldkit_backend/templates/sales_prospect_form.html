@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}{% if prospect %}Edit{% else %}New{% endif %} Prospect — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { margin-bottom:1.5rem; }
+    .page-header h1 { font-size:1.6rem; color:{{ branding.color_primary }}; }
+    .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:1.1rem 1.5rem; margin-bottom:1.5rem; }
+    @media (max-width:768px) { .form-grid { grid-template-columns:1fr; } }
+    .form-group { display:flex; flex-direction:column; gap:.35rem; }
+    .form-group.full { grid-column:1 / -1; }
+    .form-group label { font-size:.85rem; font-weight:600; color:#555; }
+    input[type=text], select, textarea {
+        padding:.6rem .75rem; border:1px solid #ddd; border-radius:4px; font-size:.92rem; font-family:inherit;
+    }
+    .checkbox-row { display:flex; align-items:center; gap:.5rem; }
+    .btn { display:inline-block; padding:.6rem 1.2rem; border-radius:4px; text-decoration:none;
+           font-weight:500; cursor:pointer; border:none; font-size:.9rem; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-secondary { background:#6c757d; color:white; }
+    .flash.error { background:#fee; color:#c33; border:1px solid #fcc; padding:.8rem 1rem; border-radius:4px; margin-bottom:1.25rem; }
+    .form-actions { margin-top:1.5rem; display:flex; gap:.75rem; align-items:center; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header"><h1>{% if prospect %}Edit {{ prospect.property_name }}{% else %}New Prospect{% endif %}</h1></div>
+
+{% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+
+<form method="POST" class="card">
+    <div class="form-grid">
+        <div class="form-group">
+            <label>Property Name <span style="color:#999;font-weight:400;">(required)</span></label>
+            <input type="text" name="property_name" value="{{ prospect.property_name if prospect else '' }}" required>
+        </div>
+        <div class="form-group">
+            <label>Customer Type</label>
+            <select name="customer_type">
+                <option value="">— Select —</option>
+                {% for t in ('Multi Family', 'Contractors', 'Residential', 'Commercial') %}
+                <option value="{{ t }}" {% if prospect and prospect.customer_type == t %}selected{% endif %}>{{ t }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Address</label>
+            <input type="text" name="address" value="{{ prospect.address if prospect else '' }}">
+        </div>
+        <div class="form-group">
+            <label>City</label>
+            <input type="text" name="city" value="{{ prospect.city if prospect else '' }}">
+        </div>
+        <div class="form-group">
+            <label>State</label>
+            <input type="text" name="state" maxlength="2" value="{{ prospect.state if prospect else '' }}">
+        </div>
+        <div class="form-group">
+            <label>Zip</label>
+            <input type="text" name="zip" value="{{ prospect.zip if prospect else '' }}">
+        </div>
+        <div class="form-group">
+            <label>Management Company</label>
+            <select name="management_company_id">
+                <option value="">— None —</option>
+                {% for mc in management_companies %}
+                <option value="{{ mc.id }}" {% if prospect and prospect.management_company_id == mc.id %}selected{% endif %}>{{ mc.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Contractor Company Name</label>
+            <input type="text" name="contractor_company_name" value="{{ prospect.contractor_company_name if prospect else '' }}">
+        </div>
+        <div class="form-group">
+            <label>Active Projects</label>
+            <input type="text" name="active_projects" value="{{ prospect.active_projects if prospect else 0 }}">
+        </div>
+        <div class="form-group">
+            <label>&nbsp;</label>
+            <div class="checkbox-row">
+                <input type="checkbox" id="isFormer" name="is_former_customer" {% if prospect and prospect.is_former_customer %}checked{% endif %}>
+                <label for="isFormer" style="font-weight:400;">Former customer</label>
+            </div>
+        </div>
+        <div class="form-group">
+            <label>Former Customer — Last Job Date</label>
+            <input type="text" name="former_customer_last_job" placeholder="YYYY-MM-DD"
+                   value="{{ prospect.former_customer_last_job if prospect else '' }}">
+        </div>
+    </div>
+
+    <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Save</button>
+        <a href="{% if prospect %}/{{ company_key }}/sales/prospects/{{ prospect.id }}{% else %}/{{ company_key }}/sales/prospects{% endif %}" class="btn btn-secondary">Cancel</a>
+    </div>
+</form>
+{% endblock %}

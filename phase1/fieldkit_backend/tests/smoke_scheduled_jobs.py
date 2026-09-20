@@ -231,12 +231,18 @@ def main():
 
         job_uninvoiced('getagrip')
         job_eod_escalation('getagrip')
-        skip_summary = job_weekly_sales_report('getagrip')
-        check(f"weekly_sales_report reports skipped ({skip_summary})", skip_summary == 'skipped')
+        # Increment 3.5 built the Sales CRM for real -- this subcommand now
+        # always computes real data (visit/prospect counts) and only skips
+        # the email itself while scheduled_alerts_enabled is off (which it is
+        # here, restored at line ~205 above). See tests/smoke_sales_crm.py
+        # for the full weekly-report/email-path coverage.
+        report_summary = job_weekly_sales_report('getagrip')
+        check(f"weekly_sales_report computes real data, no email while alerts are off ({report_summary})",
+              'no email sent' in report_summary)
         cur.execute("SELECT status, summary FROM job_runs WHERE job_name = 'weekly_sales_report' AND company_key = 'getagrip' ORDER BY id DESC LIMIT 1")
         row = cur.fetchone()
-        check("weekly_sales_report job_runs row is skipped with an explanatory summary",
-              row['status'] == 'skipped' and 'Sales CRM' in row['summary'])
+        check("weekly_sales_report job_runs row is success with a real summary",
+              row['status'] == 'success' and 'visit(s)' in row['summary'])
 
         print("smoke_scheduled_jobs: /settings/company shows the panel + toggle route works")
         r = client.get('/getagrip/settings/company')

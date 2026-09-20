@@ -38,7 +38,8 @@ reporting until FieldKit's billing is complete.
 | Customer ratings | Built (3.2, migration 022): nightly A–F grade (payment timeliness + cancellation rate + job volume), manager override, badges on customer detail/WO form/estimate form/dispatch popover. Currently all grade A across all four companies — no real invoice/WO history exists yet. |
 | Recency report | Built (3.3, migration 023, `/reports/recency`): last-service date = GREATEST of WO history and imported `customer_job_dates`, bucketed 1-2/3-6/6-12/12+ months (boundaries matched to the Phase 0 site), grouped by management company, PDF export. History-import script (`import_job_dates.py`) written and dry-run for real against production statements data — 258 customers/2,859 job dates would import for Get a Grip (the only company with statements job history); `--commit` on hold pending Chris's review. |
 | Callbacks | Built (3.4, migration 024): WO form's "This is a callback for…" combo pre-fills location/site/lines from the prior job, defaults Responsible Tech to its lead tech; badges on dispatch/WO list/customer detail/WO detail; `/reports/callbacks` grouped by responsible tech with paid-vs-unpaid detection (no payroll engine — just exposes the data); customer rating gets a new signed `callback_score` (-3 per callback, trailing 12mo). |
-| Sales CRM, payment methods, dashboard stats | Not built |
+| Sales CRM | Built (3.5, migration 025): prospects/contacts/visits/approval-queue CRUD under `/sales`, mobile quick-tap visit logging, follow-ups, unified customer+prospect search, dormant-customer detection reusing the recency-report formula, convert-to-customer via manager approval (creates customer + contacts in one transaction), Monday weekly report email. See below. |
+| Payment methods, dashboard stats | Not built |
 
 This table matches `FIELDKIT_BUILD_DIRECTIVE_2026-09.md` §0.2 — confirmed by grepping
 the full route list out of `app.py` (3,248 lines) and querying row counts in all four
@@ -81,8 +82,7 @@ review. Gated off for getagrip specifically (`COMPANIES_WITHOUT_EXTRACTION` in
 `app.py`): `/extraction` 404s, nav link/WO-form UI hidden, two unused catalog items
 deactivated. Nothing removed for the other three companies. See D-071.
 
-**Stage 3 — Estimates, ratings, sales CRM, callbacks**: in progress, per-increment as
-with Stage 2. Increment 3.1 (estimates + public estimate request form, migration 021)
+**Stage 3 — Estimates, ratings, sales CRM, callbacks: COMPLETE.** Increment 3.1 (estimates + public estimate request form, migration 021)
 complete — full Draft→Sent→Approved→Converted lifecycle, PDF/email send, decline
 with reason, convert-to-WO (a WO save flips the source estimate, not the navigation
 click), public no-login request form with honeypot + 5/hr per-IP rate limit, requests
@@ -99,8 +99,28 @@ names logged for Chris/Michele; the actual `--commit` import stays on hold per h
 2026-09-19 instruction. Increment 3.4 (Callbacks, migration 024) complete — self-
 referencing WO link with a required reason, prefill from the prior job, badges
 everywhere the directive lists, `/reports/callbacks` (paid vs. unpaid, no payroll
-engine), and a new signed `callback_score` folded into the customer rating. Next:
-Increment 3.5 (Sales CRM) — the largest remaining piece of Stage 3.
+engine), and a new signed `callback_score` folded into the customer rating.
+Increment 3.5 (Sales CRM, migration 025) complete — the largest piece of Stage 3:
+prospects/contacts/visits/approval-queue schema built against
+`docs/SALES-SYSTEM.md`; dashboard/prospect/contact/visit-log/follow-ups/approvals
+routes under `/<company>/sales/…`; mobile quick-tap visit logging with tag-driven
+follow-up dates; unified customer+prospect search (live AJAX, not a preloaded
+combobox — getagrip alone has 5,307 customers); dormant-customer detection
+reusing the exact recency-report last-service-date formula against each
+company's own `dormancy_alerts_config` threshold; prospect-to-customer conversion
+gated through a manager `approval_queue` review (never a direct sales-side write
+to `customers`); the Increment 2.5 `job_weekly_sales_report` placeholder now does
+the real Monday report. Stage 3 is now complete — all five increments (3.1–3.5)
+done, smoke-tested, and the full 20-file regression suite green.
+
+Stage 3 exit criteria from the directive: Chris O logs a visit in under a minute on
+a tablet (built, not yet exercised by Chris O himself — smoke-tested only); a
+prospect converts through approval into a real customer (done, smoke-tested); an
+estimate is sent and converted to a WO (done since 3.1); the Monday report arrives
+(built and smoke-tested with alerts forced on — real delivery still waits on a
+company having `scheduled_alerts_enabled` switched on, which all four don't yet,
+per Increment 2.5); ratings show on the board (done since 2.1/3.2). Next up:
+**Stage 4 — Dashboard, data quality, permissions sweep, help** (directive §5).
 
 Decisions Chris has already made for this build (delinquent threshold = 90 days past
 invoice date, FL tax left empty/exempt for Kleanit SF, SF-import receivables excluded

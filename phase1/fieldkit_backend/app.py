@@ -8458,11 +8458,26 @@ def job_eod_escalation(company_key):
 
 
 def job_weekly_sales_report(company_key):
-    """No sales CRM exists yet (Stage 3) -- this subcommand exists so cron
-    can call it without erroring, and records why it did nothing."""
+    """Monday activity summary (directive §4.5) -- see _send_weekly_sales_report
+    in the Sales CRM section below (Increment 3.5) for the actual query/email
+    logic; kept as a late-bound name here (same pattern as every other job_*
+    wrapper) since Python only needs it defined by call time, not by this
+    point in the file."""
     run_id = _job_run_start(company_key, 'weekly_sales_report')
-    _job_run_finish(company_key, run_id, 'skipped', 'Sales CRM not built yet (Stage 3) -- nothing to report.')
-    return 'skipped'
+    try:
+        data, recipients = _send_weekly_sales_report(company_key)
+        if recipients:
+            summary = (f"{data['total_visits']} visit(s), {data['new_prospects']} new prospect(s), "
+                       f"{len(data['dormant'])} dormant investigation(s) reported, "
+                       f"{data['pending_approvals']} pending approval(s). Emailed to {len(recipients)} recipient(s).")
+        else:
+            summary = (f"{data['total_visits']} visit(s), {data['new_prospects']} new prospect(s) computed; "
+                       f"no email sent (alerts disabled or no recipients configured).")
+        _job_run_finish(company_key, run_id, 'success', summary)
+        return summary
+    except Exception as e:
+        _job_run_finish(company_key, run_id, 'failed', f'{type(e).__name__}: {e}')
+        raise
 
 
 @app.route('/<company_key>/settings/company/scheduled-alerts', methods=['POST'])
@@ -9250,6 +9265,1004 @@ def estimate_request_create_customer(company_key, request_id):
     conn.commit(); cur.close(); conn.close()
     flash('Customer created from the estimate request.', 'success')
     return redirect(f'/{company_key}/estimates/new?customer_id={customer_id}')
+
+
+# ============================================================================
+# Sales CRM (Increment 3.5, directive §4.5, docs/SALES-SYSTEM.md)
+#
+# Built against the spec, trimmed to what the web app does well per the
+# directive's own instruction: no offline cache, no GPS-based proximity
+# search, no cross-database contact sync -- all explicitly Phase 2+/future in
+# the spec itself. Chris O / Mikey C never write directly to `customers` --
+# the ONLY path from sales data into the real customer database is
+# POST .../convert -> a pending approval_queue row -> a manager's explicit
+# approve, which creates the customer + contacts in one transaction (spec's
+# "Zero accidental corruption of customer database" success criterion).
+#
+# Scope decision (not in the spec's own text, logged as D-086): approval_queue
+# is only ever used for request_type='convert_prospect' in this increment.
+# The spec's other example request_type ('add_contact' — a salesperson
+# updating an EXISTING real customer's contact through approval) isn't in the
+# directive's §4.5 route list, and sales_contacts is a fully sales-owned
+# table regardless of whether current_property_type is 'prospect' or
+# 'customer' -- so ordinary sales_contacts CRUD never needs an approval step;
+# only the prospect-to-customer conversion touches `customers` itself.
+# ============================================================================
+
+SALES_ROLES          = ('admin', 'manager', 'salesperson')
+SALES_APPROVAL_ROLES = ('admin', 'manager')
+
+
+def _sales_company_managers(company_key):
+    """Admin/manager users with access to this company, for the weekly report
+    + approval notifications. Reads getagrip.users -- the canonical source for
+    login/company_access (D-003) -- never this company's own (often-empty)
+    copy of the users table."""
+    conn = get_db_connection('getagrip')
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT username, email, full_name FROM users
+        WHERE is_active = TRUE AND role IN ('admin', 'manager')
+          AND company_access @> %s::jsonb
+    """, (json.dumps([company_key]),))
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    return rows
+
+
+def _sales_property_name(cur, property_type, property_id):
+    if not property_type or not property_id:
+        return None
+    if property_type == 'customer':
+        cur.execute("SELECT property_name FROM customers WHERE id = %s", (property_id,))
+    else:
+        cur.execute("SELECT property_name FROM sales_prospects WHERE id = %s", (property_id,))
+    row = cur.fetchone()
+    return row['property_name'] if row else None
+
+
+def _sales_dormancy_threshold_weeks(cur):
+    cur.execute("""
+        SELECT alert_after_weeks FROM dormancy_alerts_config
+        WHERE deleted_at IS NULL AND is_active = TRUE LIMIT 1
+    """)
+    row = cur.fetchone()
+    return row['alert_after_weeks'] if row else None
+
+
+def _sales_dormant_customers(company_key):
+    """Active customers whose last service date -- the SAME GREATEST(work_orders,
+    customer_job_dates) formula the recency report uses (§4.3), so this list
+    can never disagree with /reports/recency -- is older than this company's
+    own dormancy_alerts_config threshold, or who have never been serviced at
+    all. Longest-dormant (and never-serviced) first."""
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    weeks = _sales_dormancy_threshold_weeks(cur)
+    if not weeks:
+        cur.close(); conn.close()
+        return []
+    cur.execute("""
+        SELECT c.id, c.property_name,
+               GREATEST(
+                   (SELECT MAX(wo.start_date) FROM work_orders wo
+                    WHERE wo.customer_id = c.id AND wo.deleted_at IS NULL
+                      AND wo.status IN ('Completed', 'Invoiced', 'Extraction Active')),
+                   (SELECT MAX(cjd.job_date) FROM customer_job_dates cjd
+                    WHERE cjd.customer_id = c.id AND cjd.deleted_at IS NULL)
+               ) AS last_service_date
+        FROM customers c
+        WHERE c.deleted_at IS NULL AND c.status = 'Active'
+    """)
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    today = date.today()
+    cutoff = today - timedelta(weeks=weeks)
+    dormant = []
+    for r in rows:
+        if r['last_service_date'] is None or r['last_service_date'] < cutoff:
+            days = (today - r['last_service_date']).days if r['last_service_date'] else None
+            dormant.append({'id': r['id'], 'name': r['property_name'],
+                             'last_service_date': r['last_service_date'], 'days': days})
+    dormant.sort(key=lambda x: (x['days'] is None, x['days'] or 0), reverse=True)
+    return dormant
+
+
+@app.route('/<company_key>/sales')
+@login_required
+@company_access_required
+@with_branding
+def sales_dashboard(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in SALES_ROLES:
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    today = date.today()
+    cur.execute("""
+        SELECT sv.id, sv.visit_date, sv.follow_up_date, sv.property_id, sv.property_type, sv.visit_tag
+        FROM sales_visits sv
+        WHERE sv.deleted_at IS NULL AND sv.follow_up_needed = TRUE AND sv.follow_up_completed = FALSE
+          AND sv.follow_up_date <= %s
+        ORDER BY sv.follow_up_date ASC
+    """, (today,))
+    followups = []
+    for r in cur.fetchall():
+        row = dict(r)
+        row['property_name'] = _sales_property_name(cur, row['property_type'], row['property_id'])
+        row['is_overdue'] = row['follow_up_date'] < today
+        followups.append(row)
+
+    cur.execute("""
+        SELECT sv.id, sv.visit_date, sv.property_id, sv.property_type, sv.visit_tag, sv.notes, sv.created_by
+        FROM sales_visits sv WHERE sv.deleted_at IS NULL
+        ORDER BY sv.created_at DESC LIMIT 15
+    """)
+    recent_visits = []
+    for r in cur.fetchall():
+        row = dict(r)
+        row['property_name'] = _sales_property_name(cur, row['property_type'], row['property_id'])
+        recent_visits.append(row)
+
+    cur.execute("""
+        SELECT COUNT(*) AS n FROM approval_queue WHERE status = 'pending' AND deleted_at IS NULL
+    """)
+    pending_approvals = cur.fetchone()['n']
+
+    dormant = _sales_dormant_customers(company_key)
+    cur.close(); conn.close()
+    return render_template('sales_dashboard.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        followups=followups, recent_visits=recent_visits, dormant=dormant,
+        pending_approvals=pending_approvals, today=today,
+    )
+
+
+@app.route('/<company_key>/sales/search')
+@login_required
+@company_access_required
+def sales_search(company_key):
+    """Unified property search: customers (✓) union prospects (○), for the
+    log-visit flow and general lookup. JSON endpoint, skips with_branding
+    per CLAUDE.md convention."""
+    if session.get('user_role') not in SALES_ROLES:
+        abort(403)
+    q = request.args.get('q', '').strip()
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    results = []
+
+    cust_cond, cust_params = "c.deleted_at IS NULL", []
+    if q:
+        cust_cond += " AND c.property_name ILIKE %s"
+        cust_params.append(f'%{q}%')
+    cur.execute(f"""
+        SELECT c.id, c.property_name AS name, c.address, c.city, c.state,
+               (SELECT MAX(sv.visit_date) FROM sales_visits sv
+                WHERE sv.property_id = c.id AND sv.property_type = 'customer' AND sv.deleted_at IS NULL) AS last_visit
+        FROM customers c WHERE {cust_cond} ORDER BY c.property_name LIMIT 25
+    """, cust_params)
+    for r in cur.fetchall():
+        results.append({'type': 'customer', 'id': r['id'], 'name': r['name'], 'address': r['address'],
+                         'city': r['city'], 'state': r['state'],
+                         'last_visit': r['last_visit'].isoformat() if r['last_visit'] else None})
+
+    prospect_cond, prospect_params = "p.deleted_at IS NULL AND p.converted_to_customer = FALSE", []
+    if q:
+        prospect_cond += " AND p.property_name ILIKE %s"
+        prospect_params.append(f'%{q}%')
+    cur.execute(f"""
+        SELECT p.id, p.property_name AS name, p.address, p.city, p.state,
+               (SELECT MAX(sv.visit_date) FROM sales_visits sv
+                WHERE sv.property_id = p.id AND sv.property_type = 'prospect' AND sv.deleted_at IS NULL) AS last_visit
+        FROM sales_prospects p WHERE {prospect_cond} ORDER BY p.property_name LIMIT 25
+    """, prospect_params)
+    for r in cur.fetchall():
+        results.append({'type': 'prospect', 'id': r['id'], 'name': r['name'], 'address': r['address'],
+                         'city': r['city'], 'state': r['state'],
+                         'last_visit': r['last_visit'].isoformat() if r['last_visit'] else None})
+    cur.close(); conn.close()
+    results.sort(key=lambda x: (x['name'] or '').lower())
+    return jsonify({'results': results})
+
+
+# ----------------------------------------------------------------------------
+# Prospects
+# ----------------------------------------------------------------------------
+
+def _save_sales_prospect(company_key, prospect_id):
+    property_name = request.form.get('property_name', '').strip()
+    if not property_name:
+        return None, 'Property name is required.'
+    address                  = request.form.get('address', '').strip() or None
+    city                     = request.form.get('city', '').strip() or None
+    state                    = request.form.get('state', '').strip().upper()[:2] or None
+    zip_                     = request.form.get('zip', '').strip() or None
+    management_company_id    = _opt_num(request.form.get('management_company_id'))
+    customer_type            = request.form.get('customer_type', '').strip() or None
+    contractor_company_name  = request.form.get('contractor_company_name', '').strip() or None
+    active_projects          = _opt_num(request.form.get('active_projects')) or 0
+    is_former_customer       = request.form.get('is_former_customer') == 'on'
+    former_customer_last_job = request.form.get('former_customer_last_job', '').strip() or None
+    username = session.get('username')
+
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    if prospect_id is None:
+        cur.execute("""
+            INSERT INTO sales_prospects (property_name, address, city, state, zip, management_company_id,
+                customer_type, contractor_company_name, active_projects, is_former_customer,
+                former_customer_last_job, created_by, updated_by)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id
+        """, (property_name, address, city, state, zip_, management_company_id, customer_type,
+              contractor_company_name, active_projects, is_former_customer, former_customer_last_job,
+              username, username))
+        new_id = cur.fetchone()['id']
+    else:
+        cur.execute("SELECT id FROM sales_prospects WHERE id = %s AND deleted_at IS NULL", (prospect_id,))
+        if not cur.fetchone():
+            cur.close(); conn.close()
+            return None, 'Prospect not found.'
+        cur.execute("""
+            UPDATE sales_prospects SET property_name=%s, address=%s, city=%s, state=%s, zip=%s,
+                management_company_id=%s, customer_type=%s, contractor_company_name=%s, active_projects=%s,
+                is_former_customer=%s, former_customer_last_job=%s, updated_at=CURRENT_TIMESTAMP, updated_by=%s
+            WHERE id=%s
+        """, (property_name, address, city, state, zip_, management_company_id, customer_type,
+              contractor_company_name, active_projects, is_former_customer, former_customer_last_job,
+              username, prospect_id))
+        new_id = prospect_id
+    conn.commit(); cur.close(); conn.close()
+    return new_id, None
+
+
+@app.route('/<company_key>/sales/prospects')
+@login_required
+@company_access_required
+@with_branding
+def sales_prospects_list(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in SALES_ROLES:
+        abort(403)
+    search = request.args.get('search', '').strip()
+    conditions, params = ['p.deleted_at IS NULL'], []
+    if search:
+        conditions.append('p.property_name ILIKE %s')
+        params.append(f'%{search}%')
+    where = ' AND '.join(conditions)
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT p.id, p.property_name, p.customer_type, p.city, p.state, p.is_former_customer,
+               p.converted_to_customer, mc.name AS management_company_name,
+               (SELECT MAX(sv.visit_date) FROM sales_visits sv
+                WHERE sv.property_id = p.id AND sv.property_type = 'prospect' AND sv.deleted_at IS NULL) AS last_visit
+        FROM sales_prospects p
+        LEFT JOIN management_companies mc ON mc.id = p.management_company_id
+        WHERE {where}
+        ORDER BY p.property_name LIMIT 300
+    """, params)
+    prospects = cur.fetchall()
+    cur.close(); conn.close()
+    return render_template('sales_prospects_list.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        prospects=prospects, search=search,
+    )
+
+
+@app.route('/<company_key>/sales/prospects/new', methods=['GET', 'POST'])
+@login_required
+@company_access_required
+@with_branding
+def sales_prospect_new(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in SALES_ROLES:
+        abort(403)
+    error = None
+    if request.method == 'POST':
+        new_id, error = _save_sales_prospect(company_key, None)
+        if not error:
+            return redirect(f'/{company_key}/sales/prospects/{new_id}')
+    conn = get_db_connection(company_key)
+    management_companies = get_management_companies(conn)
+    conn.close()
+    return render_template('sales_prospect_form.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        prospect=None, error=error, management_companies=management_companies,
+    )
+
+
+@app.route('/<company_key>/sales/prospects/<int:prospect_id>/edit', methods=['GET', 'POST'])
+@login_required
+@company_access_required
+@with_branding
+def sales_prospect_edit(company_key, prospect_id, branding, all_companies, company_access):
+    if session.get('user_role') not in SALES_ROLES:
+        abort(403)
+    error = None
+    if request.method == 'POST':
+        _, error = _save_sales_prospect(company_key, prospect_id)
+        if not error:
+            return redirect(f'/{company_key}/sales/prospects/{prospect_id}')
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM sales_prospects WHERE id = %s AND deleted_at IS NULL", (prospect_id,))
+    prospect = cur.fetchone()
+    if not prospect:
+        cur.close(); conn.close(); abort(404)
+    management_companies = get_management_companies(conn)
+    cur.close(); conn.close()
+    return render_template('sales_prospect_form.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        prospect=prospect, error=error, management_companies=management_companies,
+    )
+
+
+@app.route('/<company_key>/sales/prospects/<int:prospect_id>')
+@login_required
+@company_access_required
+@with_branding
+def sales_prospect_detail(company_key, prospect_id, branding, all_companies, company_access):
+    if session.get('user_role') not in SALES_ROLES:
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT p.*, mc.name AS management_company_name
+        FROM sales_prospects p LEFT JOIN management_companies mc ON mc.id = p.management_company_id
+        WHERE p.id = %s AND p.deleted_at IS NULL
+    """, (prospect_id,))
+    prospect = cur.fetchone()
+    if not prospect:
+        cur.close(); conn.close(); abort(404)
+    cur.execute("""
+        SELECT sv.*, sc.first_name AS contact_first, sc.last_name AS contact_last
+        FROM sales_visits sv LEFT JOIN sales_contacts sc ON sc.id = sv.contact_id
+        WHERE sv.property_id = %s AND sv.property_type = 'prospect' AND sv.deleted_at IS NULL
+        ORDER BY sv.visit_date DESC, sv.id DESC
+    """, (prospect_id,))
+    visits = cur.fetchall()
+    cur.execute("""
+        SELECT * FROM sales_contacts
+        WHERE current_property_id = %s AND current_property_type = 'prospect' AND deleted_at IS NULL
+        ORDER BY last_name, first_name
+    """, (prospect_id,))
+    contacts = cur.fetchall()
+    cur.execute("""
+        SELECT status FROM approval_queue WHERE target_type = 'prospect' AND target_id = %s AND status = 'pending'
+        ORDER BY submitted_at DESC LIMIT 1
+    """, (prospect_id,))
+    pending_approval = cur.fetchone()
+    cur.close(); conn.close()
+    map_query = ', '.join(part for part in [prospect['address'], prospect['city'], prospect['state']] if part)
+    return render_template('sales_prospect_detail.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        prospect=prospect, visits=visits, contacts=contacts, map_query=map_query,
+        pending_approval=pending_approval,
+    )
+
+
+# ----------------------------------------------------------------------------
+# Contacts
+# ----------------------------------------------------------------------------
+
+def _save_sales_contact(company_key, contact_id):
+    first_name = request.form.get('first_name', '').strip()
+    last_name  = request.form.get('last_name', '').strip()
+    if not first_name or not last_name:
+        return None, 'First and last name are required.'
+    title                  = request.form.get('title', '').strip() or None
+    personal_phone         = request.form.get('personal_phone', '').strip() or None
+    personal_email         = request.form.get('personal_email', '').strip() or None
+    office_phone           = request.form.get('office_phone', '').strip() or None
+    office_email           = request.form.get('office_email', '').strip() or None
+    current_property_type  = request.form.get('current_property_type', '').strip() or None
+    current_property_id    = _opt_num(request.form.get('current_property_id'))
+    notes                  = request.form.get('notes', '').strip() or None
+    username = session.get('username')
+
+    if current_property_type and current_property_type not in ('prospect', 'customer'):
+        return None, 'Invalid property type.'
+    if current_property_id and not current_property_type:
+        return None, 'Pick a property type along with a property.'
+
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    property_name = _sales_property_name(cur, current_property_type, current_property_id)
+
+    if contact_id is None:
+        cur.execute("""
+            INSERT INTO sales_contacts (first_name, last_name, title, personal_phone, personal_email,
+                office_phone, office_email, current_property_id, current_property_type, notes,
+                created_by, updated_by)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id
+        """, (first_name, last_name, title, personal_phone, personal_email, office_phone, office_email,
+              current_property_id, current_property_type, notes, username, username))
+        new_id = cur.fetchone()['id']
+        if current_property_id:
+            cur.execute("""
+                INSERT INTO contact_property_history
+                    (contact_id, property_id, property_type, property_name, started_date, created_by)
+                VALUES (%s,%s,%s,%s,%s,%s)
+            """, (new_id, current_property_id, current_property_type, property_name, date.today(), username))
+    else:
+        cur.execute("""
+            SELECT current_property_id, current_property_type FROM sales_contacts
+            WHERE id = %s AND deleted_at IS NULL
+        """, (contact_id,))
+        existing = cur.fetchone()
+        if not existing:
+            cur.close(); conn.close()
+            return None, 'Contact not found.'
+        cur.execute("""
+            UPDATE sales_contacts SET first_name=%s, last_name=%s, title=%s, personal_phone=%s, personal_email=%s,
+                office_phone=%s, office_email=%s, current_property_id=%s, current_property_type=%s, notes=%s,
+                updated_at=CURRENT_TIMESTAMP, updated_by=%s
+            WHERE id=%s
+        """, (first_name, last_name, title, personal_phone, personal_email, office_phone, office_email,
+              current_property_id, current_property_type, notes, username, contact_id))
+        changed = (existing['current_property_id'] != current_property_id
+                   or existing['current_property_type'] != current_property_type)
+        if changed:
+            if existing['current_property_id']:
+                cur.execute("""
+                    UPDATE contact_property_history SET ended_date = %s
+                    WHERE contact_id = %s AND property_id = %s AND property_type = %s AND ended_date IS NULL
+                """, (date.today(), contact_id, existing['current_property_id'], existing['current_property_type']))
+            if current_property_id:
+                cur.execute("""
+                    INSERT INTO contact_property_history
+                        (contact_id, property_id, property_type, property_name, started_date, created_by)
+                    VALUES (%s,%s,%s,%s,%s,%s)
+                """, (contact_id, current_property_id, current_property_type, property_name, date.today(), username))
+        new_id = contact_id
+    conn.commit(); cur.close(); conn.close()
+    return new_id, None
+
+
+@app.route('/<company_key>/sales/contacts')
+@login_required
+@company_access_required
+@with_branding
+def sales_contacts_list(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in SALES_ROLES:
+        abort(403)
+    search = request.args.get('search', '').strip()
+    conditions, params = ['sc.deleted_at IS NULL'], []
+    if search:
+        conditions.append('(sc.first_name ILIKE %s OR sc.last_name ILIKE %s)')
+        params.extend([f'%{search}%', f'%{search}%'])
+    where = ' AND '.join(conditions)
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute(f"SELECT sc.* FROM sales_contacts sc WHERE {where} ORDER BY sc.last_name, sc.first_name LIMIT 300", params)
+    contacts = []
+    for r in cur.fetchall():
+        row = dict(r)
+        row['current_property_name'] = _sales_property_name(cur, row['current_property_type'], row['current_property_id'])
+        contacts.append(row)
+    cur.close(); conn.close()
+    return render_template('sales_contacts_list.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        contacts=contacts, search=search,
+    )
+
+
+@app.route('/<company_key>/sales/contacts/new', methods=['GET', 'POST'])
+@login_required
+@company_access_required
+@with_branding
+def sales_contact_new(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in SALES_ROLES:
+        abort(403)
+    error = None
+    if request.method == 'POST':
+        new_id, error = _save_sales_contact(company_key, None)
+        if not error:
+            return_to = request.form.get('return_to') or f'/{company_key}/sales/contacts/{new_id}/edit'
+            return redirect(return_to)
+    prefill_property_type = request.args.get('property_type', '').strip() or None
+    prefill_property_id   = _opt_num(request.args.get('property_id'))
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    prefill_property_name = _sales_property_name(cur, prefill_property_type, prefill_property_id)
+    cur.close(); conn.close()
+    return render_template('sales_contact_form.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        contact=None, error=error, history=[],
+        prefill_property_type=prefill_property_type, prefill_property_id=prefill_property_id,
+        prefill_property_name=prefill_property_name,
+        return_to=request.args.get('return_to', ''),
+    )
+
+
+@app.route('/<company_key>/sales/contacts/<int:contact_id>/edit', methods=['GET', 'POST'])
+@login_required
+@company_access_required
+@with_branding
+def sales_contact_edit(company_key, contact_id, branding, all_companies, company_access):
+    if session.get('user_role') not in SALES_ROLES:
+        abort(403)
+    error = None
+    if request.method == 'POST':
+        _, error = _save_sales_contact(company_key, contact_id)
+        if not error:
+            return redirect(f'/{company_key}/sales/contacts/{contact_id}/edit')
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM sales_contacts WHERE id = %s AND deleted_at IS NULL", (contact_id,))
+    contact = cur.fetchone()
+    if not contact:
+        cur.close(); conn.close(); abort(404)
+    cur.execute("""
+        SELECT * FROM contact_property_history WHERE contact_id = %s
+        ORDER BY started_date DESC NULLS LAST, id DESC
+    """, (contact_id,))
+    history = cur.fetchall()
+    prefill_property_name = _sales_property_name(cur, contact['current_property_type'], contact['current_property_id'])
+    cur.close(); conn.close()
+    return render_template('sales_contact_form.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        contact=contact, error=error, history=history,
+        prefill_property_type=contact['current_property_type'], prefill_property_id=contact['current_property_id'],
+        prefill_property_name=prefill_property_name,
+        return_to='',
+    )
+
+
+# ----------------------------------------------------------------------------
+# Visit logging
+# ----------------------------------------------------------------------------
+
+@app.route('/<company_key>/sales/visits/log', methods=['GET', 'POST'])
+@login_required
+@company_access_required
+@with_branding
+def sales_visit_log(company_key, branding, all_companies, company_access):
+    """Mobile-friendly single-screen quick-tap form (directive §4.5 / spec's
+    'Visit Logging Screen'): tag buttons, contact picker with last-contacted
+    preselected, notes, auto follow-up date from the tag's default_followup_days,
+    dormant-investigation checkbox + reason + 'send to management'."""
+    if session.get('user_role') not in SALES_ROLES:
+        abort(403)
+    username = session.get('username')
+    error = None
+    if request.method == 'POST':
+        property_type = request.form.get('property_type', '').strip()
+        property_id   = _opt_num(request.form.get('property_id'))
+        visit_tag     = request.form.get('visit_tag', '').strip() or None
+        contact_id    = _opt_num(request.form.get('contact_id'))
+        notes         = request.form.get('notes', '').strip() or None
+        follow_up_needed     = request.form.get('follow_up_needed') == 'on'
+        follow_up_date_raw    = request.form.get('follow_up_date', '').strip()
+        is_dormant_investigation        = request.form.get('is_dormant_investigation') == 'on'
+        dormancy_reason                 = request.form.get('dormancy_reason', '').strip() or None
+        dormancy_reported_to_management = request.form.get('dormancy_reported_to_management') == 'on'
+
+        if property_type not in ('prospect', 'customer') or not property_id:
+            error = 'Pick a property to log this visit against.'
+        elif is_dormant_investigation and dormancy_reported_to_management and not dormancy_reason:
+            error = 'A reason is required to send a dormancy investigation to management.'
+        else:
+            conn = get_db_connection(company_key)
+            cur = conn.cursor()
+            follow_up_date = follow_up_date_raw or None
+            if follow_up_needed and not follow_up_date and visit_tag:
+                cur.execute("SELECT default_followup_days FROM visit_tags_config WHERE tag_name = %s", (visit_tag,))
+                tagrow = cur.fetchone()
+                if tagrow and tagrow['default_followup_days']:
+                    follow_up_date = (date.today() + timedelta(days=tagrow['default_followup_days'])).isoformat()
+            cur.execute("""
+                INSERT INTO sales_visits (property_id, property_type, visit_date, visit_tag, contact_id, notes,
+                    follow_up_needed, follow_up_date, is_dormant_investigation, dormancy_reason,
+                    dormancy_reported_to_management, created_by, updated_by)
+                VALUES (%s,%s,CURRENT_DATE,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id
+            """, (property_id, property_type, visit_tag, contact_id, notes, follow_up_needed, follow_up_date,
+                  is_dormant_investigation, dormancy_reason, dormancy_reported_to_management, username, username))
+            cur.fetchone()
+            conn.commit(); cur.close(); conn.close()
+            flash('Visit logged and flagged for the Monday management report.' if
+                  (is_dormant_investigation and dormancy_reported_to_management) else 'Visit logged.', 'success')
+            dest = (f'/{company_key}/sales/prospects/{property_id}' if property_type == 'prospect'
+                    else f'/{company_key}/customers/{property_id}')
+            return redirect(dest)
+
+    # On a validation-error re-render (falls through from the POST branch
+    # above), prefer the submitted form values over query args so the
+    # property selection survives the error instead of resetting to blank.
+    property_type = (request.form.get('property_type') or request.args.get('property_type', '')).strip() or None
+    property_id   = _opt_num(request.form.get('property_id') or request.args.get('property_id'))
+    investigate   = request.args.get('investigate') == '1'
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    property_name = _sales_property_name(cur, property_type, property_id)
+    cur.execute("""
+        SELECT tag_name, tag_description, default_followup_days FROM visit_tags_config
+        WHERE is_active = TRUE AND deleted_at IS NULL ORDER BY display_order
+    """)
+    tags = cur.fetchall()
+    contacts, last_contact_id = [], None
+    if property_type and property_id:
+        cur.execute("""
+            SELECT id, first_name, last_name, title FROM sales_contacts
+            WHERE current_property_id = %s AND current_property_type = %s AND deleted_at IS NULL
+            ORDER BY last_name, first_name
+        """, (property_id, property_type))
+        contacts = cur.fetchall()
+        cur.execute("""
+            SELECT contact_id FROM sales_visits
+            WHERE property_id = %s AND property_type = %s AND deleted_at IS NULL AND contact_id IS NOT NULL
+            ORDER BY visit_date DESC, id DESC LIMIT 1
+        """, (property_id, property_type))
+        lastrow = cur.fetchone()
+        last_contact_id = lastrow['contact_id'] if lastrow else None
+    cur.close(); conn.close()
+    return render_template('sales_visit_log.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        error=error, property_type=property_type, property_id=property_id, property_name=property_name,
+        tags=tags, contacts=contacts, last_contact_id=last_contact_id, investigate=investigate,
+    )
+
+
+@app.route('/<company_key>/sales/followups')
+@login_required
+@company_access_required
+@with_branding
+def sales_followups(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in SALES_ROLES:
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT sv.*, sc.first_name AS contact_first, sc.last_name AS contact_last
+        FROM sales_visits sv LEFT JOIN sales_contacts sc ON sc.id = sv.contact_id
+        WHERE sv.deleted_at IS NULL AND sv.follow_up_needed = TRUE AND sv.follow_up_completed = FALSE
+        ORDER BY sv.follow_up_date ASC NULLS LAST
+    """)
+    today = date.today()
+    followups = []
+    for r in cur.fetchall():
+        row = dict(r)
+        row['property_name'] = _sales_property_name(cur, row['property_type'], row['property_id'])
+        row['is_overdue'] = bool(row['follow_up_date'] and row['follow_up_date'] < today)
+        followups.append(row)
+    cur.close(); conn.close()
+    return render_template('sales_followups.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        followups=followups, today=today,
+    )
+
+
+@app.route('/<company_key>/sales/followups/<int:visit_id>/complete', methods=['POST'])
+@login_required
+@company_access_required
+def sales_followup_complete(company_key, visit_id):
+    if session.get('user_role') not in SALES_ROLES:
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE sales_visits SET follow_up_completed = TRUE, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s AND deleted_at IS NULL
+    """, (session.get('username'), visit_id))
+    conn.commit(); cur.close(); conn.close()
+    flash('Follow-up marked complete.', 'success')
+    return redirect(request.referrer or f'/{company_key}/sales/followups')
+
+
+# ----------------------------------------------------------------------------
+# Conversion + manager approval
+# ----------------------------------------------------------------------------
+
+@app.route('/<company_key>/sales/prospects/<int:prospect_id>/convert', methods=['GET', 'POST'])
+@login_required
+@company_access_required
+@with_branding
+def sales_prospect_convert(company_key, prospect_id, branding, all_companies, company_access):
+    if session.get('user_role') not in SALES_ROLES:
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM sales_prospects WHERE id = %s AND deleted_at IS NULL", (prospect_id,))
+    prospect = cur.fetchone()
+    if not prospect:
+        cur.close(); conn.close(); abort(404)
+    if prospect['converted_to_customer']:
+        cur.close(); conn.close()
+        flash('This prospect has already been converted.', 'error')
+        return redirect(f'/{company_key}/sales/prospects/{prospect_id}')
+    cur.execute("""
+        SELECT id FROM approval_queue WHERE target_type = 'prospect' AND target_id = %s AND status = 'pending'
+    """, (prospect_id,))
+    if cur.fetchone():
+        cur.close(); conn.close()
+        flash('A conversion request for this prospect is already pending approval.', 'error')
+        return redirect(f'/{company_key}/sales/prospects/{prospect_id}')
+
+    if request.method == 'POST':
+        primary_contact_id = _opt_num(request.form.get('primary_contact_id'))
+        submitted_reason = request.form.get('submitted_reason', '').strip() or None
+        username = session.get('username')
+        cur.execute("""
+            SELECT id, first_name, last_name, title, office_phone, office_email, personal_phone, personal_email
+            FROM sales_contacts WHERE current_property_id = %s AND current_property_type = 'prospect'
+              AND deleted_at IS NULL
+        """, (prospect_id,))
+        contacts = [dict(r) for r in cur.fetchall()]
+        primary = next((c for c in contacts if str(c['id']) == str(primary_contact_id)),
+                        contacts[0] if contacts else None)
+        request_details = {
+            'action': 'convert_prospect', 'prospect_id': prospect_id, 'prospect_name': prospect['property_name'],
+            'customer_type': prospect['customer_type'], 'address': prospect['address'], 'city': prospect['city'],
+            'state': prospect['state'], 'zip': prospect['zip'],
+            'management_company_id': prospect['management_company_id'],
+            'contacts': contacts, 'primary_contact_id': primary['id'] if primary else None,
+            'submitted_reason': submitted_reason,
+        }
+        cur.execute("""
+            INSERT INTO approval_queue (request_type, target_type, target_id, target_name,
+                contact_name, contact_phone, contact_email, request_details, submitted_by, created_by, updated_by)
+            VALUES ('convert_prospect', 'prospect', %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+        """, (prospect_id, prospect['property_name'],
+              f"{primary['first_name']} {primary['last_name']}" if primary else None,
+              (primary['office_phone'] or primary['personal_phone']) if primary else None,
+              (primary['office_email'] or primary['personal_email']) if primary else None,
+              json.dumps(request_details), username, username, username))
+        conn.commit(); cur.close(); conn.close()
+
+        branding_local = COMPANY_BRANDING.get(company_key, {})
+        for mgr in _sales_company_managers(company_key):
+            if mgr['email']:
+                _send_email_via_resend([mgr['email']],
+                    f"[{branding_local.get('name', company_key)}] Approval needed: convert {prospect['property_name']}",
+                    f"<p>{username} submitted a request to convert prospect "
+                    f"\"{prospect['property_name']}\" to a customer.</p>"
+                    f"<p>Review it in the Sales Approvals queue.</p>",
+                    from_name=branding_local.get('name'))
+        flash('Submitted for manager approval.', 'success')
+        return redirect(f'/{company_key}/sales/prospects/{prospect_id}')
+
+    cur.execute("""
+        SELECT * FROM sales_contacts
+        WHERE current_property_id = %s AND current_property_type = 'prospect' AND deleted_at IS NULL
+        ORDER BY last_name, first_name
+    """, (prospect_id,))
+    contacts = cur.fetchall()
+    cur.close(); conn.close()
+    return render_template('sales_prospect_convert.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        prospect=prospect, contacts=contacts,
+    )
+
+
+@app.route('/<company_key>/sales/approvals')
+@login_required
+@company_access_required
+@with_branding
+def sales_approvals_list(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in SALES_APPROVAL_ROLES:
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT * FROM approval_queue WHERE deleted_at IS NULL
+        ORDER BY (status = 'pending') DESC, submitted_at DESC LIMIT 100
+    """)
+    approvals = cur.fetchall()
+    cur.close(); conn.close()
+    conn2 = get_db_connection(company_key)
+    management_companies = get_management_companies(conn2)
+    conn2.close()
+    return render_template('sales_approvals_list.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        approvals=approvals, management_companies=management_companies,
+    )
+
+
+@app.route('/<company_key>/sales/approvals/<int:approval_id>/approve', methods=['POST'])
+@login_required
+@company_access_required
+def sales_approval_approve(company_key, approval_id):
+    """Approve => creates the customer + contacts in one transaction, marks
+    the prospect converted, links it. The manager can adjust key fields
+    (property name/type/address/management company) on the approval form
+    before submitting -- this is the directive's 'edit' action folded into
+    approve rather than a separate status, since editing-then-approving is
+    the only case that matters (an edit that isn't approved is just a
+    rejection with notes explaining what needed to change)."""
+    if session.get('user_role') not in SALES_APPROVAL_ROLES:
+        abort(403)
+    username = session.get('username')
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM approval_queue WHERE id = %s AND deleted_at IS NULL", (approval_id,))
+    approval = cur.fetchone()
+    if not approval:
+        cur.close(); conn.close(); abort(404)
+    if approval['status'] != 'pending':
+        cur.close(); conn.close()
+        flash('This request has already been reviewed.', 'error')
+        return redirect(f'/{company_key}/sales/approvals')
+    if approval['request_type'] != 'convert_prospect':
+        cur.close(); conn.close()
+        flash('Unknown request type.', 'error')
+        return redirect(f'/{company_key}/sales/approvals')
+
+    details = approval['request_details']
+    review_notes = request.form.get('review_notes', '').strip() or None
+    property_name = request.form.get('property_name', '').strip() or details.get('prospect_name')
+    customer_type = request.form.get('customer_type', '').strip() or details.get('customer_type') or 'Commercial'
+    address = request.form.get('address', '').strip() or details.get('address')
+    city    = request.form.get('city', '').strip() or details.get('city')
+    state   = (request.form.get('state', '').strip() or details.get('state') or '')[:2] or None
+    zip_    = request.form.get('zip', '').strip() or details.get('zip')
+    management_company_id = _opt_num(request.form.get('management_company_id')) or details.get('management_company_id')
+
+    cur.execute("""
+        INSERT INTO customers (property_name, customer_type, address, city, state, zip,
+            management_company_id, status, payment_terms, created_by, updated_by)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,'Active','Net 30',%s,%s) RETURNING id
+    """, (property_name, customer_type, address, city, state, zip_, management_company_id, username, username))
+    customer_id = cur.fetchone()['id']
+
+    contacts = details.get('contacts') or []
+    primary_id = details.get('primary_contact_id')
+    for c in contacts:
+        is_primary = c.get('id') == primary_id
+        cur.execute("""
+            INSERT INTO customer_contacts (customer_id, first_name, last_name, title, office_phone,
+                mobile_phone, office_email, is_primary, accepts_billing, created_by, updated_by)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (customer_id, c.get('first_name'), c.get('last_name'), c.get('title'),
+              c.get('office_phone'), c.get('personal_phone'), c.get('office_email') or c.get('personal_email'),
+              is_primary, is_primary, username, username))
+
+    prospect_id = approval['target_id']
+    cur.execute("""
+        UPDATE sales_prospects SET converted_to_customer = TRUE, converted_date = CURRENT_DATE,
+            customer_id = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s
+    """, (customer_id, username, prospect_id))
+    cur.execute("""
+        UPDATE sales_contacts SET current_property_id = %s, current_property_type = 'customer',
+            updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE current_property_id = %s AND current_property_type = 'prospect' AND deleted_at IS NULL
+    """, (customer_id, username, prospect_id))
+    cur.execute("""
+        UPDATE contact_property_history SET ended_date = CURRENT_DATE
+        WHERE property_id = %s AND property_type = 'prospect' AND ended_date IS NULL
+    """, (prospect_id,))
+    cur.execute("""
+        UPDATE approval_queue SET status = 'approved', reviewed_by = %s, reviewed_at = CURRENT_TIMESTAMP,
+            review_notes = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s
+    """, (username, review_notes, username, approval_id))
+    conn.commit(); cur.close(); conn.close()
+    flash(f'Customer created from prospect "{property_name}".', 'success')
+    return redirect(f'/{company_key}/customers/{customer_id}')
+
+
+@app.route('/<company_key>/sales/approvals/<int:approval_id>/reject', methods=['POST'])
+@login_required
+@company_access_required
+def sales_approval_reject(company_key, approval_id):
+    if session.get('user_role') not in SALES_APPROVAL_ROLES:
+        abort(403)
+    review_notes = request.form.get('review_notes', '').strip()
+    if not review_notes:
+        flash('A note is required when rejecting a request.', 'error')
+        return redirect(f'/{company_key}/sales/approvals')
+    username = session.get('username')
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("SELECT status FROM approval_queue WHERE id = %s AND deleted_at IS NULL", (approval_id,))
+    approval = cur.fetchone()
+    if not approval:
+        cur.close(); conn.close(); abort(404)
+    if approval['status'] != 'pending':
+        cur.close(); conn.close()
+        flash('This request has already been reviewed.', 'error')
+        return redirect(f'/{company_key}/sales/approvals')
+    cur.execute("""
+        UPDATE approval_queue SET status = 'rejected', reviewed_by = %s, reviewed_at = CURRENT_TIMESTAMP,
+            review_notes = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s
+    """, (username, review_notes, username, approval_id))
+    conn.commit(); cur.close(); conn.close()
+    flash('Request rejected.', 'success')
+    return redirect(f'/{company_key}/sales/approvals')
+
+
+# ----------------------------------------------------------------------------
+# Weekly sales report (jobs.py / job_weekly_sales_report)
+# ----------------------------------------------------------------------------
+
+def _sales_weekly_report_data(company_key):
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    week_ago = date.today() - timedelta(days=7)
+    cur.execute("SELECT COUNT(*) AS n FROM sales_visits WHERE visit_date >= %s AND deleted_at IS NULL", (week_ago,))
+    total_visits = cur.fetchone()['n']
+    cur.execute("SELECT COUNT(*) AS n FROM sales_prospects WHERE created_at >= %s AND deleted_at IS NULL", (week_ago,))
+    new_prospects = cur.fetchone()['n']
+    cur.execute("""
+        SELECT COUNT(*) AS n FROM sales_contacts
+        WHERE (created_at >= %s OR updated_at >= %s) AND deleted_at IS NULL
+    """, (week_ago, week_ago))
+    contacts_touched = cur.fetchone()['n']
+    cur.execute("""
+        SELECT sv.* FROM sales_visits sv
+        WHERE sv.is_dormant_investigation = TRUE AND sv.dormancy_reported_to_management = TRUE
+          AND sv.visit_date >= %s AND sv.deleted_at IS NULL
+        ORDER BY sv.visit_date DESC
+    """, (week_ago,))
+    dormant = []
+    for r in cur.fetchall():
+        dormant.append({
+            'name': _sales_property_name(cur, r['property_type'], r['property_id']),
+            'reason': r['dormancy_reason'], 'visit_date': r['visit_date'], 'created_by': r['created_by'],
+        })
+    cur.execute("SELECT COUNT(*) AS n FROM approval_queue WHERE status = 'pending' AND deleted_at IS NULL")
+    pending_approvals = cur.fetchone()['n']
+    cur.execute("""
+        SELECT COUNT(*) AS n FROM sales_prospects WHERE deleted_at IS NULL AND converted_to_customer = FALSE
+    """)
+    pipeline_count = cur.fetchone()['n']
+    cur.close(); conn.close()
+    return {
+        'total_visits': total_visits, 'new_prospects': new_prospects, 'contacts_touched': contacts_touched,
+        'dormant': dormant, 'pending_approvals': pending_approvals, 'pipeline_count': pipeline_count,
+    }
+
+
+def _send_weekly_sales_report(company_key):
+    """Monday email to alert_email + all managers/admins for the company
+    (directive §4.5): activity summary, dormant investigations with reasons,
+    pending approvals. Data is always computed (so job_runs/the smoke test
+    can verify it); the email itself only sends when the master switch is on,
+    same _job_alerts_enabled_and_recipient gate every other scheduled email
+    uses. Returns (data, recipients_actually_emailed)."""
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    enabled, alert_email = _job_alerts_enabled_and_recipient(cur)
+    cur.close(); conn.close()
+    data = _sales_weekly_report_data(company_key)
+    if not enabled:
+        return data, []
+
+    recipients = [alert_email] if alert_email else []
+    for mgr in _sales_company_managers(company_key):
+        if mgr['email'] and mgr['email'] not in recipients:
+            recipients.append(mgr['email'])
+    if not recipients:
+        return data, []
+
+    branding = COMPANY_BRANDING.get(company_key, {})
+    dormant_html = ''.join(
+        f"<li>{d['name'] or 'Unknown property'} — {d['reason'] or 'no reason given'} "
+        f"(investigated by {d['created_by']} on {d['visit_date']})</li>" for d in data['dormant']
+    ) or '<li>None this week.</li>'
+    body = (
+        f"<h3>Weekly Sales Activity — {branding.get('name', company_key)}</h3>"
+        f"<p>Visits logged (last 7 days): {data['total_visits']}<br>"
+        f"New prospects added: {data['new_prospects']}<br>"
+        f"Contacts created/updated: {data['contacts_touched']}<br>"
+        f"Open pipeline (not yet converted): {data['pipeline_count']}<br>"
+        f"Pending approvals: {data['pending_approvals']}</p>"
+        f"<h4>Dormant Customer Intelligence</h4><ul>{dormant_html}</ul>"
+    )
+    _send_email_via_resend(recipients, f"[{branding.get('name', company_key)}] Weekly sales report",
+                            body, from_name=branding.get('name'))
+    return data, recipients
 
 
 # ============================================================================

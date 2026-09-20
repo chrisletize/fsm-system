@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Prospects — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:1.25rem; flex-wrap:wrap; gap:.75rem; }
+    .page-header h1 { font-size:1.75rem; color:{{ branding.color_primary }}; }
+    .toolbar { display:flex; gap:1rem; align-items:center; margin-bottom:1.25rem; flex-wrap:wrap; }
+    .toolbar input { padding:.6rem 1rem; border:1px solid #ddd; border-radius:4px; font-size:.92rem; }
+    .btn { display:inline-block; padding:.7rem 1.4rem; border-radius:4px; text-decoration:none; font-weight:500; border:none; font-size:.95rem; cursor:pointer; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-outline { background:white; color:{{ branding.color_primary }}; border:1px solid {{ branding.color_primary }}; }
+    table { width:100%; border-collapse:collapse; }
+    th { text-align:left; padding:.75rem; font-size:.8rem; text-transform:uppercase; color:#888; border-bottom:2px solid #eee; }
+    td { padding:.75rem; border-bottom:1px solid #f2f2f2; font-size:.92rem; }
+    .badge { display:inline-block; padding:.2rem .7rem; border-radius:10px; font-size:.78rem; font-weight:500; }
+    .badge-former { background:#fff3d6; color:#8a6100; }
+    .badge-converted { background:#eaf3de; color:#3b6d11; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Prospects</h1>
+    <a href="/{{ company_key }}/sales/prospects/new" class="btn btn-primary">+ New Prospect</a>
+</div>
+
+<form method="GET" class="toolbar">
+    <input type="text" name="search" value="{{ search }}" placeholder="Search property name…">
+    <button type="submit" class="btn btn-outline">Filter</button>
+</form>
+
+<div class="card">
+    <table>
+        <thead><tr><th>Property</th><th>Type</th><th>City</th><th>Management Co.</th><th>Last Visit</th><th></th></tr></thead>
+        <tbody>
+            {% for p in prospects %}
+            <tr>
+                <td>
+                    <a href="/{{ company_key }}/sales/prospects/{{ p.id }}" style="color:{{ branding.color_primary }}; text-decoration:none; font-weight:500;">{{ p.property_name }}</a>
+                    {% if p.is_former_customer %}<span class="badge badge-former">Former Customer</span>{% endif %}
+                    {% if p.converted_to_customer %}<span class="badge badge-converted">Converted</span>{% endif %}
+                </td>
+                <td>{{ p.customer_type or '—' }}</td>
+                <td>{{ p.city or '—' }}</td>
+                <td>{{ p.management_company_name or '—' }}</td>
+                <td>{{ p.last_visit.strftime('%b %-d, %Y') if p.last_visit else 'Never' }}</td>
+                <td><a href="/{{ company_key }}/sales/prospects/{{ p.id }}/edit" style="color:#888; text-decoration:none; font-size:.85rem;">Edit</a></td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" style="text-align:center; color:#aaa; padding:2rem;">No prospects yet.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

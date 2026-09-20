@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Follow-Ups — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { margin-bottom:1.25rem; }
+    .page-header h1 { font-size:1.75rem; color:{{ branding.color_primary }}; }
+    .row-item { display:flex; justify-content:space-between; align-items:center; padding:.75rem 0; border-bottom:1px solid #f2f2f2; gap:.75rem; flex-wrap:wrap; }
+    .row-item:last-child { border-bottom:none; }
+    .row-name { font-weight:500; }
+    .row-sub { font-size:.8rem; color:#888; }
+    .badge { display:inline-block; padding:.2rem .7rem; border-radius:10px; font-size:.76rem; font-weight:500; }
+    .badge-overdue { background:#fcebeb; color:#a32d2d; }
+    .badge-today { background:#fff3d6; color:#8a6100; }
+    .badge-upcoming { background:#e6f1fb; color:#185fa5; }
+    .btn { display:inline-block; padding:.5rem 1rem; border-radius:4px; text-decoration:none; font-weight:500; border:none; font-size:.85rem; cursor:pointer; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-outline { background:white; color:{{ branding.color_primary }}; border:1px solid {{ branding.color_primary }}; }
+    .empty { color:#aaa; padding:2rem; text-align:center; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header"><h1>Follow-Ups</h1></div>
+
+<div class="card">
+    {% for f in followups %}
+    <div class="row-item">
+        <div>
+            <div class="row-name">{{ f.property_name or 'Unknown property' }}</div>
+            <div class="row-sub">
+                {{ f.visit_tag or '' }}
+                {% if f.contact_first %} — met {{ f.contact_first }} {{ f.contact_last }}{% endif %}
+                — due {{ f.follow_up_date.strftime('%b %-d, %Y') if f.follow_up_date else '—' }}
+            </div>
+        </div>
+        <div style="display:flex; align-items:center; gap:.5rem;">
+            {% if f.follow_up_date and f.follow_up_date < today %}
+            <span class="badge badge-overdue">Overdue</span>
+            {% elif f.follow_up_date == today %}
+            <span class="badge badge-today">Today</span>
+            {% else %}
+            <span class="badge badge-upcoming">Upcoming</span>
+            {% endif %}
+            <a href="/{{ company_key }}/sales/visits/log?property_type={{ f.property_type }}&property_id={{ f.property_id }}" class="btn btn-outline">Log Visit</a>
+            <form method="POST" action="/{{ company_key }}/sales/followups/{{ f.id }}/complete" style="display:inline;">
+                <button type="submit" class="btn btn-primary">Mark Done</button>
+            </form>
+        </div>
+    </div>
+    {% else %}
+    <div class="empty">No open follow-ups.</div>
+    {% endfor %}
+</div>
+{% endblock %}

@@ -1169,3 +1169,58 @@ regression suite re-run clean.
 **Deferred:** nothing from this increment's own scope.
 
 Proceeding to Increment 3.5 (Sales CRM).
+
+## Increment 3.5 — Sales CRM
+
+- Built against `docs/SALES-SYSTEM.md`, trimmed to what the web app does well
+  per directive §4.5 (no offline cache, no GPS proximity search, no
+  cross-database contact sync). **Migration 025**: `sales_prospects`,
+  `sales_contacts`, `contact_property_history` (append-only), `sales_visits`,
+  `visit_tags_config` (+ 9 seeded tags), `approval_queue`,
+  `dormancy_alerts_config` (+ per-company seed via `current_database()`: GAG
+  8wk / KC 3wk / CTS 4wk / KSF 3wk). See D-086 for schema decisions (audit
+  columns added beyond the spec's own DDL, `customer_id` dual-purpose on
+  `sales_prospects`, no FK on the property polymorphism columns).
+- Routes under `/<company>/sales/…`: dashboard (follow-ups due today/
+  overdue, dormant customers from the recency-report formula vs. this
+  company's threshold, recent visits, pending-approvals count), prospects
+  list/new/edit/detail (map link via a plain Google Maps search URL, visit
+  history, contacts), contacts list/new/edit (with property history —
+  editing a contact's current property closes the old `contact_property_
+  history` row and opens a new one), unified property search (`/sales/
+  search`, live AJAX against customers ✓ + prospects ○ — too many customers
+  for a preloaded combobox), log-visit (mobile quick-tap form: tag buttons
+  from `visit_tags_config`, contact picker with last-contacted preselected,
+  auto follow-up date from the tag's `default_followup_days`, dormant-
+  investigation checkbox + required reason + "send to management"),
+  follow-ups list + mark-complete, `POST .../convert` → `approval_queue`
+  row + manager email notification, manager approval page
+  (`/sales/approvals`) with inline edit-before-approve (folds the
+  directive's "edit" action into approve — see D-087) and a required-note
+  reject path. Approve creates the customer + copies contacts to
+  `customer_contacts` in one transaction, marks the prospect converted and
+  linked, re-points its `sales_contacts` rows at the new customer.
+- `job_weekly_sales_report` (the Increment 2.5 placeholder that shipped
+  saying "Sales CRM not built yet") now does the real thing: activity
+  summary (visits/new prospects/contacts touched/pipeline size), dormant
+  investigations with reasons, pending-approval count. Data is always
+  computed and written to `job_runs`; the email itself (to `alert_email` +
+  every admin/manager with this company's access) only sends when
+  `scheduled_alerts_enabled` is on, same gate every other scheduled email in
+  this build uses.
+- Nav: "Sales" link added to `base.html` next to Estimates, same
+  `admin`/`manager`/`salesperson` role gate.
+
+**Migration:** 025 (`025_sales_crm.sql`), applied to all four DBs, verified
+idempotent. Pre-migration backups in `~/db-backups/2026-09-20e/`.
+
+**Smoke test:** `tests/smoke_sales_crm.py` — 40/40 checks (see D-087 for the
+full list of what's covered). Also fixed `smoke_scheduled_jobs.py`'s
+`job_weekly_sales_report` assertions, which predated this increment and
+still expected the old `'skipped'` stub. Full 20-file regression suite
+re-run clean.
+
+**Deferred:** nothing from this increment's own scope — see D-087 for
+directive-scope decisions (approval_queue limited to `convert_prospect`,
+no persisted dormant-list "Dismiss", 768px verified by CSS review not a
+live browser walkthrough).
