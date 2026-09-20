@@ -40,6 +40,8 @@ reporting until FieldKit's billing is complete.
 | Callbacks | Built (3.4, migration 024): WO form's "This is a callback for…" combo pre-fills location/site/lines from the prior job, defaults Responsible Tech to its lead tech; badges on dispatch/WO list/customer detail/WO detail; `/reports/callbacks` grouped by responsible tech with paid-vs-unpaid detection (no payroll engine — just exposes the data); customer rating gets a new signed `callback_score` (-3 per callback, trailing 12mo). |
 | Sales CRM | Built (3.5, migration 025): prospects/contacts/visits/approval-queue CRUD under `/sales`, mobile quick-tap visit logging, follow-ups, unified customer+prospect search, dormant-customer detection reusing the recency-report formula, convert-to-customer via manager approval (creates customer + contacts in one transaction), Monday weekly report email. See below. |
 | Dashboard | Built (5.1, no migration, `/<company>/dashboard`): today's jobs, uninvoiced completed WOs (loud), open extraction units, outstanding A/R + 90+ + unapplied credits (from the `customer_flags` nightly cache), follow-ups due, pending approvals, last-15 recent activity across WO/invoice/payment status history, role-gated Quick Actions. Role-gated sections, not a role-gated route — technicians/salespeople still land here until §5.4 builds `/myday`. |
+| Customer merge + duplicate detection | Built (5.2, migration 026): non-blocking duplicate-customer banner on the customer form; admin-only `/customers/<id>/merge` with AJAX side-by-side preview and a one-transaction merge across every referencing table; merged customer URLs redirect to the target. |
+| Audit trail | Built (5.3, migration 027): `record_audit` written from customers/contacts/service locations/work orders/invoices/payments/estimates/catalog/tax rates/users via one shared `_record_audit()` helper; read-only History panel on customer/WO/invoice/payment detail; admin-only global view at `/settings/audit`. |
 | Payment methods | Not built |
 
 This table matches `FIELDKIT_BUILD_DIRECTIVE_2026-09.md` §0.2 — confirmed by grepping
@@ -140,8 +142,18 @@ for the three UNIQUE-constrained ones), soft-deletes the source with
 `merged_into_customer_id` set, notes both customers, and logs to
 `customer_merge_log`; visiting a merged customer's old URL now redirects to the
 target instead of 404ing. See D-089. 24/24 smoke checks
-(`tests/smoke_customer_merge.py`), full 22-file regression suite green. Next:
-5.3 (audit trail).
+(`tests/smoke_customer_merge.py`), full 22-file regression suite green.
+Increment 5.3 (audit trail, migration 027) complete — `record_audit` written
+from all ten entity types the directive lists (customers, contacts, service
+locations, work orders, invoices/versions, payments, estimates, catalog, tax
+rates, users) via one shared `_record_audit()` helper; update diffs show only
+what changed (a no-op save writes nothing); `password_hash` is redacted
+centrally inside the helper, not per call site — see D-090 for the bug this
+design caught on the first smoke-test run (briefly present in a test fixture,
+never a real user). Read-only History panel on customer/WO/invoice/payment
+detail; admin-only global view at `/settings/audit`. 46/46 smoke checks
+(`tests/smoke_audit_trail.py`), full 23-file regression suite green. Next:
+5.4 (permissions sweep).
 
 Decisions Chris has already made for this build (delinquent threshold = 90 days past
 invoice date, FL tax left empty/exempt for Kleanit SF, SF-import receivables excluded

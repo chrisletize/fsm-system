@@ -1139,6 +1139,85 @@ suite re-run clean.
 
 ---
 
+D-090 — Increment 5.3 (Audit trail, directive §5.3, migration 027). `record_audit`
+(`table_name, record_id, action, diff JSONB, changed_by, changed_at`, append-only)
+written by the save paths of customers, contacts, service locations, work orders,
+invoices/versions, payments, estimates, catalog, tax rates, and users — the
+directive's full list, all ten covered.
+
+- **One shared helper, `_record_audit(cur, table_name, record_id, action, before,
+  after, changed_by)`**, called from inside the existing save-path functions
+  right before their own `conn.commit()` (never a separate transaction) — same
+  discipline as every other cross-cutting write in this build (customer_flags,
+  audit-adjacent). `action='update'` diffs `before` against `after` and writes
+  only the columns that actually changed, `{col: {'old':, 'new':}}`; a true no-op
+  save (nothing differs) writes nothing at all, verified directly in the smoke
+  test — re-saving a customer form with identical values does not grow the audit
+  table. `action='create'`/`'delete'` write the full after/before row (there's
+  nothing to diff against).
+- **Two centralized redactions inside `_record_audit` itself**, not left to each
+  call site to remember: `updated_at` is dropped from every diff (it's bumped by
+  every UPDATE regardless of whether anything user-meaningful changed — pure
+  noise; `record_audit.changed_at` already carries "when"), and `password_hash`
+  is stripped from `before`/`after` unconditionally before anything is written,
+  even for `users`' own `create` action. Caught by the smoke test on the FIRST
+  run: an early version only stripped the hash in `user_edit`'s own call site,
+  missing `user_new`'s (the create path used a full un-redacted `SELECT *`) —
+  the hash briefly went into `record_audit.diff` in this test's fixture before
+  being caught and fixed. No real user was ever exposed (test-only, this
+  environment's `getagrip` DB, immediately caught and cleaned), but it's the
+  reason the redaction moved into the shared helper instead of staying
+  per-call-site: a security-relevant exclusion should not depend on N call
+  sites all remembering it.
+- **Invoices/versions is audited as one logical record** (`table_name='invoices'`,
+  keyed by the receivable id, never a separate `invoice_versions` audit trail) —
+  `transition_invoice`'s Hardened/Sent/Live(reopen)/Void/Revise branches and
+  `_reissue_invoice` each write one row summarizing that transition (e.g. Harden:
+  `{'version_state': {'old': 'Live', 'new': 'Hardened'}, 'total': <frozen total>}`)
+  rather than a full invoice_versions row diff — `invoice_status_history` (migration
+  007) already captures the granular per-transition detail with from_state/
+  to_state/notes; `record_audit` here is the unified cross-entity feed the
+  directive's History panel/global view need, not a duplicate of that existing
+  table.
+- **`users` writes `record_audit` to `getagrip` only**, never all four DBs —
+  same canonical-source reasoning as D-003 (auth and `session['company_access']`
+  only ever read `getagrip.users`; the other three DBs' copies are inert and
+  don't need their own audit trail of writes nobody reads). `write_to_all_dbs`
+  itself is untouched — record_audit is written in a small separate
+  getagrip-only connection immediately after, using the row `write_to_all_dbs`'s
+  own canonical-id lookup already resolved.
+- **Payment applications (`payment_applications`) are not separately audited** —
+  it's already an append-only ledger by construction (an "unapply" inserts a
+  negative reversal row, nothing is ever mutated or deleted), so a `record_audit`
+  entry on top of it would just restate what the table's own rows already show.
+  Same reasoning `contact_property_history` used in Increment 3.5 to skip its
+  own audit entries.
+- **Per-record "History" panel** (`_macros.html`'s `audit_history_panel()`, a
+  native `<details>` disclosure — no JS needed) is on customer/WO/invoice/payment
+  detail per the directive, visible to whoever can already view that detail page
+  (no extra role gate — the directive only calls the *global* view "Admin-only",
+  not the per-record panels). **The global view** (`/settings/audit?table=&id=
+  &user=&from=&to=`) is admin-only, paginated, with a table/id/user/date filter
+  bar, reusing the exact same diff-rendering markup as the per-record panel.
+
+**Migration:** 027 (`027_record_audit.sql`), applied to all four DBs, verified
+idempotent. Pre-migration backups in `~/db-backups/2026-09-20g/`.
+
+**Smoke test:** `tests/smoke_audit_trail.py` — 46/46 checks: create/update/delete
+audit rows verified for customers, catalog items, work orders, invoices (create +
+harden), payments (record + void), estimates (create + send), tax rates
+(create + end), and users (create + toggle-active + reset-password); the no-op-
+update-writes-nothing guarantee; every detail page's History panel renders and
+shows the right diff; the global view's admin-only gate (manager gets 403), its
+table/id filter narrows correctly, and — the most safety-critical assertion —
+`password_hash` never appears anywhere in any diff, on the create path or
+anywhere in the global view's rendered HTML. Full 23-file regression suite
+re-run clean.
+
+**Deferred:** nothing from this increment's own scope.
+
+---
+
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:
 #33 (OPS/VendorCafe export templates), #50 (SMS alerts via Twilio), and Stage 5.6
 (ServiceFusion price-list exports, company legal names/remit-to/reply-to/alert emails).

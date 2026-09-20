@@ -32,3 +32,40 @@
     <div class="ac-panel" role="listbox"></div>
 </div>
 {%- endmacro %}
+
+{# Read-only "History" panel (directive §5.3) -- audit_history is a list of
+   record_audit rows (id, action, diff, changed_by, changed_at), newest first. #}
+{% macro audit_history_panel(audit_history) -%}
+<details class="audit-history">
+    <summary>History{% if audit_history %} ({{ audit_history|length }}){% endif %}</summary>
+    <div class="audit-history-body">
+        {% for row in audit_history %}
+        <div class="audit-row">
+            <div class="audit-row-head">
+                <span class="audit-action audit-action-{{ row.action }}">{{ row.action }}</span>
+                <span class="audit-who">{{ row.changed_by or 'system' }}</span>
+                <span class="audit-when">{{ row.changed_at.strftime('%b %-d, %Y %-I:%M %p') if row.changed_at else '' }}</span>
+            </div>
+            {% if row.diff %}
+            <ul class="audit-diff">
+                {% for col, val in row.diff.items() %}
+                <li>
+                    <span class="audit-col">{{ col }}</span>:
+                    {% if row.action == 'update' and val is mapping %}
+                    <span class="audit-old">{{ val.old if val.old is not none else '—' }}</span>
+                    →
+                    <span class="audit-new">{{ val.new if val.new is not none else '—' }}</span>
+                    {% else %}
+                    <span class="audit-new">{{ val if val is not none else '—' }}</span>
+                    {% endif %}
+                </li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+        </div>
+        {% else %}
+        <div class="audit-empty">No changes recorded yet.</div>
+        {% endfor %}
+    </div>
+</details>
+{%- endmacro %}

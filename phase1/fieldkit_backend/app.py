@@ -9,6 +9,7 @@ from psycopg2.extras import RealDictCursor
 import bcrypt
 import secrets
 from datetime import datetime, timedelta, date
+from decimal import Decimal
 from functools import wraps
 import json
 import math
@@ -687,6 +688,7 @@ def customer_detail(company_key, customer_id, branding, all_companies, company_a
     cur.execute("SELECT * FROM customer_ratings WHERE customer_id = %s", (customer_id,))
     rating = cur.fetchone()
 
+    audit_history = _audit_history(cur, 'customers', customer_id)
     cur.close(); conn.close()
 
     return render_template('customer_detail.html',
@@ -700,7 +702,7 @@ def customer_detail(company_key, customer_id, branding, all_companies, company_a
         statement_recipients=statement_recipients, resend_configured=bool(RESEND_API_KEY),
         compliance_portals=compliance_portals, portal_types=PORTAL_TYPES,
         default_statement_subject=default_statement_subject, default_statement_body=default_statement_body,
-        customer_estimates=customer_estimates, rating=rating,
+        customer_estimates=customer_estimates, rating=rating, audit_history=audit_history,
     )
 
 # ============================================================================
@@ -774,6 +776,8 @@ def customer_new(company_key, branding, all_companies, company_access):
             ))
             customer_id = cur.fetchone()['id']
             save_custom_fields(conn, customer_id, request.form, session.get('username'))
+            cur.execute("SELECT * FROM customers WHERE id = %s", (customer_id,))
+            _record_audit(cur, 'customers', customer_id, 'create', after=cur.fetchone())
             conn.commit()
             cur.close(); conn.close()
             return redirect(f'/{company_key}/customers/{customer_id}')
@@ -852,6 +856,8 @@ def customer_edit(company_key, customer_id, branding, all_companies, company_acc
                 customer_id,
             ))
             save_custom_fields(conn, customer_id, request.form, session.get('username'))
+            cur.execute("SELECT * FROM customers WHERE id = %s", (customer_id,))
+            _record_audit(cur, 'customers', customer_id, 'update', before=customer, after=cur.fetchone())
             conn.commit()
             cur.close(); conn.close()
             return redirect(f'/{company_key}/customers/{customer_id}')
@@ -999,11 +1005,14 @@ def _merge_customers(cur, source_id, target_id, username):
         VALUES (%s, %s, 'Merge', %s)
     """, (source_id, f"Merged into \"{target_name}\" (#{target_id}).", username))
 
+    cur.execute("SELECT * FROM customers WHERE id = %s", (source_id,))
+    before_delete = cur.fetchone()
     cur.execute("""
         UPDATE customers SET deleted_at = CURRENT_TIMESTAMP, deleted_by = %s,
             merged_into_customer_id = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
         WHERE id = %s
     """, (username, target_id, username, source_id))
+    _record_audit(cur, 'customers', source_id, 'delete', before=before_delete, changed_by=username)
 
     cur.execute("""
         INSERT INTO customer_merge_log (source_customer_id, source_property_name,
@@ -1153,6 +1162,8 @@ def location_new(company_key, customer_id, branding, all_companies, company_acce
             ))
             location_id = cur.fetchone()['id']
             save_custom_fields(conn, customer_id, request.form, session.get('username'), location_id=location_id)
+            cur.execute("SELECT * FROM service_locations WHERE id = %s", (location_id,))
+            _record_audit(cur, 'service_locations', location_id, 'create', after=cur.fetchone())
             conn.commit()
             cur.close(); conn.close()
             return redirect(f'/{company_key}/customers/{customer_id}')
@@ -1223,6 +1234,8 @@ def location_edit(company_key, customer_id, location_id, branding, all_companies
                 location_id,
             ))
             save_custom_fields(conn, customer_id, request.form, session.get('username'), location_id=location_id)
+            cur.execute("SELECT * FROM service_locations WHERE id = %s", (location_id,))
+            _record_audit(cur, 'service_locations', location_id, 'update', before=location, after=cur.fetchone())
             conn.commit()
             cur.close(); conn.close()
             return redirect(f'/{company_key}/customers/{customer_id}')
@@ -1312,6 +1325,64 @@ def _opt_num(value):
     value = (value or '').strip()
     return value if value != '' else None
 
+
+def _audit_jsonable(v):
+    """NUMERIC comes back as Decimal, DATE/TIMESTAMP as date/datetime -- none of
+    those are JSON-serializable by default. Everything else passes through."""
+    if isinstance(v, (datetime, date)):
+        return v.isoformat()
+    if isinstance(v, Decimal):
+        return float(v)
+    return v
+
+
+_AUDIT_IGNORED_COLUMNS = {'updated_at'}  # bumped by every UPDATE regardless of
+                                          # whether anything user-meaningful changed
+                                          # -- pure noise in a diff; changed_at on
+                                          # record_audit itself already carries "when"
+_AUDIT_SECRET_COLUMNS = {'password_hash'}  # never diffed, not even hashed --
+                                            # stripped centrally so no call site has
+                                            # to remember to do it per-table
+
+def _record_audit(cur, table_name, record_id, action, before=None, after=None, changed_by=None):
+    """Increment 5.3 (directive §5.3). `before`/`after` are RealDictRow-like
+    dicts (or None). On 'update', diff is {col: {'old':..., 'new':...}} for
+    only the columns that actually changed -- a no-op update (nothing
+    differs) writes nothing, so this is safe to call unconditionally after
+    every UPDATE. On 'create'/'delete', diff is the full after/before row
+    (there's no prior/subsequent state to diff against)."""
+    changed_by = changed_by or session.get('username')
+    if before:
+        before = {k: v for k, v in before.items() if k not in _AUDIT_SECRET_COLUMNS}
+    if after:
+        after = {k: v for k, v in after.items() if k not in _AUDIT_SECRET_COLUMNS}
+    if action == 'update':
+        before = before or {}
+        after = after or {}
+        diff = {}
+        for k in (set(before.keys()) | set(after.keys())) - _AUDIT_IGNORED_COLUMNS:
+            bv, av = _audit_jsonable(before.get(k)), _audit_jsonable(after.get(k))
+            if bv != av:
+                diff[k] = {'old': bv, 'new': av}
+        if not diff:
+            return
+    else:
+        row = after if action == 'create' else before
+        diff = {k: _audit_jsonable(v) for k, v in (row or {}).items()}
+    cur.execute("""
+        INSERT INTO record_audit (table_name, record_id, action, changed_by, diff)
+        VALUES (%s, %s, %s, %s, %s)
+    """, (table_name, record_id, action, changed_by, json.dumps(diff, default=str)))
+
+
+def _audit_history(cur, table_name, record_id, limit=25):
+    """Read-only History panel feed for one record (directive §5.3)."""
+    cur.execute("""
+        SELECT * FROM record_audit WHERE table_name = %s AND record_id = %s
+        ORDER BY changed_at DESC LIMIT %s
+    """, (table_name, record_id, limit))
+    return cur.fetchall()
+
 def _save_catalog_item(company_key, item_id):
     """Insert (item_id is None) or update a catalog item from request.form.
     Returns an error string, or None on success."""
@@ -1353,11 +1424,17 @@ def _save_catalog_item(company_key, item_id):
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
                     (SELECT COALESCE(MAX(sort_order),0)+1 FROM catalog_items WHERE deleted_at IS NULL),
                     %s,%s,%s)
+            RETURNING id
         """, (billing_behavior, name, default_desc, category,
               unit_price, unit_of_measure, estimated_minutes,
               minimum_quantity, billing_increment, is_taxable, cost,
               is_catch_all, is_active, username, username))
+        new_id = cur.fetchone()['id']
+        cur.execute("SELECT * FROM catalog_items WHERE id = %s", (new_id,))
+        _record_audit(cur, 'catalog_items', new_id, 'create', after=cur.fetchone(), changed_by=username)
     else:
+        cur.execute("SELECT * FROM catalog_items WHERE id = %s", (item_id,))
+        before = cur.fetchone()
         cur.execute("""
             UPDATE catalog_items
             SET billing_behavior=%s, name=%s, default_description=%s, category=%s,
@@ -1370,6 +1447,8 @@ def _save_catalog_item(company_key, item_id):
               unit_price, unit_of_measure, estimated_minutes,
               minimum_quantity, billing_increment, is_taxable, cost,
               is_catch_all, is_active, username, item_id))
+        cur.execute("SELECT * FROM catalog_items WHERE id = %s", (item_id,))
+        _record_audit(cur, 'catalog_items', item_id, 'update', before=before, after=cur.fetchone(), changed_by=username)
     conn.commit(); cur.close(); conn.close()
     return None
 
@@ -1466,11 +1545,15 @@ def catalog_delete(company_key, item_id):
         abort(403)
     conn = get_db_connection(company_key)
     cur  = conn.cursor()
+    cur.execute("SELECT * FROM catalog_items WHERE id = %s AND deleted_at IS NULL", (item_id,))
+    before_item = cur.fetchone()
     cur.execute("""
         UPDATE catalog_items
         SET deleted_at = CURRENT_TIMESTAMP, deleted_by = %s
         WHERE id = %s AND deleted_at IS NULL
     """, (session.get('username'), item_id))
+    if before_item:
+        _record_audit(cur, 'catalog_items', item_id, 'delete', before=before_item, changed_by=session.get('username'))
     conn.commit(); cur.close(); conn.close()
     return redirect(f'/{company_key}/settings/catalog')
 
@@ -1685,9 +1768,15 @@ def _save_tax_rate(company_key, rate_id):
                     (county, state_pct, county_pct, transit_pct,
                      effective_from, effective_to, is_active, created_by, updated_by)
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                RETURNING id
             """, (county, state_pct, county_pct, transit_pct,
                   effective_from, effective_to, is_active, username, username))
+            new_id = cur.fetchone()['id']
+            cur.execute("SELECT * FROM tax_rates WHERE id = %s", (new_id,))
+            _record_audit(cur, 'tax_rates', new_id, 'create', after=cur.fetchone(), changed_by=username)
         else:
+            cur.execute("SELECT * FROM tax_rates WHERE id = %s AND deleted_at IS NULL", (rate_id,))
+            before_rate = cur.fetchone()
             cur.execute("""
                 UPDATE tax_rates
                 SET county=%s, state_pct=%s, county_pct=%s, transit_pct=%s,
@@ -1696,6 +1785,8 @@ def _save_tax_rate(company_key, rate_id):
                 WHERE id=%s AND deleted_at IS NULL
             """, (county, state_pct, county_pct, transit_pct,
                   effective_from, effective_to, is_active, username, rate_id))
+            cur.execute("SELECT * FROM tax_rates WHERE id = %s", (rate_id,))
+            _record_audit(cur, 'tax_rates', rate_id, 'update', before=before_rate, after=cur.fetchone(), changed_by=username)
     except psycopg2.errors.UniqueViolation:
         conn.rollback(); cur.close(); conn.close()
         return f'{county} already has a rate row effective {effective_from}. Pick a different date or edit that row instead.'
@@ -1792,7 +1883,7 @@ def tax_rate_end(company_key, rate_id):
     effective_to = request.form.get('effective_to', '').strip() or date.today().isoformat()
     conn = get_db_connection(company_key)
     cur  = conn.cursor()
-    cur.execute("SELECT effective_from FROM tax_rates WHERE id = %s AND deleted_at IS NULL", (rate_id,))
+    cur.execute("SELECT effective_from, effective_to, is_active FROM tax_rates WHERE id = %s AND deleted_at IS NULL", (rate_id,))
     row = cur.fetchone()
     if not row:
         cur.close(); conn.close()
@@ -1806,6 +1897,9 @@ def tax_rate_end(company_key, rate_id):
             updated_at = CURRENT_TIMESTAMP, updated_by = %s
         WHERE id = %s AND deleted_at IS NULL
     """, (effective_to, session.get('username'), rate_id))
+    _record_audit(cur, 'tax_rates', rate_id, 'update',
+                   before={'effective_to': row['effective_to'], 'is_active': row['is_active']},
+                   after={'effective_to': effective_to, 'is_active': False}, changed_by=session.get('username'))
     conn.commit(); cur.close(); conn.close()
     return redirect(f'/{company_key}/settings/tax')
 
@@ -2316,6 +2410,12 @@ def _reissue_invoice(cur, company_key, old_invoice_id, username):
     """, (new_invoice_id, new_version_id, username,
           f'Created via reissue of voided invoice id {old_invoice_id}.'))
 
+    _record_audit(cur, 'invoices', old_invoice_id, 'update',
+                   before={'reissued_as_invoice_id': None}, after={'reissued_as_invoice_id': new_invoice_id},
+                   changed_by=username)
+    cur.execute("SELECT * FROM invoices WHERE id = %s", (new_invoice_id,))
+    _record_audit(cur, 'invoices', new_invoice_id, 'create', after=cur.fetchone(), changed_by=username)
+
     return new_invoice_id
 
 
@@ -2378,6 +2478,9 @@ def transition_invoice(cur, company_key, invoice_id, to_state, username, notes=N
             INSERT INTO invoice_status_history (invoice_id, state, from_state, to_state, changed_by, notes)
             VALUES (%s, 'Void', 'open', 'void', %s, %s)
         """, (invoice_id, username, void_reason))
+        _record_audit(cur, 'invoices', invoice_id, 'update',
+                       before={'receivable_state': 'open'}, after={'receivable_state': 'void', 'void_reason': void_reason},
+                       changed_by=username)
         return True, None, None
 
     if to_state == 'Reissue':
@@ -2478,6 +2581,9 @@ def transition_invoice(cur, company_key, invoice_id, to_state, username, notes=N
                  subtotal_delta, tax_delta, effective_date, changed_by, notes)
             VALUES (%s, 'Hardened', %s, 'Live', 'Hardened', %s, %s, CURRENT_DATE, %s, %s)
         """, (invoice_id, ver['id'], subtotal_delta, tax_delta, username, notes))
+        _record_audit(cur, 'invoices', invoice_id, 'update',
+                       before={'version_state': 'Live'}, after={'version_state': 'Hardened', 'total': _audit_jsonable(total)},
+                       changed_by=username)
         return True, None, None
 
     if to_state == 'Sent':
@@ -2495,6 +2601,9 @@ def transition_invoice(cur, company_key, invoice_id, to_state, username, notes=N
             VALUES (%s, 'Sent', %s, 'Hardened', 'Sent', %s, %s)
         """, (invoice_id, ver['id'], username,
               f'Sent to {sent_to_emails}' if sent_to_emails else None))
+        _record_audit(cur, 'invoices', invoice_id, 'update',
+                       before={'version_state': 'Hardened'}, after={'version_state': 'Sent', 'sent_to_emails': sent_to_emails},
+                       changed_by=username)
         return True, None, None
 
     if to_state == 'Live':  # reopen
@@ -2535,6 +2644,8 @@ def transition_invoice(cur, company_key, invoice_id, to_state, username, notes=N
             INSERT INTO invoice_status_history (invoice_id, state, version_id, from_state, to_state, changed_by, notes)
             VALUES (%s, 'Live', %s, %s, 'Live', %s, %s)
         """, (invoice_id, ver['id'], ver['state'], username, history_note or None))
+        _record_audit(cur, 'invoices', invoice_id, 'update',
+                       before={'version_state': ver['state']}, after={'version_state': 'Live'}, changed_by=username)
         return True, None, None
 
     if to_state == 'Revise':
@@ -2587,6 +2698,9 @@ def transition_invoice(cur, company_key, invoice_id, to_state, username, notes=N
                 (invoice_id, state, version_id, from_state, to_state, effective_date, changed_by, notes)
             VALUES (%s, 'Live', %s, 'Sent', 'Live', CURRENT_DATE, %s, %s)
         """, (invoice_id, new_version_id, username, revision_reason))
+        _record_audit(cur, 'invoices', invoice_id, 'create', after={
+            'new_version_id': new_version_id, 'revision_number': new_rev_num, 'revision_reason': revision_reason,
+        }, changed_by=username)
 
         return True, None, {'new_version_id': new_version_id}
 
@@ -3007,9 +3121,12 @@ def _save_work_order(company_key, wo_id):
                         INSERT INTO estimate_status_history (estimate_id, status, changed_by, notes)
                         VALUES (%s, 'Converted', %s, %s)
                     """, (source_estimate_id, username, f'Converted to work order {wo_number}'))
+                    _record_audit(cur, 'estimates', source_estimate_id, 'update',
+                                   before={'status': 'Approved'}, after={'status': 'Converted', 'converted_to_job_id': wo_id},
+                                   changed_by=username)
         else:
             cur.execute("""
-                SELECT status, extraction_started_at FROM work_orders WHERE id = %s AND deleted_at IS NULL
+                SELECT * FROM work_orders WHERE id = %s AND deleted_at IS NULL
             """, (wo_id,))
             existing = cur.fetchone()
             if not existing:
@@ -3116,6 +3233,13 @@ def _save_work_order(company_key, wo_id):
                 VALUES (%s, %s, %s, %s)
             """, (wo_id, status,  username,
                   'Created' if prev_status is None else f'Changed from {prev_status}'))
+
+        cur.execute("SELECT * FROM work_orders WHERE id = %s", (wo_id,))
+        after_wo = cur.fetchone()
+        if prev_status is None:
+            _record_audit(cur, 'work_orders', wo_id, 'create', after=after_wo, changed_by=username)
+        else:
+            _record_audit(cur, 'work_orders', wo_id, 'update', before=existing, after=after_wo, changed_by=username)
 
         conn.commit()
         if duration_warning:
@@ -3530,6 +3654,7 @@ def workorder_detail(company_key, wo_id, branding, all_companies, company_access
     """, (wo_id,))
     callbacks_against = cur.fetchall()
 
+    audit_history = _audit_history(cur, 'work_orders', wo_id)
     cur.close(); conn.close()
     extraction_day_count = _extraction_day_count(wo['extraction_started_at'])
     return render_template('workorder_detail.html',
@@ -3539,6 +3664,7 @@ def workorder_detail(company_key, wo_id, branding, all_companies, company_access
         accruing=accruing, techs=techs, history=history, invoice_id=invoice_id,
         extraction_day_count=extraction_day_count, has_followup_child=has_followup_child,
         callback_source=callback_source, callbacks_against=callbacks_against,
+        audit_history=audit_history,
     )
 
 @app.route('/<company_key>/workorders/new', methods=['GET', 'POST'])
@@ -3735,6 +3861,8 @@ def workorder_delete(company_key, wo_id):
     username = session.get('username')
     conn = get_db_connection(company_key)
     cur  = conn.cursor()
+    cur.execute("SELECT * FROM work_orders WHERE id = %s AND deleted_at IS NULL", (wo_id,))
+    before_wo = cur.fetchone()
     cur.execute("""
         UPDATE work_orders
         SET deleted_at = CURRENT_TIMESTAMP, deleted_by = %s
@@ -3745,6 +3873,8 @@ def workorder_delete(company_key, wo_id):
         SET deleted_at = CURRENT_TIMESTAMP, deleted_by = %s
         WHERE work_order_id = %s AND deleted_at IS NULL
     """, (username, wo_id))
+    if before_wo:
+        _record_audit(cur, 'work_orders', wo_id, 'delete', before=before_wo, changed_by=username)
     conn.commit(); cur.close(); conn.close()
     return redirect(f'/{company_key}/workorders')
 
@@ -3776,6 +3906,7 @@ def workorder_quick_status(company_key, wo_id):
         INSERT INTO work_order_status_history (work_order_id, status, changed_by, notes)
         VALUES (%s, %s, %s, %s)
     """, (wo_id, new_status, username, f'Changed from {wo["status"]} (dispatch board)'))
+    _record_audit(cur, 'work_orders', wo_id, 'update', before=wo, after={'status': new_status}, changed_by=username)
     conn.commit(); cur.close(); conn.close()
     return jsonify({'ok': True})
 
@@ -4801,6 +4932,7 @@ def contact_new(company_key, customer_id, branding, all_companies, company_acces
                     accepts_billing, accepts_statements, accepts_general,
                     notes, created_by, updated_by
                 ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                RETURNING id
             """, (
                 customer_id,
                 request.form.get('first_name', '').strip(),
@@ -4818,6 +4950,9 @@ def contact_new(company_key, customer_id, branding, all_companies, company_acces
                 session.get('username'),
                 session.get('username'),
             ))
+            new_contact_id = cur.fetchone()['id']
+            cur.execute("SELECT * FROM customer_contacts WHERE id = %s", (new_contact_id,))
+            _record_audit(cur, 'customer_contacts', new_contact_id, 'create', after=cur.fetchone())
             conn.commit()
             cur.close(); conn.close()
             return redirect(f'/{company_key}/customers/{customer_id}')
@@ -4910,6 +5045,8 @@ def contact_edit(company_key, customer_id, contact_id, branding, all_companies, 
                 session.get('username'),
                 contact_id,
             ))
+            cur.execute("SELECT * FROM customer_contacts WHERE id = %s", (contact_id,))
+            _record_audit(cur, 'customer_contacts', contact_id, 'update', before=contact, after=cur.fetchone())
             conn.commit()
             cur.close(); conn.close()
             return redirect(f'/{company_key}/customers/{customer_id}')
@@ -4949,11 +5086,15 @@ def contact_delete(company_key, customer_id, contact_id):
     count = cur.fetchone()['count']
 
     if count > 1:
+        cur.execute("SELECT * FROM customer_contacts WHERE id = %s AND customer_id = %s", (contact_id, customer_id))
+        before_contact = cur.fetchone()
         cur.execute("""
             UPDATE customer_contacts
             SET deleted_at = CURRENT_TIMESTAMP, deleted_by = %s
             WHERE id = %s AND customer_id = %s
         """, (session.get('username'), contact_id, customer_id))
+        if before_contact:
+            _record_audit(cur, 'customer_contacts', contact_id, 'delete', before=before_contact, changed_by=session.get('username'))
         conn.commit()
 
     cur.close(); conn.close()
@@ -5070,6 +5211,8 @@ def _create_invoice_from_wo(cur, company_key, wo, username):
         INSERT INTO invoice_status_history (invoice_id, state, version_id, to_state, changed_by, notes)
         VALUES (%s, 'Live', %s, 'Live', %s, %s)
     """, (invoice_id, version_id, username, f'Created from work order.'))
+    cur.execute("SELECT * FROM invoices WHERE id = %s", (invoice_id,))
+    _record_audit(cur, 'invoices', invoice_id, 'create', after=cur.fetchone(), changed_by=username)
 
     return invoice_id
 
@@ -5317,6 +5460,7 @@ def invoice_detail(company_key, invoice_id, branding, all_companies, company_acc
             settings_row.get('invoice_email_template'), inv['customer_name'],
             inv['invoice_number'], ver['total'], balance)
 
+    audit_history = _audit_history(cur, 'invoices', invoice_id)
     cur.close(); conn.close()
     return render_template('invoice_detail.html',
         branding=branding, company_key=company_key,
@@ -5328,6 +5472,7 @@ def invoice_detail(company_key, invoice_id, branding, all_companies, company_acc
         next_unpaid_id=next_unpaid_id, payment_methods=payment_methods,
         email_recipients=email_recipients, default_subject=default_subject,
         default_body=default_body, resend_configured=bool(RESEND_API_KEY),
+        audit_history=audit_history,
     )
 
 
@@ -5432,6 +5577,8 @@ def invoice_edit(company_key, invoice_id, branding, all_companies, company_acces
                     updated_at = CURRENT_TIMESTAMP, updated_by = %s
                 WHERE id = %s
             """, (invoice_date, wtn_po_number, portal_id, username, invoice_id))
+            cur.execute("SELECT * FROM invoices WHERE id = %s", (invoice_id,))
+            _record_audit(cur, 'invoices', invoice_id, 'update', before=inv, after=cur.fetchone(), changed_by=username)
             conn.commit()
             cur.close(); conn.close()
             flash('Invoice saved.', 'success')
@@ -5945,6 +6092,8 @@ def _record_payment(cur, customer_id, payment_date, amount, payment_method_id,
         INSERT INTO payment_status_history (payment_id, event, changed_by, notes)
         VALUES (%s, 'received', %s, %s)
     """, (payment_id, username, f'${amount:.2f} recorded.'))
+    cur.execute("SELECT * FROM payments WHERE id = %s", (payment_id,))
+    _record_audit(cur, 'payments', payment_id, 'create', after=cur.fetchone(), changed_by=username)
 
     if apply_to_invoice_id:
         ok, err = _apply_payment(cur, payment_id, apply_to_invoice_id, amount, payment_date, username)
@@ -6005,6 +6154,8 @@ def _void_payment(cur, payment_id, username, reason):
         INSERT INTO payment_status_history (payment_id, event, changed_by, notes)
         VALUES (%s, 'voided', %s, %s)
     """, (payment_id, username, reason))
+    _record_audit(cur, 'payments', payment_id, 'update',
+                   before={'status': p['status']}, after={'status': 'voided', 'void_reason': reason}, changed_by=username)
     return True, None
 
 
@@ -6030,6 +6181,8 @@ def _refund_payment(cur, payment_id, amount, reference, notes, username):
         INSERT INTO payment_status_history (payment_id, event, changed_by, notes)
         VALUES (%s, 'refunded', %s, %s)
     """, (payment_id, username, f'${amount:.2f} refunded' + (f' ({reference})' if reference else '')))
+    _record_audit(cur, 'payments', payment_id, 'update',
+                   after={'refunded_amount_delta': amount, 'refund_reference': reference}, changed_by=username)
     return True, None
 
 
@@ -6232,12 +6385,14 @@ def payment_detail(company_key, payment_id, branding, all_companies, company_acc
     """, (payment['customer_id'],))
     open_invoices = cur.fetchall()
 
+    audit_history = _audit_history(cur, 'payments', payment_id)
     cur.close(); conn.close()
     return render_template('payment_detail.html',
         branding=branding, company_key=company_key,
         company_access=company_access, all_companies=all_companies,
         payment=payment, applications=applications, reversed_ids=reversed_ids,
         history=history, remaining=remaining, open_invoices=open_invoices,
+        audit_history=audit_history,
     )
 
 
@@ -7437,10 +7592,17 @@ def user_new(company_key, branding, all_companies, company_access):
                 # redirecting as if the user exists (the bug this replaced: a
                 # failure here used to silently redirect to "success").
                 error = 'User was not created: ' + '; '.join(errs or ['unknown database error'])
-            elif errs:
-                error = 'User created but errors syncing to some databases: ' + '; '.join(errs)
-                return redirect(f'/{company_key}/settings/users')
             else:
+                # record_audit is written to getagrip only -- the canonical DB
+                # per D-003 (auth/session['company_access'] only ever reads
+                # getagrip's users table; the other 3 DBs' copies are inert).
+                conn = get_db_connection('getagrip')
+                cur  = conn.cursor()
+                cur.execute("SELECT * FROM users WHERE id = %s", (row['id'],))
+                _record_audit(cur, 'users', row['id'], 'create', after=cur.fetchone(), changed_by=session.get('username'))
+                conn.commit(); cur.close(); conn.close()
+                if errs:
+                    error = 'User created but errors syncing to some databases: ' + '; '.join(errs)
                 return redirect(f'/{company_key}/settings/users')
 
     return render_template('user_form.html',
@@ -7499,6 +7661,18 @@ def user_edit(company_key, user_id, branding, all_companies, company_access):
                   phone_mobile, default_start_time, dispatch_sort_order,
                   user['username']))
 
+            # record_audit written to getagrip only (canonical DB, D-003).
+            # password_hash is never diffed -- a secret has no business in an
+            # audit trail even hashed.
+            conn = get_db_connection('getagrip')
+            cur  = conn.cursor()
+            cur.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+            after_user = dict(cur.fetchone())
+            after_user.pop('password_hash', None)
+            before_user = {k: v for k, v in dict(user).items() if k != 'password_hash'}
+            _record_audit(cur, 'users', user_id, 'update', before=before_user, after=after_user, changed_by=session.get('username'))
+            conn.commit(); cur.close(); conn.close()
+
             if errs:
                 error = 'Saved but errors syncing: ' + '; '.join(errs)
             else:
@@ -7537,6 +7711,12 @@ def user_reset_password(company_key, user_id):
         UPDATE users SET password_hash = %s, updated_at = CURRENT_TIMESTAMP
         WHERE username = %s
     """, (pw_hash, user['username']))
+    # Never diff the hash itself -- just record that a reset happened.
+    conn = get_db_connection('getagrip')
+    cur  = conn.cursor()
+    _record_audit(cur, 'users', user_id, 'update', before={'password_reset': False}, after={'password_reset': True},
+                   changed_by=session.get('username'))
+    conn.commit(); cur.close(); conn.close()
 
     return redirect(f'/{company_key}/settings/users')
 
@@ -7560,8 +7740,80 @@ def user_toggle_active(company_key, user_id):
         UPDATE users SET is_active = NOT is_active, updated_at = CURRENT_TIMESTAMP
         WHERE username = %s
     """, (user['username'],))
+    conn = get_db_connection('getagrip')
+    cur  = conn.cursor()
+    _record_audit(cur, 'users', user_id, 'update',
+                   before={'is_active': user['is_active']}, after={'is_active': not user['is_active']},
+                   changed_by=session.get('username'))
+    conn.commit(); cur.close(); conn.close()
 
     return redirect(f'/{company_key}/settings/users')
+
+# ============================================================================
+# Audit trail (directive §5.3, admin only)
+# ============================================================================
+
+AUDIT_TABLE_LABELS = {
+    'customers': 'Customers', 'customer_contacts': 'Contacts', 'service_locations': 'Service Locations',
+    'work_orders': 'Work Orders', 'invoices': 'Invoices', 'payments': 'Payments',
+    'estimates': 'Estimates', 'catalog_items': 'Catalog', 'tax_rates': 'Tax Rates', 'users': 'Users',
+}
+
+@app.route('/<company_key>/settings/audit')
+@login_required
+@company_access_required
+@with_branding
+def audit_global(company_key, branding, all_companies, company_access):
+    if session.get('user_role') != 'admin':
+        abort(403)
+    table_filter = request.args.get('table', '').strip()
+    id_filter    = _opt_num(request.args.get('id'))
+    user_filter  = request.args.get('user', '').strip()
+    from_filter  = request.args.get('from', '').strip()
+    to_filter    = request.args.get('to', '').strip()
+    page         = max(1, request.args.get('page', 1, type=int))
+    per_page     = 50
+
+    conditions, params = ["1=1"], []
+    if table_filter:
+        conditions.append("table_name = %s")
+        params.append(table_filter)
+    if id_filter:
+        conditions.append("record_id = %s")
+        params.append(id_filter)
+    if user_filter:
+        conditions.append("changed_by = %s")
+        params.append(user_filter)
+    if from_filter:
+        conditions.append("changed_at >= %s")
+        params.append(from_filter)
+    if to_filter:
+        conditions.append("changed_at < (%s::date + INTERVAL '1 day')")
+        params.append(to_filter)
+    where = " AND ".join(conditions)
+
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute(f"SELECT COUNT(*) AS n FROM record_audit WHERE {where}", params)
+    total = cur.fetchone()['n']
+    cur.execute(f"""
+        SELECT * FROM record_audit WHERE {where}
+        ORDER BY changed_at DESC LIMIT %s OFFSET %s
+    """, params + [per_page, (page - 1) * per_page])
+    rows = cur.fetchall()
+    cur.execute("SELECT DISTINCT changed_by FROM record_audit WHERE changed_by IS NOT NULL ORDER BY changed_by")
+    users = [r['changed_by'] for r in cur.fetchall()]
+    cur.close(); conn.close()
+
+    return render_template('audit_global.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        rows=rows, total=total, page=page, per_page=per_page,
+        total_pages=max(1, (total + per_page - 1) // per_page),
+        table_filter=table_filter, id_filter=id_filter, user_filter=user_filter,
+        from_filter=from_filter, to_filter=to_filter, users=users,
+        table_labels=AUDIT_TABLE_LABELS,
+    )
 
 # ============================================================================
 # Password Reset — email-based token flow
@@ -8940,7 +9192,9 @@ def _save_estimate(company_key, estimate_id):
 
         subtotal = sum(l['total'] for l in lines)
 
-        if estimate_id is None:
+        is_create = estimate_id is None
+        existing = None
+        if is_create:
             est_number = _next_estimate_number(cur, company_key)
             cur.execute("""
                 INSERT INTO estimates (estimate_number, customer_id, service_location_id, primary_contact_id,
@@ -8954,7 +9208,7 @@ def _save_estimate(company_key, estimate_id):
                 VALUES (%s, 'Draft', %s, 'Created')
             """, (estimate_id, username))
         else:
-            cur.execute("SELECT status FROM estimates WHERE id = %s AND deleted_at IS NULL", (estimate_id,))
+            cur.execute("SELECT * FROM estimates WHERE id = %s AND deleted_at IS NULL", (estimate_id,))
             existing = cur.fetchone()
             if not existing:
                 return None, 'Estimate not found.'
@@ -8998,6 +9252,13 @@ def _save_estimate(company_key, estimate_id):
             cur.execute("""
                 UPDATE estimate_line_items SET deleted_at=CURRENT_TIMESTAMP, deleted_by=%s WHERE id = ANY(%s)
             """, (username, list(removed)))
+
+        cur.execute("SELECT * FROM estimates WHERE id = %s", (estimate_id,))
+        after_est = cur.fetchone()
+        if is_create:
+            _record_audit(cur, 'estimates', estimate_id, 'create', after=after_est, changed_by=username)
+        else:
+            _record_audit(cur, 'estimates', estimate_id, 'update', before=existing, after=after_est, changed_by=username)
 
         conn.commit()
         return estimate_id, None
@@ -9225,6 +9486,9 @@ def estimate_send(company_key, estimate_id):
         INSERT INTO estimate_status_history (estimate_id, status, changed_by, notes)
         VALUES (%s, 'Sent', %s, %s)
     """, (estimate_id, username, f'Sent to {", ".join(to_emails)}'))
+    _record_audit(cur, 'estimates', estimate_id, 'update',
+                   before={'status': 'Draft'}, after={'status': 'Sent', 'sent_to_emails': ', '.join(to_emails)},
+                   changed_by=username)
     conn.commit()
 
     pdf_bytes, cust_name = generate_estimate_pdf(company_key, estimate_id)
@@ -9271,6 +9535,8 @@ def estimate_approve(company_key, estimate_id):
     cur.execute("""
         INSERT INTO estimate_status_history (estimate_id, status, changed_by) VALUES (%s, 'Approved', %s)
     """, (estimate_id, username))
+    _record_audit(cur, 'estimates', estimate_id, 'update',
+                   before={'status': 'Sent'}, after={'status': 'Approved'}, changed_by=username)
     conn.commit(); cur.close(); conn.close()
     flash('Estimate approved.', 'success')
     return redirect(f'/{company_key}/estimates/{estimate_id}')
@@ -9304,6 +9570,8 @@ def estimate_decline(company_key, estimate_id):
     cur.execute("""
         INSERT INTO estimate_status_history (estimate_id, status, changed_by, notes) VALUES (%s, 'Declined', %s, %s)
     """, (estimate_id, username, reason))
+    _record_audit(cur, 'estimates', estimate_id, 'update',
+                   before={'status': 'Sent'}, after={'status': 'Declined', 'declined_reason': reason}, changed_by=username)
     conn.commit(); cur.close(); conn.close()
     flash('Estimate declined.', 'success')
     return redirect(f'/{company_key}/estimates/{estimate_id}')

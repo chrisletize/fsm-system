@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import audit_history_panel %}
 {% block title %}Payment — {{ branding.name }}{% endblock %}
 
 {% block extra_css %}
@@ -145,4 +146,6 @@
         {% endif %}
     </div>
 </div>
+
+{{ audit_history_panel(audit_history) }}
 {% endblock %}

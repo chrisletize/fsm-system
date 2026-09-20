@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import audit_history_panel %}
 {% block title %}{{ customer.property_name }} — {{ branding.name }}{% endblock %}
 
 {% block extra_css %}
@@ -939,5 +940,7 @@ function openPortalModal(portal) {
         {% endif %}
     </div>
 </div>
+
+{{ audit_history_panel(audit_history) }}
 
 {% endblock %}

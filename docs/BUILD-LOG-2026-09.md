@@ -1278,3 +1278,29 @@ verified idempotent. Pre-migration backups in `~/db-backups/2026-09-20f/`.
 Full 22-file regression suite re-run clean.
 
 **Deferred:** nothing from this increment's own scope.
+
+## Increment 5.3 — Audit trail
+
+- **Migration 027**: `record_audit` (`table_name, record_id, action, diff JSONB,
+  changed_by, changed_at`, append-only). Written from the save paths of all ten
+  entity types the directive lists (customers, contacts, service locations, work
+  orders, invoices/versions, payments, estimates, catalog, tax rates, users) via
+  one shared `_record_audit()` helper called right before each save path's own
+  commit.
+- Update diffs show only what actually changed (`updated_at` excluded from the
+  comparison — it's bumped on every UPDATE regardless); a no-op save writes
+  nothing. `password_hash` is redacted centrally inside `_record_audit` itself,
+  not per call site — see D-090 for the bug this caught on the first smoke-test
+  run (briefly present in a test-only fixture, never a real user, fixed before
+  merge).
+- Read-only "History" panel (`_macros.html`'s `audit_history_panel()`) on
+  customer/WO/invoice/payment detail. Admin-only global view
+  `/settings/audit?table=&id=&user=&from=&to=`, paginated.
+
+**Migration:** 027 (`027_record_audit.sql`), applied to all four DBs, verified
+idempotent. Pre-migration backups in `~/db-backups/2026-09-20g/`.
+
+**Smoke test:** `tests/smoke_audit_trail.py` — 46/46 checks (see D-090). Full
+23-file regression suite re-run clean.
+
+**Deferred:** nothing from this increment's own scope.

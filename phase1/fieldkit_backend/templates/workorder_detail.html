@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import audit_history_panel %}
 {% block title %}{{ wo.work_order_number }} — {{ branding.name }}{% endblock %}
 
 {% block extra_css %}
@@ -360,6 +361,8 @@
 
     </div>
 </div>
+
+{{ audit_history_panel(audit_history) }}
 
 {% if session.user_role in ('admin', 'manager') %}
 <form method="POST" id="deleteForm" action="/{{ company_key }}/workorders/{{ wo.id }}/delete" style="display:none;"></form>

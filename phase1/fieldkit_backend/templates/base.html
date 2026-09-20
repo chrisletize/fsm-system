@@ -406,6 +406,36 @@
             background: {{ branding.color_primary if branding else '#2C2C2C' }}0f;
             color: {{ branding.color_primary if branding else '#2C2C2C' }};
         }
+
+        /* Read-only "History" panel (directive §5.3) -- shared across customer/WO/
+           invoice/payment detail pages via _macros.html's audit_history_panel(). */
+        .audit-history { margin-top: 1.25rem; }
+        .audit-history summary {
+            cursor: pointer; font-size: 0.85rem; font-weight: 600; color: #666;
+            padding: 0.5rem 0; user-select: none;
+        }
+        .audit-history-body {
+            max-height: 320px; overflow-y: auto; border: 1px solid #eee; border-radius: 4px;
+            padding: 0.5rem 0.9rem; margin-top: 0.4rem; background: #fafafa;
+        }
+        .audit-row { padding: 0.55rem 0; border-bottom: 1px solid #eee; font-size: 0.82rem; }
+        .audit-row:last-child { border-bottom: none; }
+        .audit-row-head { display: flex; gap: 0.6rem; align-items: center; color: #888; }
+        .audit-action {
+            text-transform: uppercase; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.4px;
+            padding: 0.1rem 0.5rem; border-radius: 8px;
+        }
+        .audit-action-create { background: #e8f5e9; color: #2e7d32; }
+        .audit-action-update { background: #e6f1fb; color: #185fa5; }
+        .audit-action-delete { background: #fdecea; color: #a32d2d; }
+        .audit-who { font-weight: 600; color: #555; }
+        .audit-when { margin-left: auto; color: #aaa; }
+        .audit-diff { list-style: none; margin: 0.35rem 0 0; padding: 0; }
+        .audit-diff li { padding: 0.1rem 0; color: #444; }
+        .audit-col { color: #888; font-family: monospace; font-size: 0.78rem; }
+        .audit-old { color: #a32d2d; text-decoration: line-through; opacity: 0.75; }
+        .audit-new { color: #2e7d32; font-weight: 500; }
+        .audit-empty { color: #aaa; font-size: 0.85rem; padding: 0.4rem 0; }
     </style>
     {% block extra_css %}{% endblock %}
 </head>
@@ -567,6 +597,10 @@
                     <a href="/{{ company_key }}/settings/users"
                        class="{% if '/settings/users' in current_path %}active{% endif %}">
                         User Management
+                    </a>
+                    <a href="/{{ company_key }}/settings/audit"
+                       class="{% if '/settings/audit' in current_path %}active{% endif %}">
+                        Audit Log
                     </a>
                     {% endif %}
                 </div>
