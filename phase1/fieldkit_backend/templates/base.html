@@ -736,6 +736,16 @@
                 var current = [];
                 var activeIndex = -1;
 
+                // Exposed so callers can refresh options after init (e.g. the WO
+                // form's callback combo, whose options depend on which customer
+                // is currently selected). Does not touch the current selection --
+                // callers that need to clear it do so themselves via the hidden
+                // field.
+                input._comboSetOptions = function(newOptions) {
+                    options = newOptions || [];
+                    input.dataset.options = JSON.stringify(options);
+                };
+
                 function esc(s) {
                     return String(s).replace(/[&<>"']/g, function(c){
                         return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
@@ -852,6 +862,17 @@
             });
         }
         document.addEventListener('DOMContentLoaded', initRestrictedComboFields);
+
+        // Refresh a restricted combo's option list after init (its options
+        // depend on some other field, e.g. the WO form's callback combo
+        // depends on which customer is selected). Safe to call before init
+        // runs too -- falls back to just updating the dataset, which init
+        // reads on its own first pass.
+        function setRestrictedComboOptions(input, newOptions) {
+            if (!input) return;
+            if (input._comboSetOptions) { input._comboSetOptions(newOptions); }
+            else { input.dataset.options = JSON.stringify(newOptions || []); }
+        }
 
         // ============================================================
         // Site-wide Enter policy: pressing Enter in a field exits the

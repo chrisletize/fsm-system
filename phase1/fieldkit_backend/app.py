@@ -522,7 +522,8 @@ def customer_detail(company_key, customer_id, branding, all_companies, company_a
     custom_fields = get_custom_fields(conn, customer_id)
 
     cur.execute("""
-        SELECT id, work_order_number, status, start_date::text AS start_date, work_site_label
+        SELECT id, work_order_number, status, start_date::text AS start_date, work_site_label,
+               (callback_of_work_order_id IS NOT NULL) AS is_callback
         FROM work_orders
         WHERE customer_id = %s AND deleted_at IS NULL
         ORDER BY start_date DESC NULLS LAST, id DESC LIMIT 50
@@ -2502,6 +2503,15 @@ def _save_work_order(company_key, wo_id):
     extraction_action       = request.form.get('extraction_action') or None
     is_internal_task        = request.form.get('is_internal_task') == 'on'
     source_estimate_id      = _opt_num(request.form.get('estimate_id'))
+    callback_of_work_order_id     = _opt_num(request.form.get('callback_of_work_order_id'))
+    callback_reason               = request.form.get('callback_reason', '').strip() or None
+    callback_responsible_username = request.form.get('callback_responsible_username', '').strip() or None
+
+    # Callbacks (directive §4.4): a reason is required the moment a source WO is
+    # linked -- this is what feeds the callbacks report and the rating penalty,
+    # so an unexplained link isn't useful data.
+    if callback_of_work_order_id and not callback_reason:
+        return None, 'A reason is required for a callback.'
 
     # Misc Task (directive §3.4, retired-tag replacement): internal work with no
     # billable customer. customer_id is only optional when explicitly flagged --
@@ -2610,6 +2620,12 @@ def _save_work_order(company_key, wo_id):
                 """, (primary_contact_id, customer_id))
                 if not cur.fetchone():
                     return None, 'Contact does not belong to that customer.'
+            if callback_of_work_order_id:
+                cur.execute("""
+                    SELECT id FROM work_orders WHERE id = %s AND customer_id = %s AND deleted_at IS NULL
+                """, (callback_of_work_order_id, customer_id))
+                if not cur.fetchone():
+                    return None, 'Selected callback source does not belong to this customer.'
         else:
             service_location_id = None
             primary_contact_id = None
@@ -2636,8 +2652,9 @@ def _save_work_order(company_key, wo_id):
                      parent_work_order_id, is_extraction, equipment_incomplete,
                      followup_tech_username, extraction_started_at, extraction_status,
                      is_internal_task, estimate_id,
+                     callback_of_work_order_id, callback_reason, callback_responsible_username,
                      created_by, updated_by)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 RETURNING id
             """, (wo_number, customer_id, service_location_id, primary_contact_id,
                   status, work_site_label, auto_description,
@@ -2649,6 +2666,7 @@ def _save_work_order(company_key, wo_id):
                   parent_work_order_id, is_extraction, equipment_incomplete,
                   followup_tech_username, extraction_started_at, extraction_status_value,
                   is_internal_task, source_estimate_id,
+                  callback_of_work_order_id, callback_reason, callback_responsible_username,
                   username, username))
             wo_id = cur.fetchone()['id']
             if source_estimate_id:
@@ -2692,6 +2710,7 @@ def _save_work_order(company_key, wo_id):
                     followup_tech_username=%s, extraction_started_at=%s,
                     extraction_status=COALESCE(%s, extraction_status),
                     is_internal_task=%s,
+                    callback_of_work_order_id=%s, callback_reason=%s, callback_responsible_username=%s,
                     updated_at=CURRENT_TIMESTAMP, updated_by=%s
                 WHERE id=%s AND deleted_at IS NULL
             """, (customer_id, service_location_id, primary_contact_id,
@@ -2705,6 +2724,7 @@ def _save_work_order(company_key, wo_id):
                   followup_tech_username, extraction_started_at,
                   extraction_status_value,
                   is_internal_task,
+                  callback_of_work_order_id, callback_reason, callback_responsible_username,
                   username, wo_id))
 
         # ---- Line items: update by id, insert new, soft-delete missing. ----
@@ -2788,6 +2808,7 @@ def workorder_list(company_key, branding, all_companies, company_access):
     status_filter = request.args.get('status', '').strip()
     tech_filter   = request.args.get('tech', '').strip()
     date_filter   = request.args.get('date', '').strip()
+    callback_filter = request.args.get('callback') == '1'
 
     conditions = ["wo.deleted_at IS NULL"]
     params     = []
@@ -2808,6 +2829,8 @@ def workorder_list(company_key, branding, all_companies, company_access):
     if date_filter:
         conditions.append("wo.start_date = %s")
         params.append(date_filter)
+    if callback_filter:
+        conditions.append("wo.callback_of_work_order_id IS NOT NULL")
     where = " AND ".join(conditions)
 
     conn = get_db_connection(company_key)
@@ -2815,6 +2838,7 @@ def workorder_list(company_key, branding, all_companies, company_access):
     cur.execute(f"""
         SELECT wo.id, wo.work_order_number, wo.status, wo.priority,
                wo.work_site_label, wo.start_date,
+               (wo.callback_of_work_order_id IS NOT NULL) AS is_callback,
                c.property_name AS customer_name,
                (SELECT COALESCE(SUM(li.total), 0)
                 FROM work_order_line_items li
@@ -2844,6 +2868,7 @@ def workorder_list(company_key, branding, all_companies, company_access):
         workorders=workorders, total=total,
         search=search, status_filter=status_filter,
         tech_filter=tech_filter, date_filter=date_filter,
+        callback_filter=callback_filter,
         statuses=WO_OFFICE_STATUSES,
     )
 
@@ -2856,6 +2881,7 @@ def workorders_search(company_key):
         abort(403)
     search        = request.args.get('search', '').strip()
     status_filter = request.args.get('status', '').strip()
+    callback_filter = request.args.get('callback') == '1'
 
     conditions = ["wo.deleted_at IS NULL"]
     params     = []
@@ -2867,6 +2893,8 @@ def workorders_search(company_key):
     if status_filter:
         conditions.append("wo.status = %s")
         params.append(status_filter)
+    if callback_filter:
+        conditions.append("wo.callback_of_work_order_id IS NOT NULL")
     where = " AND ".join(conditions)
 
     conn = get_db_connection(company_key)
@@ -2874,6 +2902,7 @@ def workorders_search(company_key):
     cur.execute(f"""
         SELECT wo.id, wo.work_order_number, wo.status, wo.priority,
                wo.work_site_label, wo.start_date::text AS start_date,
+               (wo.callback_of_work_order_id IS NOT NULL) AS is_callback,
                c.property_name AS customer_name,
                (SELECT COALESCE(SUM(li.total), 0)
                 FROM work_order_line_items li
@@ -2899,17 +2928,32 @@ def workorders_search(company_key):
     cur.close(); conn.close()
     return jsonify({'total': total, 'workorders': rows})
 
+def _wo_callback_option_label(row):
+    """Display label for a 'This is a callback for…' combo option (directive
+    §4.4) — WO number, date, site, in that order, skipping any that are blank."""
+    parts = [row['work_order_number']]
+    if row['start_date']:
+        parts.append(str(row['start_date']))
+    if row['work_site_label']:
+        parts.append(row['work_site_label'])
+    return ' — '.join(parts)
+
+
 @app.route('/<company_key>/workorders/customer/<int:customer_id>/context')
 @login_required
 @company_access_required
 def workorder_customer_context(company_key, customer_id):
     """JSON: everything the form needs after a customer is picked — type-driven
-    work-site label + prefill flag, service locations, contacts. Also reused
-    by the estimate form (Increment 3.1) — salesperson is included here since
-    the directive gives that role "read-only customers, can create
-    estimates," and this is read-only context data either way."""
+    work-site label + prefill flag, service locations, contacts, and the
+    customer's own prior work orders (for the 'This is a callback for…'
+    combo, directive §4.4 — exclude_wo_id drops the WO being edited so it
+    can't be a callback of itself). Also reused by the estimate form
+    (Increment 3.1) — salesperson is included here since the directive gives
+    that role "read-only customers, can create estimates," and this is
+    read-only context data either way."""
     if session.get('user_role') not in ('admin', 'manager', 'office', 'salesperson'):
         abort(403)
+    exclude_wo_id = _opt_num(request.args.get('exclude_wo_id'))
     conn = get_db_connection(company_key)
     cur  = conn.cursor()
     cur.execute("""
@@ -2936,6 +2980,19 @@ def workorder_customer_context(company_key, customer_id):
     """, (customer_id,))
     contacts = [dict(r) for r in cur.fetchall()]
     unapplied_credit = customer_unapplied_credit(cur, customer_id)
+
+    prior_cond = "customer_id = %s AND deleted_at IS NULL AND status <> 'Cancelled'"
+    prior_params = [customer_id]
+    if exclude_wo_id:
+        prior_cond += " AND id <> %s"
+        prior_params.append(exclude_wo_id)
+    cur.execute(f"""
+        SELECT id, work_order_number, start_date::text AS start_date, work_site_label
+        FROM work_orders WHERE {prior_cond}
+        ORDER BY start_date DESC NULLS LAST, id DESC LIMIT 50
+    """, prior_params)
+    prior_workorders = [{'id': r['id'], 'label': _wo_callback_option_label(r)} for r in cur.fetchall()]
+
     cur.close(); conn.close()
     return jsonify({
         'customer_type': cust['customer_type'],
@@ -2944,6 +3001,7 @@ def workorder_customer_context(company_key, customer_id):
         'locations': locations,
         'contacts': contacts,
         'unapplied_credit': unapplied_credit,
+        'prior_workorders': prior_workorders,
     })
 
 @app.route('/<company_key>/workorders/dupe_check')
@@ -2992,6 +3050,51 @@ def workorder_dupe_check(company_key):
     matches = cur.fetchall()
     cur.close(); conn.close()
     return jsonify({'matches': matches})
+
+@app.route('/<company_key>/workorders/<int:wo_id>/callback_prefill')
+@login_required
+@company_access_required
+def workorder_callback_prefill(company_key, wo_id):
+    """JSON: what the WO form's 'This is a callback for…' combo needs from
+    the chosen prior WO (directive §4.4) — service location, work-site label,
+    the original lead tech (falls back to any assigned tech, then none), and
+    catalog line items to prefill as starting lines on the new WO. Equipment
+    (per-day) lines are intentionally excluded: those reference specific
+    already-deployed equipment units, not something to silently redeploy onto
+    a different job."""
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT id, service_location_id, work_site_label FROM work_orders
+        WHERE id = %s AND deleted_at IS NULL
+    """, (wo_id,))
+    wo = cur.fetchone()
+    if not wo:
+        cur.close(); conn.close()
+        abort(404)
+    cur.execute("""
+        SELECT username FROM work_order_techs
+        WHERE work_order_id = %s
+        ORDER BY is_lead_tech DESC, username LIMIT 1
+    """, (wo_id,))
+    tech_row = cur.fetchone()
+    cur.execute("""
+        SELECT catalog_item_id, description, quantity::float AS quantity, unit_price::float AS unit_price
+        FROM work_order_line_items
+        WHERE work_order_id = %s AND deleted_at IS NULL
+          AND equipment_unit_id IS NULL AND catalog_item_id IS NOT NULL
+        ORDER BY sort_order, id
+    """, (wo_id,))
+    line_items = [dict(r) for r in cur.fetchall()]
+    cur.close(); conn.close()
+    return jsonify({
+        'service_location_id': wo['service_location_id'],
+        'work_site_label': wo['work_site_label'],
+        'lead_tech_username': tech_row['username'] if tech_row else None,
+        'line_items': line_items,
+    })
 
 @app.route('/<company_key>/workorders/<int:wo_id>')
 @login_required
@@ -3086,6 +3189,20 @@ def workorder_detail(company_key, wo_id, branding, all_companies, company_access
         cur.execute("SELECT id FROM work_orders WHERE parent_work_order_id = %s AND deleted_at IS NULL LIMIT 1", (wo_id,))
         has_followup_child = cur.fetchone() is not None
 
+    # Callback (directive §4.4): the source WO this one corrects, if any, plus
+    # the reverse — other WOs that are callbacks against THIS one.
+    callback_source = None
+    if wo['callback_of_work_order_id']:
+        cur.execute("SELECT id, work_order_number FROM work_orders WHERE id = %s",
+                    (wo['callback_of_work_order_id'],))
+        callback_source = cur.fetchone()
+    cur.execute("""
+        SELECT id, work_order_number, start_date::text AS start_date, status
+        FROM work_orders WHERE callback_of_work_order_id = %s AND deleted_at IS NULL
+        ORDER BY start_date
+    """, (wo_id,))
+    callbacks_against = cur.fetchall()
+
     cur.close(); conn.close()
     extraction_day_count = _extraction_day_count(wo['extraction_started_at'])
     return render_template('workorder_detail.html',
@@ -3094,6 +3211,7 @@ def workorder_detail(company_key, wo_id, branding, all_companies, company_access
         wo=wo, site_label=label, line_items=line_items, subtotal=subtotal,
         accruing=accruing, techs=techs, history=history, invoice_id=invoice_id,
         extraction_day_count=extraction_day_count, has_followup_child=has_followup_child,
+        callback_source=callback_source, callbacks_against=callbacks_against,
     )
 
 @app.route('/<company_key>/workorders/new', methods=['GET', 'POST'])
@@ -3257,6 +3375,18 @@ def workorder_edit(company_key, wo_id, branding, all_companies, company_access):
     if wo['customer_id'] not in {c['id'] for c in customers}:
         customers.append({'id': wo['customer_id'], 'name': wo['customer_name'],
                           'category': wo['customer_type']})
+    callback_source_label = ''
+    if wo['callback_of_work_order_id']:
+        conn = get_db_connection(company_key)
+        cur  = conn.cursor()
+        cur.execute("""
+            SELECT work_order_number, start_date::text AS start_date, work_site_label
+            FROM work_orders WHERE id = %s
+        """, (wo['callback_of_work_order_id'],))
+        src = cur.fetchone()
+        cur.close(); conn.close()
+        if src:
+            callback_source_label = _wo_callback_option_label(src)
     return render_template('workorder_form.html',
         branding=branding, company_key=company_key,
         company_access=company_access, all_companies=all_companies,
@@ -3266,6 +3396,7 @@ def workorder_edit(company_key, wo_id, branding, all_companies, company_access):
         job_sources=WO_JOB_SOURCES, priorities=WO_PRIORITIES,
         arrival_suggestions=WO_ARRIVAL_SUGGESTIONS,
         site_labels=WORK_SITE_LABELS,
+        callback_source_label=callback_source_label,
     )
 
 @app.route('/<company_key>/workorders/<int:wo_id>/delete', methods=['POST'])
@@ -3368,7 +3499,8 @@ def _dispatch_board_data(company_key, target_date):
                      AND wo2.start_date < wo.start_date
                )) AS is_new_customer,
                COALESCE(cf.is_delinquent, FALSE) AS is_delinquent,
-               cr.adjusted_letter_grade
+               cr.adjusted_letter_grade,
+               (wo.callback_of_work_order_id IS NOT NULL) AS is_callback
         FROM work_orders wo
         LEFT JOIN customers c ON c.id = wo.customer_id
         LEFT JOIN customer_flags cf ON cf.customer_id = wo.customer_id
@@ -3400,6 +3532,7 @@ def _dispatch_board_data(company_key, target_date):
             'priority': w['priority'], 'has_equipment': w['is_extraction'],
             'equipment_incomplete': w['equipment_incomplete'], 'is_new_customer': w['is_new_customer'],
             'is_delinquent': w['is_delinquent'], 'adjusted_letter_grade': w['adjusted_letter_grade'],
+            'is_callback': w['is_callback'],
             'techs': techs_by_wo.get(w['id'], []),
             'scheduled_start': w['scheduled_start'], 'duration_hours': duration,
         }
@@ -4198,6 +4331,97 @@ def report_recency_pdf(company_key):
     doc.build(elements)
     return Response(buf.getvalue(), mimetype='application/pdf',
                      headers={'Content-Disposition': 'attachment; filename="recency_report.pdf"'})
+
+
+# ============================================================================
+# Callbacks report  (admin + manager + office; Increment 3.4, directive §4.4)
+# ============================================================================
+
+def _callbacks_report_data(company_key):
+    """Grouped by callback_responsible_username: how many callbacks against
+    their work, their completed-job count in the same window (for the
+    ratio), and the list itself -- each row flagged unpaid (the responsible
+    tech went back themselves, per work_order_techs) or paid (someone else
+    did). No payroll/commission engine is built here (directive is explicit
+    on that); this just exposes the data a future one would need."""
+    date_from = request.args.get('from', '').strip()
+    date_to = request.args.get('to', '').strip()
+    if not date_from and not date_to:
+        date_to = date.today().isoformat()
+        date_from = (date.today() - timedelta(days=90)).isoformat()
+
+    conditions = ["wo.deleted_at IS NULL", "wo.callback_of_work_order_id IS NOT NULL"]
+    params = []
+    if date_from:
+        conditions.append("wo.start_date >= %s"); params.append(date_from)
+    if date_to:
+        conditions.append("wo.start_date <= %s"); params.append(date_to)
+    where = " AND ".join(conditions)
+
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT wo.id, wo.work_order_number, wo.start_date::text AS start_date,
+               wo.callback_reason, wo.callback_responsible_username,
+               c.property_name AS customer_name,
+               src.work_order_number AS source_wo_number,
+               EXISTS (
+                   SELECT 1 FROM work_order_techs wt
+                   WHERE wt.work_order_id = wo.id AND wt.username = wo.callback_responsible_username
+               ) AS is_unpaid_visit
+        FROM work_orders wo
+        LEFT JOIN customers c ON c.id = wo.customer_id
+        LEFT JOIN work_orders src ON src.id = wo.callback_of_work_order_id
+        WHERE {where}
+        ORDER BY wo.callback_responsible_username NULLS LAST, wo.start_date DESC
+    """, params)
+    rows = cur.fetchall()
+
+    tech_conditions = ["wo.deleted_at IS NULL", "wo.status IN ('Completed', 'Invoiced')"]
+    tech_params = []
+    if date_from:
+        tech_conditions.append("wo.start_date >= %s"); tech_params.append(date_from)
+    if date_to:
+        tech_conditions.append("wo.start_date <= %s"); tech_params.append(date_to)
+    cur.execute(f"""
+        SELECT wt.username, count(DISTINCT wo.id) AS n
+        FROM work_orders wo JOIN work_order_techs wt ON wt.work_order_id = wo.id
+        WHERE {" AND ".join(tech_conditions)}
+        GROUP BY wt.username
+    """, tech_params)
+    completed_by_tech = {r['username']: r['n'] for r in cur.fetchall()}
+    cur.close(); conn.close()
+
+    by_tech = {}
+    for r in rows:
+        tech = r['callback_responsible_username'] or '(unassigned)'
+        by_tech.setdefault(tech, []).append(r)
+
+    summary = []
+    for tech, tech_rows in by_tech.items():
+        completed = completed_by_tech.get(tech, 0)
+        ratio = (len(tech_rows) / completed) if completed else None
+        summary.append({'tech': tech, 'count': len(tech_rows), 'completed': completed,
+                         'ratio': ratio, 'rows': tech_rows})
+    summary.sort(key=lambda s: -s['count'])
+
+    return summary, {'from': date_from, 'to': date_to}
+
+
+@app.route('/<company_key>/reports/callbacks')
+@login_required
+@company_access_required
+@with_branding
+def report_callbacks(company_key, branding, all_companies, company_access):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    summary, filters = _callbacks_report_data(company_key)
+    totals = {'callbacks': sum(s['count'] for s in summary)}
+    return render_template('callbacks_report.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        summary=summary, filters=filters, totals=totals,
+    )
 
 
 # ============================================================================
@@ -8038,6 +8262,7 @@ RATING_PAYMENT_90PLUS_PENALTY    = 10    # flat, additional, per receivable in t
 RATING_CANCELLATION_WEIGHT       = 40    # x cancellation rate (Cancelled / scheduled, trailing 12mo)
 RATING_VOLUME_CAP                = 20    # completed WOs, trailing 12mo, capped here
 RATING_VOLUME_PER_JOB            = 0.5   # x the capped count
+RATING_CALLBACK_PENALTY_PER      = 3     # flat, per callback against this customer's jobs, trailing 12mo (directive §4.4)
 RATING_BANDS = [(90, 'A'), (75, 'B'), (60, 'C'), (40, 'D'), (0, 'F')]  # checked high to low
 
 
@@ -8052,11 +8277,13 @@ def _job_recompute_customer_ratings(company_key):
     """directive §4.2: base 100; payment penalty = Sigma over open receivables
     of (days past 30 / 30, capped 4) x 5, plus 10 per receivable currently
     90+; cancellation penalty = cancellation rate x 40; volume bonus =
-    min(completed WOs trailing 12mo, 20) x 0.5; clamp 0-100. Reuses
-    _customer_receivables_detail (the A/R aging report's own per-invoice
-    day-count) so this can never disagree with what the office sees live
-    there. manager_adjustment (if any) is preserved across every recompute —
-    only adjusted_letter_grade is refreshed against the new composite_score."""
+    min(completed WOs trailing 12mo, 20) x 0.5; callback penalty (directive
+    §4.4) = 3 per callback WO against this customer's jobs, trailing 12mo;
+    clamp 0-100. Reuses _customer_receivables_detail (the A/R aging report's
+    own per-invoice day-count) so this can never disagree with what the
+    office sees live there. manager_adjustment (if any) is preserved across
+    every recompute — only adjusted_letter_grade is refreshed against the
+    new composite_score."""
     conn = get_db_connection(company_key)
     cur = conn.cursor()
     cur.execute("SELECT id FROM customers WHERE deleted_at IS NULL")
@@ -8087,7 +8314,16 @@ def _job_recompute_customer_ratings(company_key):
         completed = status_counts.get('Completed', 0) + status_counts.get('Invoiced', 0)
         volume_bonus = min(completed, RATING_VOLUME_CAP) * RATING_VOLUME_PER_JOB
 
-        composite = max(0.0, min(100.0, 100 - payment_penalty - cancellation_penalty + volume_bonus))
+        cur.execute("""
+            SELECT count(*) AS n FROM work_orders
+            WHERE customer_id = %s AND deleted_at IS NULL
+              AND callback_of_work_order_id IS NOT NULL AND start_date >= %s
+        """, (cid, cutoff))
+        callback_count = cur.fetchone()['n']
+        callback_penalty = callback_count * RATING_CALLBACK_PENALTY_PER
+
+        composite = max(0.0, min(100.0, 100 - payment_penalty - cancellation_penalty
+                                          - callback_penalty + volume_bonus))
         letter = _rating_letter(composite)
 
         cur.execute("SELECT manager_adjustment FROM customer_ratings WHERE customer_id = %s", (cid,))
@@ -8101,19 +8337,21 @@ def _job_recompute_customer_ratings(company_key):
 
         cur.execute("""
             INSERT INTO customer_ratings (customer_id, job_volume_score, payment_timeliness_score,
-                cancellation_score, composite_score, letter_grade, adjusted_letter_grade,
+                cancellation_score, callback_score, composite_score, letter_grade, adjusted_letter_grade,
                 last_calculated_at, calculated_by)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, 'system')
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, 'system')
             ON CONFLICT (customer_id) DO UPDATE
             SET job_volume_score = EXCLUDED.job_volume_score,
                 payment_timeliness_score = EXCLUDED.payment_timeliness_score,
                 cancellation_score = EXCLUDED.cancellation_score,
+                callback_score = EXCLUDED.callback_score,
                 composite_score = EXCLUDED.composite_score,
                 letter_grade = EXCLUDED.letter_grade,
                 adjusted_letter_grade = EXCLUDED.adjusted_letter_grade,
                 last_calculated_at = EXCLUDED.last_calculated_at,
                 calculated_by = EXCLUDED.calculated_by
-        """, (cid, volume_bonus, -payment_penalty, -cancellation_penalty, composite, letter, adjusted_letter))
+        """, (cid, volume_bonus, -payment_penalty, -cancellation_penalty, -callback_penalty,
+              composite, letter, adjusted_letter))
     conn.commit(); cur.close(); conn.close()
     return len(customer_ids)
 

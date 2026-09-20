@@ -1121,4 +1121,51 @@ export renders and is byte-searchable, and the reports-landing link. Full
 2026-09-19 standing instruction until he reviews these dry-run counts and the
 unmatched-name list.
 
-Proceeding to Increment 3.4 (Callbacks).
+## Increment 3.4 — Callbacks
+
+- `work_orders.callback_of_work_order_id/callback_reason/callback_responsible_username`
+  (migration 024, self-referencing FK) — a callback is a real work order that
+  points back at what it corrects, not a separate object.
+- WO form: "This is a callback for…" combo (customer's prior jobs, excluding
+  the WO itself when editing) pre-fills location/site label/catalog lines
+  (equipment lines excluded — those are already-deployed units) and defaults
+  Responsible Tech to the source job's lead tech, editable. Reason required
+  the moment a source is linked. `workorder_customer_context`'s JSON gained a
+  `prior_workorders` field; the restricted-combo brick (`base.html`) gained a
+  small `setRestrictedComboOptions()` extension so the combo's options can
+  refresh when the customer changes, without a full re-init (D-085).
+- Callback badge on dispatch (popover + compact block), WO list (badge +
+  filter), customer detail Jobs list, and a source/reverse banner pair on WO
+  detail ("Callback for WO #X" / "N callbacks against this job").
+- `GET /reports/callbacks?from=&to=` — grouped by responsible tech: count,
+  ratio to their completed jobs in the same window, and the list itself, each
+  row flagged unpaid (responsible tech redid it themselves) or paid (someone
+  else did), computed from `work_order_techs` vs. `callback_responsible_username`.
+  No payroll/commission engine built — directive is explicit that this only
+  exposes the data. Default range: trailing 90 days.
+- Customer rating: new signed `callback_score` (`customer_ratings`, migration
+  024), -3 per callback against that customer's jobs in the trailing 12
+  months, folded into the existing signed-sum composite formula
+  (`RATING_CALLBACK_PENALTY_PER = 3`).
+
+**Bug found in passing (pre-existing, not fixed):** the WO list's live-search
+JS wires every `.filter-select` (including the date filter) to an AJAX handler
+that only ever read search/status, so the date dropdown has done nothing via
+either path since Increment 2.3. Not fixed here — out of scope, and predates
+this increment — but the new Callback filter was added to what the AJAX
+handler reads so it doesn't silently repeat the same bug. See D-085.
+
+**Migration:** 024 (`024_callbacks.sql`), applied to all four DBs, verified
+idempotent. Pre-migration backups in `~/db-backups/2026-09-20d/`.
+
+**Smoke test:** `tests/smoke_callbacks.py` — 26/26 checks: prior-WO listing
+and self-exclusion, prefill contents, the reason-required and
+wrong-customer validation errors, unpaid vs. paid detection on two real
+callback WOs, badges on all four display points, the report's grouping and
+totals, and the exact rating penalty (`callback_score == -6.0` for 2
+callbacks, composite verified as the direct signed sum). Full 19-file
+regression suite re-run clean.
+
+**Deferred:** nothing from this increment's own scope.
+
+Proceeding to Increment 3.5 (Sales CRM).

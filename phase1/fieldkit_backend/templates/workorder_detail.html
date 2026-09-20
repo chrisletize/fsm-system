@@ -89,6 +89,23 @@
 </div>
 {% endif %}
 
+{% if callback_source %}
+<div class="card" style="background:#fdecea; border:1px solid #f3b8b3; color:#a32d2d; margin-bottom:1.25rem;">
+    <strong>Callback</strong> for <a href="/{{ company_key }}/workorders/{{ callback_source.id }}" style="color:#a32d2d; text-decoration:underline;">{{ callback_source.work_order_number }}</a>
+    {% if wo.callback_responsible_username %} — responsible: {{ wo.callback_responsible_username }}{% endif %}
+    {% if wo.callback_reason %}<br><span style="font-weight:400;">{{ wo.callback_reason }}</span>{% endif %}
+</div>
+{% endif %}
+
+{% if callbacks_against %}
+<div class="card" style="background:#fff8e1; border:1px solid #ffe082; color:#6d5300; margin-bottom:1.25rem;">
+    <strong>{{ callbacks_against|length }} callback{{ 's' if callbacks_against|length != 1 }}</strong> against this job:
+    {% for cb in callbacks_against %}
+    <a href="/{{ company_key }}/workorders/{{ cb.id }}" style="color:#6d5300; text-decoration:underline; margin-left:.3rem;">{{ cb.work_order_number }}</a>{% if not loop.last %},{% endif %}
+    {% endfor %}
+</div>
+{% endif %}
+
 {% if wo.is_extraction and wo.status == 'Extraction Active' %}
 <div class="card" style="background:#e6f6f5; border:1px solid #b7e4e0; margin-bottom:1.25rem;">
     <strong>Extraction active</strong> — {{ wo.extraction_status or 'Drying' }}, day {{ extraction_day_count }}

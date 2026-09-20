@@ -837,6 +837,56 @@ list and says to proceed.
 
 ---
 
+D-085 — Increment 3.4 (Callbacks, directive §4.4). callback_of_work_order_id is a
+self-referencing FK on `work_orders` (migration 024), not a new join table — a
+callback is a real work order (dispatchable, invoiceable) that happens to point
+back at what it corrects. `callback_reason` is required the moment a source WO
+is linked, enforced in `_save_work_order` (not a DB CHECK, so a future
+NULL-cleanup doesn't need special-casing) — a form re-render, not a silent
+failure. The WO form's "This is a callback for…" combo is populated from a NEW
+`prior_workorders` field on the existing `workorder_customer_context` JSON
+endpoint (reused, not duplicated) rather than a separate lookup; its options
+depend on which customer is currently selected, so `initRestrictedComboFields`
+(base.html) gained a small extension — each combo now exposes
+`input._comboSetOptions()` and a global `setRestrictedComboOptions()` helper —
+so a combo's option list can be refreshed after a customer change without
+re-initializing the whole widget. Callback line-item prefill deliberately
+excludes equipment (per-day) lines: those reference specific already-deployed
+equipment units, not something to silently redeploy onto a different job (plain
+catalog lines only, mirroring the estimate-convert prefill from 3.1).
+
+Callback count feeds the customer rating per the directive: -3 per callback
+against that customer's jobs, trailing 12mo, as a new signed `callback_score`
+column on `customer_ratings` (migration 024) — same signed-contribution
+convention as the other three scores from migration 022, so
+`composite_score = 100 + payment + cancellation + callback + volume` stays a
+direct auditable sum. `RATING_CALLBACK_PENALTY_PER = 3` lives next to the other
+rating constants in `app.py`.
+
+The callbacks report (`/reports/callbacks?from=&to=`) groups by
+`callback_responsible_username`, computing paid vs. unpaid per row from
+`work_order_techs` (was the responsible tech actually assigned to redo the
+callback WO themselves, or did someone else go) — no payroll/commission engine
+built, per the directive's own explicit instruction; this only exposes the data
+a future one would need. Default range is trailing 90 days (no `from`/`to`
+given) — long enough to be useful without a full year of (currently empty)
+history dominating the page.
+
+Found in passing while wiring the WO list's new Callback filter: the existing
+live-search JS (`workorder_list.html`) wires EVERY `.filter-select` element
+(including the date input) to the AJAX `liveSearch()` handler, but
+`liveSearch()` only ever read `search`/`status` — so the date filter's dropdown
+has silently done nothing via the AJAX path since Increment 2.3, only working
+through a full-page form submit that never actually fires because the JS
+strips the `onchange` that would trigger it. Not fixed here (out of scope for
+this increment, pre-existing, and not something callbacks made worse) — only
+added `callback` to what `liveSearch()` reads, since leaving the new filter
+silently broken the same way would be introducing a fresh instance of a bug I
+could see happening in front of me. Left as a known gap for whoever next
+touches the WO list's date/tech filters.
+
+---
+
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:
 #33 (OPS/VendorCafe export templates), #50 (SMS alerts via Twilio), and Stage 5.6
 (ServiceFusion price-list exports, company legal names/remit-to/reply-to/alert emails).

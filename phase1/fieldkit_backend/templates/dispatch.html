@@ -127,6 +127,7 @@ function showPopover(block, anchorEl) {
     if (block.is_new_customer) badges.push('🆕 New Customer');
     if (block.is_delinquent) badges.push('🔴 Delinquent');
     if (block.adjusted_letter_grade) badges.push('Rating: ' + block.adjusted_letter_grade);
+    if (block.is_callback) badges.push('↩️ Callback');
     pop.innerHTML = `
         <h4>${block.work_order_number}</h4>
         <div class="row">${block.customer_name || 'Internal Task'}</div>
@@ -204,7 +205,7 @@ function renderDay(data) {
             div.style.background = row.color;
             div.draggable = true;
             div.dataset.woId = b.id;
-            const badges = [b.priority !== 'Normal' ? b.priority[0] : '', b.has_equipment ? '💧' : '', b.is_new_customer ? '🆕' : '', b.is_delinquent ? '🔴' : ''].filter(Boolean).join(' ');
+            const badges = [b.priority !== 'Normal' ? b.priority[0] : '', b.has_equipment ? '💧' : '', b.is_new_customer ? '🆕' : '', b.is_delinquent ? '🔴' : '', b.is_callback ? '↩️' : ''].filter(Boolean).join(' ');
             div.innerHTML = `<div><strong>${b.work_order_number}</strong> ${badges ? '<span class="badges">' + badges + '</span>' : ''}</div>
                               <div>${b.customer_name || 'Internal Task'}</div>
                               <div class="resize-handle"></div>`;

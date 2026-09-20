@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Callbacks — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; flex-wrap:wrap; gap:.75rem; }
+    .page-header h1 { font-size:1.6rem; color:{{ branding.color_primary }}; }
+    .controls { display:flex; gap:.6rem; margin-bottom:1.25rem; align-items:flex-end; flex-wrap:wrap; }
+    .controls label { display:flex; flex-direction:column; gap:.3rem; font-size:.78rem; color:#666; font-weight:600; }
+    .controls input { padding:.4rem .55rem; border:1px solid #ddd; border-radius:4px; }
+    .btn { padding:.5rem 1rem; border-radius:4px; text-decoration:none; font-size:.85rem; border:none; cursor:pointer; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .tech-group { margin-bottom:1.5rem; }
+    .tech-header { display:flex; justify-content:space-between; align-items:baseline; padding:.7rem 1rem;
+                   background:{{ branding.color_primary }}; color:white; border-radius:6px 6px 0 0; }
+    .tech-header h2 { font-size:1rem; margin:0; }
+    .tech-header .ratio { font-size:.82rem; opacity:.9; }
+    table { width:100%; border-collapse:collapse; font-size:.88rem; }
+    th { text-align:left; padding:.5rem .8rem; border-bottom:2px solid #eee; font-size:.72rem; text-transform:uppercase; color:#888; background:#fafafa; }
+    td { padding:.5rem .8rem; border-bottom:1px solid #f5f5f5; }
+    .paid-badge { display:inline-block; padding:.15rem .5rem; border-radius:8px; font-size:.72rem; font-weight:600; }
+    .paid-badge.unpaid { background:#eaf3de; color:#3b6d11; }
+    .paid-badge.paid { background:#fdecea; color:#a32d2d; }
+    .empty-state { text-align:center; padding:3rem 1rem; color:#999; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Callbacks — {{ branding.name }}</h1>
+</div>
+
+<form method="GET" class="controls">
+    <label>From <input type="date" name="from" value="{{ filters.from }}"></label>
+    <label>To <input type="date" name="to" value="{{ filters.to }}"></label>
+    <button type="submit" class="btn btn-primary">Filter</button>
+</form>
+
+<p style="color:#888; font-size:.85rem; margin-bottom:1.25rem;">
+    {{ totals.callbacks }} callback{{ 's' if totals.callbacks != 1 }} in range · grouped by responsible tech.
+    "Unpaid" means the responsible tech went back themselves; "Paid" means another tech did the redo.
+    This report exposes the data for a future commission module — no payroll engine is built here.
+</p>
+
+{% if not summary %}
+<div class="card empty-state">No callbacks in this date range.</div>
+{% endif %}
+
+{% for s in summary %}
+<div class="tech-group card" style="padding:0; overflow:hidden;">
+    <div class="tech-header">
+        <h2>{{ s.tech }}</h2>
+        <span class="ratio">{{ s.count }} callback{{ 's' if s.count != 1 }} / {{ s.completed }} completed job{{ 's' if s.completed != 1 }}
+            {% if s.ratio is not none %} ({{ '%.1f'|format(s.ratio * 100) }}%){% endif %}</span>
+    </div>
+    <table>
+        <thead>
+            <tr><th>Callback WO</th><th>Date</th><th>Customer</th><th>Original WO</th><th>Reason</th><th></th></tr>
+        </thead>
+        <tbody>
+            {% for r in s.rows %}
+            <tr>
+                <td><a href="/{{ company_key }}/workorders/{{ r.id }}" style="color:{{ branding.color_primary }};">{{ r.work_order_number }}</a></td>
+                <td>{{ r.start_date or '—' }}</td>
+                <td>{{ r.customer_name or '—' }}</td>
+                <td>{{ r.source_wo_number or '—' }}</td>
+                <td>{{ r.callback_reason or '—' }}</td>
+                <td><span class="paid-badge {{ 'unpaid' if r.is_unpaid_visit else 'paid' }}">{{ 'Unpaid' if r.is_unpaid_visit else 'Paid' }}</span></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endfor %}
+{% endblock %}

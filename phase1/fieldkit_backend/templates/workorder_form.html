@@ -282,6 +282,37 @@
     </div>
 </div>
 
+<!-- ============================ Callback ============================ -->
+<div class="card">
+    <h2>Callback</h2>
+    <div class="form-grid">
+        <div class="form-group full">
+            <label>This is a callback for… <span class="hint">(optional — links the prior job this one corrects; pre-fills location/site/lines)</span></label>
+{{ restricted_combo_field('callback_of_work_order_id', [],
+                   wo.callback_of_work_order_id if wo and wo.callback_of_work_order_id else none,
+                   callback_source_label|default(''),
+                   'Search the customer’s prior jobs…', False, 'callbackCombo') }}
+        </div>
+    </div>
+    <div id="callbackFields" style="display:{{ 'block' if wo and wo.callback_of_work_order_id else 'none' }}; margin-top:1.1rem;">
+        <div class="form-grid">
+            <div class="form-group full">
+                <label>Reason <span class="hint">(required for a callback)</span></label>
+                <textarea name="callback_reason" id="callbackReasonInput">{{ wo.callback_reason or '' if wo else '' }}</textarea>
+            </div>
+            <div class="form-group">
+                <label>Responsible Tech <span class="hint">(paid to redo it — defaults to the original job's lead tech, editable)</span></label>
+                <select name="callback_responsible_username" id="callbackResponsibleSelect">
+                    <option value="">— none —</option>
+                    {% for t in techs %}
+                    <option value="{{ t.username }}" {% if wo and wo.callback_responsible_username == t.username %}selected{% endif %}>{{ t.full_name or t.username }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- ============================ Line Items ============================ -->
 <div class="card">
     <h2>Line Items</h2>
@@ -689,7 +720,8 @@
             checkDupes();
             return;
         }
-        fetch(`/${companyKey}/workorders/customer/${customerId}/context`)
+        const excludeParam = IS_EDIT ? `?exclude_wo_id=${WO_ID}` : '';
+        fetch(`/${companyKey}/workorders/customer/${customerId}/context${excludeParam}`)
             .then(r => r.json())
             .then(data => {
                 locationsCache = data.locations;
@@ -716,6 +748,9 @@
                     badge.style.display = 'none';
                 }
 
+                setRestrictedComboOptions(callbackInput,
+                    (data.prior_workorders || []).map(w => ({ id: w.id, name: w.label })));
+
                 if (preserve) {
                     if (INIT_LOCATION) locationSelect.value = String(INIT_LOCATION);
                     if (INIT_CONTACT)  contactSelect.value  = String(INIT_CONTACT);
@@ -725,6 +760,10 @@
                                     (data.locations.length === 1 ? data.locations[0] : null);
                     if (primary) locationSelect.value = String(primary.id);
                     maybePrefillSite();
+                    // A customer switch invalidates any callback link picked
+                    // for the PREVIOUS customer.
+                    callbackInput.value = ''; callbackHidden.value = '';
+                    setCallbackFieldsVisible(false);
                 }
                 checkDupes();
             })
@@ -762,6 +801,45 @@
     customerHidden.addEventListener('change', () => { loadCustomerContext(customerHidden.value, false); updateDelinquentBadge(); });
     locationSelect.addEventListener('change', () => { maybePrefillSite(); checkDupes(); });
     siteInput.addEventListener('input', () => { delete siteInput.dataset.prefilled; regenDescription(); });
+
+    // ========================================================================
+    // Callback: "This is a callback for…" — picking a prior WO for this
+    // customer pre-fills location/site label/lines and defaults the
+    // responsible tech to the original job's lead tech (directive §4.4).
+    // ========================================================================
+    const callbackInput  = document.getElementById('callbackCombo');
+    const callbackHidden = callbackInput.closest('.ac-wrap').querySelector('input[type=hidden]');
+    const callbackFields = document.getElementById('callbackFields');
+    const callbackResponsibleSelect = document.getElementById('callbackResponsibleSelect');
+
+    function setCallbackFieldsVisible(visible) {
+        callbackFields.style.display = visible ? 'block' : 'none';
+    }
+
+    function clearLineItems() {
+        liRows.querySelectorAll('.li-row').forEach(r => r.remove());
+        recalc();
+    }
+
+    callbackHidden.addEventListener('change', () => {
+        const sourceId = callbackHidden.value;
+        if (!sourceId) { setCallbackFieldsVisible(false); return; }
+        setCallbackFieldsVisible(true);
+        fetch(`/${companyKey}/workorders/${sourceId}/callback_prefill`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.service_location_id) locationSelect.value = String(data.service_location_id);
+                if (data.work_site_label) {
+                    siteInput.value = data.work_site_label;
+                    delete siteInput.dataset.prefilled;
+                }
+                clearLineItems();
+                (data.line_items || []).forEach(li => addStdRow(li));
+                if (data.lead_tech_username) callbackResponsibleSelect.value = data.lead_tech_username;
+                regenDescription();
+            })
+            .catch(() => {});
+    });
 
     // ========================================================================
     // Double-booking check — non-blocking banner.

@@ -37,6 +37,7 @@ reporting until FieldKit's billing is complete.
 | Estimates | Built (3.1, migration 021, `/estimates`): Draft/Sent/Approved/Declined/Converted lifecycle, PDF + email send, convert-to-WO, public request form at `/request/<company>` (no login, honeypot + rate limit), requests queue. Permissions: admin/manager/salesperson. |
 | Customer ratings | Built (3.2, migration 022): nightly A–F grade (payment timeliness + cancellation rate + job volume), manager override, badges on customer detail/WO form/estimate form/dispatch popover. Currently all grade A across all four companies — no real invoice/WO history exists yet. |
 | Recency report | Built (3.3, migration 023, `/reports/recency`): last-service date = GREATEST of WO history and imported `customer_job_dates`, bucketed 1-2/3-6/6-12/12+ months (boundaries matched to the Phase 0 site), grouped by management company, PDF export. History-import script (`import_job_dates.py`) written and dry-run for real against production statements data — 258 customers/2,859 job dates would import for Get a Grip (the only company with statements job history); `--commit` on hold pending Chris's review. |
+| Callbacks | Built (3.4, migration 024): WO form's "This is a callback for…" combo pre-fills location/site/lines from the prior job, defaults Responsible Tech to its lead tech; badges on dispatch/WO list/customer detail/WO detail; `/reports/callbacks` grouped by responsible tech with paid-vs-unpaid detection (no payroll engine — just exposes the data); customer rating gets a new signed `callback_score` (-3 per callback, trailing 12mo). |
 | Sales CRM, payment methods, dashboard stats | Not built |
 
 This table matches `FIELDKIT_BUILD_DIRECTIVE_2026-09.md` §0.2 — confirmed by grepping
@@ -95,7 +96,11 @@ complete — report + PDF export built and smoke-tested; `import_job_dates.py`'s
 dry run confirms 258 customers/2,859 job dates for Get a Grip only (consistent with
 D-038 — the other three companies have zero statements job history), 38 unmatched
 names logged for Chris/Michele; the actual `--commit` import stays on hold per his
-2026-09-19 instruction. Next: Increment 3.4 (Callbacks).
+2026-09-19 instruction. Increment 3.4 (Callbacks, migration 024) complete — self-
+referencing WO link with a required reason, prefill from the prior job, badges
+everywhere the directive lists, `/reports/callbacks` (paid vs. unpaid, no payroll
+engine), and a new signed `callback_score` folded into the customer rating. Next:
+Increment 3.5 (Sales CRM) — the largest remaining piece of Stage 3.
 
 Decisions Chris has already made for this build (delinquent threshold = 90 days past
 invoice date, FL tax left empty/exempt for Kleanit SF, SF-import receivables excluded

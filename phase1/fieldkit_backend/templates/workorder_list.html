@@ -83,6 +83,7 @@
     .badge-cancelled  { background: #fcebeb; color: #a32d2d; }
     .badge-inprogress { background: #faeeda; color: #854f0b; }
     .badge-accruing   { background: #faeeda; color: #854f0b; font-size: 0.72rem; margin-left: 0.4rem; }
+    .badge-callback   { background: #fdecea; color: #a32d2d; font-size: 0.72rem; margin-left: 0.4rem; }
     .priority-high   { color: #ba7517; font-weight: 600; }
     .priority-urgent { color: #a32d2d; font-weight: 600; }
     .empty-state { text-align: center; padding: 3rem 1rem; color: #999; }
@@ -112,6 +113,10 @@
             </select>
             <input type="date" name="date" class="filter-select" value="{{ date_filter }}"
                    onchange="document.getElementById('filterForm').submit()">
+            <select name="callback" class="filter-select" onchange="document.getElementById('filterForm').submit()">
+                <option value="">All Jobs</option>
+                <option value="1" {% if callback_filter %}selected{% endif %}>Callbacks Only</option>
+            </select>
             <input type="hidden" name="tech" value="{{ tech_filter }}">
             {% if tech_filter %}
             <span class="result-count">tech: {{ tech_filter }}
@@ -153,6 +158,9 @@
                     <span class="badge badge-{{ wo.status|lower|replace(' ', '') }}">{{ wo.status }}</span>
                     {% if wo.accruing_count %}
                     <span class="badge badge-accruing">{{ wo.accruing_count }} accruing</span>
+                    {% endif %}
+                    {% if wo.is_callback %}
+                    <span class="badge badge-callback">Callback</span>
                     {% endif %}
                 </td>
                 <td>
@@ -212,7 +220,7 @@
             <td>${wo.customer_name || 'Internal Task'}</td>
             <td>${site}</td>
             <td>${fmtDate(wo.start_date)}</td>
-            <td><span class="badge ${badgeClass(wo.status)}">${wo.status}</span>${accruing}</td>
+            <td><span class="badge ${badgeClass(wo.status)}">${wo.status}</span>${accruing}${wo.is_callback ? ' <span class="badge badge-callback">Callback</span>' : ''}</td>
             <td>${priority}</td>
             <td style="text-align:right;">$${total}</td>
             <td><a href="/${companyKey}/workorders/${wo.id}/edit" style="color:${colorPrimary};text-decoration:none;font-size:0.9rem;">Edit →</a></td>
@@ -222,8 +230,9 @@
     function liveSearch() {
         const search = document.getElementById('searchInput').value;
         const status = document.querySelector('select[name="status"]').value;
+        const callback = document.querySelector('select[name="callback"]').value;
 
-        const params = new URLSearchParams({ search, status });
+        const params = new URLSearchParams({ search, status, callback });
         fetch(`/${companyKey}/workorders/search?${params}`)
             .then(r => r.json())
             .then(data => {
