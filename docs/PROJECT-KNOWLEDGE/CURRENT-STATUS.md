@@ -225,7 +225,27 @@ column). No migration. See D-095. 8/8 new smoke checks
 right-click menu was verified via rendered HTML only, not a live browser
 walkthrough — disclosed gap.
 
-Next: the same cutover import for the other three companies, then Stage 5's
+**Post-D-095 follow-up (2026-09-22, same day)** — Chris re-tested by hand
+and reported internal tasks still couldn't save without a customer. Root
+cause was a SECOND, older, independent bug: `base.html`'s shared
+`initRestrictedComboFields()` registered its required-field submit check
+once at page load based on `data-required`'s value at that moment, and
+never re-read it live — so D-095's runtime toggle of
+`customerCombo.dataset.required` had no effect on the already-registered
+listener. Fixed by always registering the listener and checking
+`data-required` live, inside the handler, on every submit. General fix in
+shared code, affects every restricted-combo field app-wide. This is
+exactly the disclosed-gap scenario from D-095 coming true: the smoke suite
+uses Flask's `test_client()`, which never executes JS, so this class of
+bug is structurally invisible to it. See D-096. Static code re-verified
+correct and full 27-file regression suite green (no server-side
+regression), but live-browser confirmation of the actual fix was not
+completed this session — the Chrome extension was not connected in this
+environment. **Awaiting Chris's re-test to confirm.**
+
+Next: Chris to re-test the internal-task save in a real browser; if
+confirmed, commit D-096 (currently uncommitted). Then the same cutover
+import for the other three companies, then Stage 5's remaining items
 remaining items (drift check, `DEPLOYMENT/RUNBOOK.md`, final doc pass) once
 all four companies are done, or continue at Chris's direction.
 

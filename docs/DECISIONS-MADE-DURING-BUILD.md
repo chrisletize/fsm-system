@@ -1683,6 +1683,70 @@ regression suite green.
 
 ---
 
+D-096 — Post-D-095 follow-up (Chris, 2026-09-22): internal task still
+couldn't save without a customer, despite D-095's fix. A second,
+independent, older bug — disclosed gap from D-095 came true.
+
+- **BUG: `base.html`'s `initRestrictedComboFields()` registered its
+  required-field submit check exactly once, gated on load-time state.**
+  Every `js-combo-restricted` field (customer picker, callback picker,
+  etc.) validates itself with a `form.addEventListener('submit', ...)`
+  closure, because the real value lives in a hidden input that native
+  HTML5 `required` can't see. The bug: whether that listener was even
+  *registered* depended on `input.dataset.required === 'true'` checked
+  once, at `DOMContentLoaded` — never re-read afterwards. D-095's
+  `applyInternalTaskState()` correctly flips `customerCombo`'s
+  `data-required` to `'false'` at runtime when Internal Task is checked,
+  but on a fresh new-WO form the combo starts as `required="true"`, so the
+  listener was already registered with that closure before the checkbox
+  is ever touched — and the closure itself only checked `!hidden.value`,
+  never re-reading `data-required` live. Flipping the dataset attribute at
+  runtime did nothing to a listener that doesn't re-check its gating
+  condition. Net effect: internal tasks could never save without a
+  customer, exactly as Chris reported a second time after D-095 shipped —
+  D-095's fix (backend validation skip + UI swap) was necessary but not
+  sufficient; this was the thing actually blocking `e.preventDefault()`
+  on the customer combo specifically.
+- **Fix:** the submit listener is now always registered unconditionally;
+  the `data-required === 'true'` check moved inside the handler so it's
+  evaluated live, on every submit, against whatever the field's state is
+  *at that moment* — not whatever it was at page load. General-purpose
+  fix in shared code (`base.html`), not WO-form-specific: any future combo
+  field whose required-ness needs to change at runtime is now correctly
+  supported.
+- **Why this got past D-095's own testing:** D-095 explicitly flagged
+  "a live-browser walkthrough wasn't done for this fix" as a disclosed
+  gap, because the entire smoke-test suite drives Flask's
+  `app.test_client()`, which never executes JavaScript. A client-side-only
+  bug like this — a stale closure over a dataset attribute — is invisible
+  to every test in the suite by construction, no matter how many are
+  added. This was only caught because Chris re-tested by hand in a real
+  browser after a hard reset and reported the exact same symptom
+  persisting.
+- **Verification:** live in-browser verification via claude-in-chrome was
+  attempted but the Chrome extension was not connected in this
+  environment, so it could not be completed automatically this session.
+  Verified instead by: (1) static re-read of both the fixed `base.html`
+  listener and `workorder_form.html`'s `applyInternalTaskState()` to
+  confirm `customerCombo`'s `data-required` is toggled correctly and nothing
+  else re-registers a stale listener; (2) full 27-file smoke/regression
+  suite re-run, all green, confirming no server-side regression from the
+  change. **Chris: please re-test an internal task save in your browser
+  (hard refresh first) and confirm** — this fix is unverified against the
+  actual reported symptom pending that confirmation.
+
+**No migration** — JS-only change in shared `base.html` code.
+
+**Deferred:** none from this fix's scope. Flagging as a standing gap:
+this build has no live-browser test coverage at all; any future
+client-side-only bug in restricted-combo/autocomplete JS, form
+submit-blocking logic, or similar will keep being invisible to the smoke
+suite until browser-based testing (claude-in-chrome, once the extension
+connection issue is resolved, or manual QA) is added to the verification
+loop for JS-touching changes.
+
+---
+
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:
 #33 (OPS/VendorCafe export templates), #50 (SMS alerts via Twilio), and Stage 5.6
 (ServiceFusion price-list exports, company legal names/remit-to/reply-to/alert emails).

@@ -1455,3 +1455,37 @@ suite green. Right-click menu verified via rendered HTML only (no live
 browser walkthrough) — disclosed gap.
 
 **Deferred:** nothing from this fix's own scope.
+
+## Post-fix follow-up — internal task still couldn't save (second, older bug)
+
+Chris re-tested by hand and reported the exact same symptom persisting
+after the fix above shipped. Root cause: a separate, pre-existing bug in
+`base.html`'s shared `initRestrictedComboFields()` — the required-field
+submit-validation listener was registered once at page load, gated on
+`data-required`'s value *at that moment*, and never re-checked it live.
+The WO form's `applyInternalTaskState()` correctly flips
+`customerCombo.dataset.required` to `'false'` at runtime, but that had no
+effect on the already-registered listener closure. Fixed by always
+registering the listener and moving the `data-required` check inside the
+handler so it's evaluated live on every submit. General-purpose fix in
+shared code — affects every restricted-combo field app-wide, not just the
+WO form. Full detail in D-096.
+
+**Why D-095's own testing missed this:** the entire smoke suite drives
+`app.test_client()`, which never executes JavaScript — a stale-closure bug
+like this is structurally invisible to it. D-095 disclosed this exact gap
+("a live-browser walkthrough wasn't done for this fix") and it came true.
+
+**No migration.** JS-only change in `base.html`.
+
+**Verification:** live browser verification via claude-in-chrome was
+attempted this session but the Chrome extension was not connected, so it
+could not be completed. Verified instead via static code re-read (confirms
+the fix logic is correct) and a full 27-file regression suite re-run
+(green, no server-side regression). **Not yet confirmed against the actual
+reported symptom in a real browser — awaiting Chris's re-test.**
+
+**Deferred:** none from this fix's scope, but flagging a standing gap —
+this build has no live-browser test coverage; future client-side-only JS
+bugs will keep slipping through the smoke suite until browser-based
+testing is added to the verification loop.

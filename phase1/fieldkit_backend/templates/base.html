@@ -917,18 +917,28 @@
 
                 // Hidden inputs are excluded from native HTML5 constraint validation,
                 // so a required combo validates on submit instead.
-                if (input.dataset.required === 'true') {
-                    var form = input.closest('form');
-                    if (form) {
-                        form.addEventListener('submit', function(e){
-                            if (!hidden.value) {
-                                e.preventDefault();
-                                input.setCustomValidity('Choose an item from the list.');
-                                input.reportValidity();
-                                input.focus();
-                            }
-                        });
-                    }
+                //
+                // Bug fixed 2026-09-22: this used to gate registering the
+                // listener AT ALL on data-required's value at page-load time
+                // (`if (input.dataset.required === 'true') { ... }` wrapping
+                // the addEventListener call) -- so a page that starts a combo
+                // as required and later flips it to not-required at runtime
+                // (the WO form's customer combo when "Internal task" gets
+                // checked, setRestrictedComboOptions-adjacent behavior) kept
+                // enforcing the STALE load-time value forever, because the
+                // listener closure never re-read data-required after it was
+                // registered. The listener is now always registered; the
+                // required check happens live, inside it, on every submit.
+                var form = input.closest('form');
+                if (form) {
+                    form.addEventListener('submit', function(e){
+                        if (input.dataset.required === 'true' && !hidden.value) {
+                            e.preventDefault();
+                            input.setCustomValidity('Choose an item from the list.');
+                            input.reportValidity();
+                            input.focus();
+                        }
+                    });
                 }
             });
         }
