@@ -1385,6 +1385,123 @@ against `kleanit_charlotte` since getagrip has that page gated off entirely
 
 ---
 
+D-093 — Stage 5.6/Stage 5 cutover: real ServiceFusion data import for Get a Grip
+(2026-09-22, first company done). Chris supplied real ServiceFusion exports
+under `~/servicefusion-imports/get-a-grip/` (catalog, open invoices, job
+history — equipment intentionally empty, GAG doesn't do that work per D-071).
+Reviewed live with Chris before any write; every scope decision below was his
+call, not guessed.
+
+- **Three new scripts** (`phase1/fieldkit_phase1/`, dry-run-by-default +
+  `--commit`, same discipline as `import_job_dates.py`):
+  - `import_catalog.py` — reads a ServiceFusion `CompanyServices_*.xlsx`
+    export directly (not the CSV shape the directive originally sketched;
+    adapted to what Chris could actually export). Only `Cleaning`/
+    `Resurfacing`/`Repairs`/`Stripping`/`Tile Work` categories import;
+    `QBO Service`/`Service`/`Discount`/blank categories are excluded
+    outright — `QBO Service` turned out to include actual **tax line items**
+    ("County Tax 2%", "Transit Tax") that would have double-counted against
+    FieldKit's own tax engine if imported as catalog items, not just
+    bookkeeping noise. Three `Service`-category rows did carry a real price
+    (Min Charge $185, OCC FEE $45, Xtra Prep $45) but weren't specifically
+    resolved in review — deliberately left out rather than guessed either
+    way; a two-minute manual add if wanted. Real-category rows with no
+    ServiceFusion price (25 of them, confirmed quoted per-job, not a data
+    gap) get a $50 placeholder rate, Chris's own number ("the starting
+    price"), clearly flagged per-row in the script's output so it's never
+    confused with a real rate.
+  - `import_open_invoices.py` — the script Stage 5's own text named
+    (`import_open_invoices.py`) but that never existed, because the
+    directive's premise (open-invoice data already sitting in the sibling
+    statements DB) was wrong (D-038: zero rows there for all four
+    companies). Reads ServiceFusion's own `Report_Invoice` export directly
+    instead. Only `PAST DUE`/`UNPAID` rows import (not the 3,564
+    `PAID IN FULL` ones — opening balance only, not a full historical
+    re-creation). `invoices.source` already had an unused `'sf_import'`
+    CHECK value reserved for exactly this, dating back to whenever the
+    receivable/version schema was designed. Imported invoices get one
+    `Hardened` version with no line items (the source is invoice-level
+    only) — the dollar total and balance are right, the per-line detail
+    isn't recreated. Invoice numbers are prefixed `SF-<original number>`
+    (e.g. `SF-6047`) so an imported receivable is visually obvious
+    everywhere and can never collide with FieldKit's own
+    `<PREFIX>-<year>-####` sequence. Two invoices had a partial payment
+    already applied in ServiceFusion before cutover — rather than just
+    starting the balance lower with no trail, the script writes a real
+    `payments` row (method='Other', invoice date used since the actual
+    payment date isn't in this report) plus a `payment_applications` row,
+    so the ledger stays honest.
+  - `import_job_history_direct.py` — new, sources `customer_job_dates`
+    directly from Chris's weekly `CustomerRevenueReport_*.xlsx` exports
+    rather than the statements DB `import_job_dates.py` already reads from.
+    Supplements, doesn't replace, that script — this one only counts a row
+    if its Status is `Invoiced` or `Completed`, the same two statuses the
+    recency report's own WO-derived formula already counts (D-084);
+    `Scheduled`/`Dispatched`/`Started` rows are excluded as not-yet-actually-
+    performed. `source='servicefusion_import_direct'` distinguishes these
+    rows from the statements-DB-sourced `'servicefusion_import'` ones.
+  - All three reuse the exact `normalize_name()` (lowercase, strip
+    `.`/`'`/`"`, collapse whitespace) and exact-match-only discipline
+    `import_job_dates.py` established — no fuzzy matching, unmatched
+    ServiceFusion customer names logged to CSV, never auto-creates a
+    FieldKit customer.
+- **Results (Get a Grip, committed 2026-09-22):** 45 catalog items (24 at
+  the $50 placeholder), 268 open invoices totaling **$179,521.14** (2 with a
+  migrated partial payment), 1,285 `customer_job_dates` rows across 141
+  customers. 24 invoice customer names (58 invoices, ~$40K) and 39 job-
+  history customer names didn't match any FieldKit customer — heavy overlap
+  between the two lists (Atlantic Mountain Island Lake, Hawthorne at
+  Oakridge, Trinity Station Apartments, etc.) is a real signal these
+  properties genuinely don't exist as customers yet, not a name-formatting
+  mismatch. Logged to CSV under `~/servicefusion-imports/get-a-grip/_review/`
+  for Chris to resolve.
+- **Catalog cleanup, same review:** three pre-existing GAG catalog items
+  didn't match the real business (`1 BR Clean` — Carpet Cleaning category;
+  `After Hours Water Extraction` and `Ozone Treatment` — GAG doesn't do
+  water extraction, D-071) — soft-deleted (`deleted_by='sf_import_cleanup'`),
+  reversible. **Bug caught by the regression suite immediately after:**
+  `Ozone Treatment` was the one active `per_day_equipment` catalog item on
+  GAG that three invoice smoke tests (`smoke_invoice_pdf.py`,
+  `smoke_invoice_routes.py`, `smoke_invoice_versions.py`) depend on for
+  equipment-billing fixtures — it had already been correctly hidden via
+  `is_active=false` by D-071 (not `deleted_at`, precisely so it stays
+  queryable for exactly this kind of fixture use while disappearing from
+  real UI dropdowns), and soft-deleting it on top broke that. Restored to
+  its D-071 state (`is_active=false, deleted_at=NULL`); the other two
+  deletions stand.
+- **`smoke_dashboard.py` fix (same regression pass):** its "90+ figure" A/R
+  check asserted a literal `'$543 90+'` string, which only ever worked
+  because production had zero real A/R data before today. Changed to a
+  baseline-diff check (`after_90plus - baseline_90plus == 543`), matching
+  the pattern the adjacent Outstanding-A/R assertion already used — same
+  category of fix as D-083: a test that assumed an empty production dataset
+  stopped being valid once real data landed.
+- **Not done, deliberately:** `record_audit` (Increment 5.3) is not written
+  by these three scripts. They run as standalone CLI tools outside the
+  Flask app/request context, same as `import_job_dates.py` before them
+  (which also predates and doesn't call `_record_audit`) — bulk imports are
+  attributed via each row's own `created_by`/`source` columns, not the
+  interactive-save audit trail, which only instruments routes inside
+  app.py. Consistent with existing precedent, not a new gap.
+
+**Backup:** `~/db-backups/2026-09-22-pre-sf-import/fieldkit_getagrip_pre_import.sql`
+taken before any write (this wasn't a migration, but a real financial data
+write warrants the same discipline).
+
+**Verification:** full 25-file regression suite green after the catalog
+cleanup fix and the `smoke_dashboard.py` test fix; live-rendered
+`/billing`, `/reports/aging`, `/settings/catalog`, `/reports/recency`,
+`/customers` all confirmed 200 with the real data visible; `jobs.py nightly`
+re-run for all four companies afterward so `customer_flags`/`customer_ratings`
+reflect the new real invoices immediately rather than waiting for the next
+cron cycle (no real email sent — `scheduled_alerts_enabled` stays off for
+all four companies).
+
+**Deferred:** the same import for Kleanit Charlotte, CTS, and Kleanit South
+Florida, once Chris supplies their exports the same way.
+
+---
+
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:
 #33 (OPS/VendorCafe export templates), #50 (SMS alerts via Twilio), and Stage 5.6
 (ServiceFusion price-list exports, company legal names/remit-to/reply-to/alert emails).

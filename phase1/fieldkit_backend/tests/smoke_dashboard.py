@@ -65,8 +65,14 @@ def main():
             # crude but adequate: find the stat tile whose label contains the snippet
             m = re.search(r'\$([\d,]+)</div>\s*<div class="label">' + re.escape(label_snippet), html)
             return float(m.group(1).replace(',', '')) if m else None
+        def extract_90plus(html):
+            # "Outstanding A/R ($X 90+)" -- pull the 90+ figure out of the label text.
+            m = re.search(r'Outstanding A/R \(\$([\d,]+) 90\+\)', html)
+            return float(m.group(1).replace(',', '')) if m else None
+
         html0 = r.data.decode()
         baseline_ar = extract_dollar('Outstanding A/R', html0)
+        baseline_90plus = extract_90plus(html0)
 
         print("smoke_dashboard: WO scheduled TODAY shows up in today's-jobs count")
         r = admin.get('/getagrip/dashboard')
@@ -131,7 +137,10 @@ def main():
         check("outstanding A/R increased by the fixture's open_balance (543)",
               after_ar is not None and baseline_ar is not None and round(after_ar - baseline_ar) == 543,
               f"(baseline={baseline_ar}, after={after_ar})")
-        check("90+ figure (543) shown alongside outstanding A/R", '$543 90+' in html)
+        after_90plus = extract_90plus(html)
+        check("90+ figure increased by the fixture's open_balance (543, since is_delinquent=TRUE)",
+              after_90plus is not None and baseline_90plus is not None and round(after_90plus - baseline_90plus) == 543,
+              f"(baseline={baseline_90plus}, after={after_90plus})")
         after_credit = extract_dollar('Unapplied Credits', html)
         check("unapplied credits increased by the fixture's $12.50 (Python %.0f rounds .5 to even -> 12)",
               after_credit is not None and baseline_credit is not None and round(after_credit - baseline_credit) == 12,

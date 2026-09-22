@@ -29,7 +29,7 @@ reporting until FieldKit's billing is complete.
 | Invoice engine | Receivable/version schema + full UI (1.2–1.6) + email delivery (1.7, migration 014) + WTN/PO + compliance portal fields (1.8, migration 015). Zero real invoice/payment/email rows in production yet (only test fixtures, created and cleaned up by each smoke test — email tests use a monkey-patched Resend + `.invalid`-address fixtures, confirmed zero real sends). |
 | Compliance portals | Built (1.8, migration 015): `customer_compliance_portals` table, enrollment/edit/toggle UI, auto-assign-on-harden, `/compliance` review page with accept/reject + generic `.xlsx` export (real per-portal templates still pending from Chris/Michele). |
 | NC cash-basis tax report | Built (1.10, migration 016, `/reports/tax`): cash-basis by county, state/county/transit split incl. Mecklenburg's 1% additional-county line, refund handling, Excel + PDF export. Untested against real data (none exists yet). |
-| Cutover import from Phase 0 | Not built — deferred by Chris (2026-09-19) until the site is ready for day-to-day testing. Investigation-only finding logged: the statements DB (`fsm_prod`) currently has zero invoice/tax rows for all four companies (D-038); needs resolving before this increment actually runs. |
+| Cutover import from ServiceFusion | Built and run for real for Get a Grip (2026-09-22): `import_catalog.py`, `import_open_invoices.py`, `import_job_history_direct.py` (all `phase1/fieldkit_phase1/`, dry-run default). Sources directly from ServiceFusion exports, not the statements DB — that premise turned out wrong (D-038: zero invoice/tax rows there for all four companies). See D-093. Kleanit Charlotte/CTS/Kleanit SF not yet run — waiting on their exports. |
 | Water extraction queue | Built (2.2, migration 018, `/extraction`): one-WO-lifecycle model (no cloning), daily log, Retrieved flow with per-day billing recompute, pickup-list PDF, follow-up-WO offer. **Not available for Get a Grip** (bathtub/surface resurfacing — never does this work; gated post-build 2026-09-19, D-071). Fully intact for the other three companies. |
 | Day sheet / hours / job activity reports | Built (2.3, `/reports`, `/reports/daysheet`, `/reports/hours`, `/reports/jobs`): printable per-tech schedule, honest "scheduled not actual" hours, job list + CSV export. No migration needed — all columns already existed. |
 | Retired-tag replacements | Built (2.4 + 2.5, migrations 019/020): `is_internal_task` (customer-less WOs), derived "New Customer" badge, and (once `customer_flags` existed) the Delinquent Account badge on customer detail/WO form/dispatch board. Callback still deferred to §4.4. |
@@ -176,14 +176,28 @@ extraction, and My Day). See D-092. 27/27 smoke checks
 (`tests/smoke_settings_landing.py`), full 25-file regression suite green.
 
 **Stage 4 is functionally complete** (Increments 5.1–5.5 all done, smoke-tested,
-full regression suite green throughout). Increment 5.6 ("Seeding tasks that need
-Chris") is the one remaining item in Stage 4 — it's not a code increment: it's
-CSV import scripts (`import_catalog.py`, `import_equipment.py`) waiting on
-Chris to supply real ServiceFusion price-list exports, plus company settings
-fields (legal names, remit-to text, reply-to/alert emails) and non-admin user
-password resets that need Chris's input before they can be entered, not built.
-Next: Stage 5 (cutover readiness) once Chris has reviewed Stage 4's work and
-supplied the Stage 5.6 inputs, or continue further at Chris's direction.
+full regression suite green throughout).
+
+**Increment 5.6 / Stage 5 cutover — in progress, Get a Grip done (2026-09-22).**
+Chris supplied real ServiceFusion exports for Get a Grip; three new scripts
+built and run for real (`phase1/fieldkit_phase1/import_catalog.py`,
+`import_open_invoices.py`, `import_job_history_direct.py` — dry-run default,
+`--commit` to write). Committed: 45 catalog items, 268 open invoices
+totaling **$179,521.14**, 1,285 job-history rows across 141 customers. 24
+invoice + 39 job-history ServiceFusion customer names didn't match any
+FieldKit customer (heavy overlap between the two lists — logged to CSV under
+`~/servicefusion-imports/get-a-grip/_review/` for Chris). Three mismatched
+pre-existing GAG catalog items soft-deleted. See D-093 for every scope
+decision, the regression the catalog cleanup caused and how it was fixed,
+and the `smoke_dashboard.py` test fix real production data exposed.
+**Deferred**: the same import for Kleanit Charlotte, CTS, and Kleanit South
+Florida once Chris supplies their exports; company settings fields (legal
+names, remit-to text, reply-to/alert emails) and non-admin user password
+resets still need Chris's input before they can be entered.
+
+Next: the same cutover import for the other three companies, then Stage 5's
+remaining items (drift check, `DEPLOYMENT/RUNBOOK.md`, final doc pass) once
+all four companies are done, or continue at Chris's direction.
 
 Decisions Chris has already made for this build (delinquent threshold = 90 days past
 invoice date, FL tax left empty/exempt for Kleanit SF, SF-import receivables excluded

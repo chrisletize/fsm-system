@@ -1352,3 +1352,41 @@ idempotent. Pre-migration backups in `~/db-backups/2026-09-20g/`.
 Full 25-file regression suite re-run clean.
 
 **Deferred:** nothing from this increment's own scope.
+
+## Stage 5.6 / Stage 5 — Real ServiceFusion cutover import (Get a Grip)
+
+- Chris supplied real ServiceFusion exports for Get a Grip (catalog, open
+  invoices, job history). Reviewed together before any write; see D-093 for
+  every scope decision (what's excluded and why, the $50 placeholder rate,
+  the invoice-numbering scheme, the two partial-payment cases).
+- Three new scripts under `phase1/fieldkit_phase1/` (dry-run default,
+  `--commit` to write): `import_catalog.py`, `import_open_invoices.py`
+  (the script Stage 5's own text named but that never existed — its
+  premise, that open-invoice data already lived in the statements DB, was
+  wrong per D-038), and `import_job_history_direct.py` (new — sources
+  `customer_job_dates` straight from ServiceFusion's own weekly exports
+  rather than the statements DB).
+- **Committed for Get a Grip:** 45 catalog items, 268 open invoices
+  ($179,521.14 total balance, 2 with a migrated partial payment), 1,285
+  job-history rows across 141 customers. 24 invoice customer names and 39
+  job-history customer names didn't match any FieldKit customer — logged to
+  CSV for Chris to resolve, heavy overlap between the two lists suggesting
+  real missing customers, not name-formatting noise.
+- Also soft-deleted three pre-existing GAG catalog items that didn't match
+  the real business (`1 BR Clean`, `After Hours Water Extraction`, `Ozone
+  Treatment`) — caught and fixed a real regression this caused (`Ozone
+  Treatment` was relied on by three invoice smoke tests as the one active
+  per-day-equipment catalog item on GAG; restored to its correct D-071
+  state, `is_active=false` not `deleted_at`) and fixed a `smoke_dashboard.py`
+  assertion that assumed production had zero real A/R data.
+- No migration — pure data, no schema change. Backup taken first
+  (`~/db-backups/2026-09-22-pre-sf-import/`).
+
+**Verification:** full 25-file regression suite green; live pages
+(`/billing`, `/reports/aging`, `/settings/catalog`, `/reports/recency`,
+`/customers`) confirmed rendering correctly with the real data;
+`jobs.py nightly` re-run for all four companies so `customer_flags`/
+`customer_ratings` reflect the new data immediately.
+
+**Deferred:** the same import for Kleanit Charlotte, CTS, and Kleanit South
+Florida once Chris supplies their exports.
