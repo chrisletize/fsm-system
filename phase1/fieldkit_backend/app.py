@@ -2806,14 +2806,24 @@ def _parse_arrival_time(raw):
     return None, f'Arrival time "{raw}" could not be read — try a format like 8:30 AM.'
 
 def _company_techs(company_key, dispatchable_only=False):
-    """Techs (role='technician') with access to this company. Reads the
-    CANONICAL getagrip users table, not get_db_connection(company_key) --
-    users are replicated in code (write_to_all_dbs) but only getagrip has
-    ever actually been seeded (CLAUDE.md's known quirk, D-003); reading a
+    """Techs -- role='technician', OR any other role explicitly marked
+    is_field_tech (e.g. an admin/manager who also does field work, like
+    Chris) -- with access to this company. Reads the CANONICAL getagrip
+    users table, not get_db_connection(company_key) -- users are
+    replicated in code (write_to_all_dbs) but only getagrip has ever
+    actually been seeded (CLAUDE.md's known quirk, D-003); reading a
     per-company DB here would always return zero techs for the other three
     companies. Filters by company_access the same way session-based access
     control already does. Used by both the WO form's tech checklist and the
     dispatch board (Increment 2.1) -- one source, not two.
+
+    Bug fixed 2026-09-22: this used to hard-require role='technician',
+    which meant the "Field tech" checkbox on the user form did nothing at
+    all for anyone whose role wasn't literally technician -- checking it
+    for an admin/manager who also works in the field (Chris) never made
+    them appear on the dispatch board. is_field_tech is the actual signal
+    the checkbox's own label promises ("Does field work"); role alone was
+    never the right gate.
 
     can_be_dispatched/is_active_tech are PER-COMPANY (migration 028,
     user_company_dispatch) -- a tech with access to multiple companies is
@@ -2823,7 +2833,7 @@ def _company_techs(company_key, dispatchable_only=False):
     FALSE), same as it always defaulted."""
     conn = get_db_connection('getagrip')
     cur  = conn.cursor()
-    where = "u.role = 'technician' AND u.is_active = TRUE AND u.company_access ? %s"
+    where = "(u.role = 'technician' OR u.is_field_tech = TRUE) AND u.is_active = TRUE AND u.company_access ? %s"
     if dispatchable_only:
         where += " AND COALESCE(ucd.can_be_dispatched, FALSE) = TRUE AND COALESCE(ucd.is_active_tech, TRUE) = TRUE"
     cur.execute(f"""
@@ -3052,6 +3062,14 @@ def _save_work_order(company_key, wo_id):
         return None, 'Pick a customer from the list.'
     if is_internal_task:
         customer_id = None
+        # Bug fixed 2026-09-22 (Chris): the customer field correctly became
+        # optional here, but line items stayed unconditionally required --
+        # an internal task genuinely could never be saved. Internal tasks
+        # are never billed, so line items don't apply at all; a notes field
+        # replaces them entirely (the form reuses notes_for_techs for
+        # this -- "simply type in the details requested of the tech").
+        if not notes_for_techs:
+            return None, 'Describe what needs to be done for this internal task.'
     if status not in WO_OFFICE_STATUSES:
         return None, 'Invalid status.'
     if priority not in WO_PRIORITIES:
@@ -3068,9 +3086,15 @@ def _save_work_order(company_key, wo_id):
     if time_err:
         return None, time_err
 
-    lines, line_error = _parse_wo_line_items(company_key, request.form.get('line_items_json'))
-    if line_error:
-        return None, line_error
+    if is_internal_task:
+        # Never billed, so never has line items -- whatever was submitted
+        # (there shouldn't be any, the form hides the section) is ignored
+        # rather than trusted.
+        lines = []
+    else:
+        lines, line_error = _parse_wo_line_items(company_key, request.form.get('line_items_json'))
+        if line_error:
+            return None, line_error
 
     # Design addendum §13 (docs/FIELDKIT_DESIGN_ADDENDUM_duration-and-rating.md):
     # catalog-estimated duration is Sigma(line.estimated_minutes x line.quantity),

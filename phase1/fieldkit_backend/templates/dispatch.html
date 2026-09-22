@@ -43,6 +43,14 @@
     #popover .actions { margin-top:.75rem; display:flex; gap:.4rem; flex-wrap:wrap; }
     #popover .actions a, #popover .actions button { font-size:.76rem; padding:.3rem .6rem; border-radius:4px; border:1px solid #ddd; background:#f7f7f7; cursor:pointer; text-decoration:none; color:#333; }
 
+    /* Right-click menu on an empty timeline slot (directive follow-up, Chris
+       2026-09-22 -- a plain left-click was too easy to trigger by accident). */
+    #slotMenu { position:absolute; background:white; border:1px solid #ddd; border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,.15);
+                padding:.4rem; min-width:180px; z-index:60; display:none; }
+    #slotMenu button { display:block; width:100%; text-align:left; font-size:.85rem; padding:.5rem .7rem; border:none;
+                        background:none; cursor:pointer; border-radius:4px; color:#333; }
+    #slotMenu button:hover { background:#f0f0f0; }
+
     .warn-banner { background:#fff8e1; border:1px solid #ffe082; color:#8a6d00; padding:.6rem 1rem; border-radius:4px; margin-bottom:1rem; display:none; font-size:.85rem; }
 
     /* Week view */
@@ -85,6 +93,7 @@
 {% endif %}
 
 <div id="popover"></div>
+<div id="slotMenu"></div>
 
 <script>
 const companyKey = '{{ company_key }}';
@@ -117,6 +126,27 @@ function hidePopover() { document.getElementById('popover').style.display = 'non
 document.addEventListener('click', e => {
     if (!e.target.closest('.wo-block') && !e.target.closest('#popover')) hidePopover();
 });
+
+function hideSlotMenu() { document.getElementById('slotMenu').style.display = 'none'; }
+document.addEventListener('click', e => {
+    if (!e.target.closest('#slotMenu')) hideSlotMenu();
+});
+document.addEventListener('contextmenu', e => {
+    // Right-clicking anywhere else on the page (a WO block, outside the
+    // timeline entirely) should close an already-open slot menu rather
+    // than leaving it stranded from a previous right-click.
+    if (!e.target.closest('.tech-timeline') || e.target.closest('.wo-block')) hideSlotMenu();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { hideSlotMenu(); hidePopover(); } });
+
+function showSlotMenu(e, username, timeStr) {
+    hidePopover();
+    const menu = document.getElementById('slotMenu');
+    menu.innerHTML = `<button onclick="window.location.href='/${companyKey}/workorders/new?tech=${encodeURIComponent(username)}&date=${targetDate}&time=${encodeURIComponent(timeStr)}'">+ New Work Order at ${timeStr}</button>`;
+    menu.style.left = (window.scrollX + e.clientX) + 'px';
+    menu.style.top = (window.scrollY + e.clientY) + 'px';
+    menu.style.display = 'block';
+}
 
 function showPopover(block, anchorEl) {
     const pop = document.getElementById('popover');
@@ -228,13 +258,20 @@ function renderDay(data) {
             const newTime = minutesToTimeStr(minutes);
             moveBlock(payload.woId, row.username, `${targetDate}T${newTime}:00`);
         });
-        timeline.addEventListener('click', e => {
+        // A plain left-click on an empty slot used to jump straight into a
+        // new WO form -- one stray click and you're mid-way through
+        // creating a job you never meant to (Chris, 2026-09-22). Right-
+        // click opens a small menu instead; left-click on empty space now
+        // does nothing, same as clicking empty space anywhere else on the
+        // board.
+        timeline.addEventListener('contextmenu', e => {
             if (e.target !== timeline) return;
+            e.preventDefault();
             const rect = timeline.getBoundingClientRect();
             const x = e.clientX - rect.left;
             const minutes = Math.round((x / PX_PER_MIN) / 15) * 15 + startMin;
             const timeStr = minutesToLabel(minutes, true);
-            window.location.href = `/${companyKey}/workorders/new?tech=${encodeURIComponent(row.username)}&date=${targetDate}&time=${encodeURIComponent(timeStr)}`;
+            showSlotMenu(e, row.username, timeStr);
         });
     });
 

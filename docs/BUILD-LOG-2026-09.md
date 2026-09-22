@@ -1426,3 +1426,32 @@ DBs, verified idempotent. Pre-migration backups in
 D-094). Full 26-file regression suite green.
 
 **Deferred:** nothing from this fix's own scope.
+
+## Post-Stage-4 fixes — field-tech dispatch bug, right-click menu, internal task save bug
+
+- **Bug**: `_company_techs()` hard-required `role='technician'`, so the
+  "Field tech" checkbox did nothing for any other role — Chris (admin,
+  is_field_tech=TRUE) was invisible on the getagrip dispatch board. Fixed
+  to `(role='technician' OR is_field_tech=TRUE)`. No schema change, the
+  column already existed and was simply never read.
+- **Dispatch board**: left-click on an empty slot no longer jumps straight
+  into a new WO form. Right-click opens a small menu with the same "new WO
+  at this time" action instead — closes on outside click, Escape, or
+  right-clicking elsewhere.
+- **Bug**: an internal task could never actually be saved — line items
+  stayed required (client- and server-side) even though the customer field
+  correctly became optional. **Feature, same fix**: internal tasks now use
+  a "Task Details" notes field instead of line items entirely (reuses the
+  existing `notes_for_techs` column), per Chris: "specialized assignments,
+  never billed, we simply type in the details requested of the tech."
+- Fixed `smoke_tag_replacements.py`'s pre-existing internal-task fixtures,
+  which had been relying on the now-corrected bug.
+
+**No migration.** See D-095 for full detail.
+
+**Smoke tests:** `tests/smoke_field_tech_dispatch.py` — 8/8 new checks.
+`smoke_tag_replacements.py` — updated, +6 checks. Full 27-file regression
+suite green. Right-click menu verified via rendered HTML only (no live
+browser walkthrough) — disclosed gap.
+
+**Deferred:** nothing from this fix's own scope.

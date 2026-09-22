@@ -208,6 +208,23 @@ audit records showing whoever it was at the time, plus a self-rename block.
 See D-094. 20/20 smoke checks (`tests/smoke_user_management.py`), full
 26-file regression suite green.
 
+**Post-Stage-4 fixes (2026-09-22, same day)** — three more usability/bug
+reports: (1) `_company_techs()` hard-required `role='technician'`, so the
+"Field tech" checkbox silently did nothing for any other role — Chris
+himself (admin, is_field_tech=TRUE) was invisible on the dispatch board;
+fixed to `(role='technician' OR is_field_tech=TRUE)`. (2) Dispatch board
+left-click on an empty slot no longer jumps straight into a new WO form —
+right-click opens a small menu with the same action instead. (3) An
+internal task could never actually be saved (line items stayed required
+even though the customer field correctly became optional) — fixed, and per
+Chris's own framing, internal tasks now use a "Task Details" notes field
+instead of line items entirely (reuses the existing `notes_for_techs`
+column). No migration. See D-095. 8/8 new smoke checks
+(`tests/smoke_field_tech_dispatch.py`) plus 6 more in an updated
+`smoke_tag_replacements.py`, full 27-file regression suite green. The
+right-click menu was verified via rendered HTML only, not a live browser
+walkthrough — disclosed gap.
+
 Next: the same cutover import for the other three companies, then Stage 5's
 remaining items (drift check, `DEPLOYMENT/RUNBOOK.md`, final doc pass) once
 all four companies are done, or continue at Chris's direction.

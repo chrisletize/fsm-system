@@ -330,7 +330,7 @@
 </div>
 
 <!-- ============================ Line Items ============================ -->
-<div class="card">
+<div class="card" id="lineItemsCard">
     <h2>Line Items</h2>
     <div id="liRows"><div class="li-empty" id="liEmpty">No line items yet — add a service or deploy equipment.</div></div>
     <div class="li-actions">
@@ -344,6 +344,19 @@
         <span class="amount" id="liSubtotal">$0.00</span>
     </div>
     <div class="li-accrue-note" id="liAccrueNote"></div>
+</div>
+
+<!-- Internal tasks are never billed -- no line items apply at all. This
+     card replaces the one above (never both shown at once); both write to
+     the same notes_for_techs field the "Notes" card's own textarea also
+     uses, so there's exactly one value, not two to keep in sync by hand. -->
+<div class="card" id="internalTaskNotesCard" style="display:none;">
+    <h2>Task Details</h2>
+    <div class="form-group">
+        <label for="internalTaskNotes">What needs to be done <span class="required">*</span></label>
+        <textarea name="notes_for_techs" id="internalTaskNotes" rows="5"
+                  placeholder="e.g. Pick up 4 bags of concrete mix from Lowe's on Main St, drop at the shop before 3pm.">{{ wo.notes_for_techs or '' if wo else '' }}</textarea>
+    </div>
 </div>
 
 {% if has_extraction(company_key) %}
@@ -409,9 +422,9 @@
 <div class="card">
     <h2>Notes</h2>
     <div class="form-grid">
-        <div class="form-group">
+        <div class="form-group" id="regularNotesForTechsGroup">
             <label>Notes for Techs <span class="hint">(visible to the tech, not on the invoice)</span></label>
-            <textarea name="notes_for_techs">{{ wo.notes_for_techs or '' if wo else '' }}</textarea>
+            <textarea name="notes_for_techs" id="regularNotesForTechs">{{ wo.notes_for_techs or '' if wo else '' }}</textarea>
         </div>
         <div class="form-group">
             <label>Internal Notes <span class="hint">(office only)</span></label>
@@ -970,24 +983,60 @@
         combo.dataset.required = isInternal ? 'false' : 'true';
         group.style.opacity = isInternal ? '.5' : '1';
         document.getElementById('customerRequiredHint').textContent = isInternal ? '(optional)' : '(required)';
+
+        // Internal tasks are never billed -- no line items apply. Swap the
+        // Line Items card for a single "what needs to be done" notes field
+        // instead of just disabling save (directive follow-up, Chris
+        // 2026-09-22). Exactly one of the two notes_for_techs textareas is
+        // ever enabled, so the form only ever submits one value -- whoever
+        // typed last into whichever box was visible wins, carried over so
+        // nothing typed gets silently dropped when the checkbox is toggled.
+        const lineItemsCard = document.getElementById('lineItemsCard');
+        const internalNotesCard = document.getElementById('internalTaskNotesCard');
+        const regularNotes = document.getElementById('regularNotesForTechs');
+        const internalNotes = document.getElementById('internalTaskNotes');
+        lineItemsCard.style.display = isInternal ? 'none' : '';
+        internalNotesCard.style.display = isInternal ? '' : 'none';
+        if (isInternal) {
+            if (regularNotes.value.trim() && !internalNotes.value.trim()) internalNotes.value = regularNotes.value;
+            regularNotes.disabled = true;
+            internalNotes.disabled = false;
+        } else {
+            if (internalNotes.value.trim() && !regularNotes.value.trim()) regularNotes.value = internalNotes.value;
+            internalNotes.disabled = true;
+            regularNotes.disabled = false;
+        }
     }
     document.getElementById('chkInternalTask').addEventListener('change', applyInternalTaskState);
+    applyInternalTaskState();  // run once on load -- editing an existing internal task must show the right card immediately
     document.getElementById('specialNotes').addEventListener('input', () => regenDescription());
 
     // ========================================================================
     // Submit: serialize line items; block only on structural problems.
     // ========================================================================
     document.getElementById('woForm').addEventListener('submit', function(e) {
-        const { lines, valid } = serializeLines();
-        if (!valid) {
-            e.preventDefault();
-            alert('One or more line items is missing a catalog/equipment selection (outlined in red).');
-            return;
-        }
-        if (lines.length === 0) {
-            e.preventDefault();
-            alert('A work order needs at least one line item.');
-            return;
+        const isInternal = document.getElementById('chkInternalTask').checked;
+
+        if (isInternal) {
+            if (!document.getElementById('internalTaskNotes').value.trim()) {
+                e.preventDefault();
+                alert('Describe what needs to be done for this internal task.');
+                return;
+            }
+            document.getElementById('lineItemsJson').value = '[]';
+        } else {
+            const { lines, valid } = serializeLines();
+            if (!valid) {
+                e.preventDefault();
+                alert('One or more line items is missing a catalog/equipment selection (outlined in red).');
+                return;
+            }
+            if (lines.length === 0) {
+                e.preventDefault();
+                alert('A work order needs at least one line item.');
+                return;
+            }
+            document.getElementById('lineItemsJson').value = JSON.stringify(lines);
         }
 
         // Marking an extraction job Completed offers a fork instead of just
@@ -1005,8 +1054,6 @@
             showExtractionPrompt();
             return;
         }
-
-        document.getElementById('lineItemsJson').value = JSON.stringify(lines);
     });
 
     function showExtractionPrompt() {

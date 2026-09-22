@@ -45,10 +45,20 @@ def main():
             'kind': 'std', 'catalog_item_id': catalog_id, 'description': '', 'quantity': '1', 'unit_price': '75.00',
         }])
 
-        print("smoke_tag_replacements: Misc Task — create an internal task with no customer")
+        print("smoke_tag_replacements: Misc Task — no customer required, but WITHOUT notes it's rejected")
         r = client.post('/getagrip/workorders/new', data={
             'status': 'Scheduled', 'priority': 'Normal', 'start_date': TEST_DATE_1,
-            'arrival_window_start': '9:00 AM', 'line_items_json': line_items,
+            'arrival_window_start': '9:00 AM', 'line_items_json': '[]',
+            'duration_overridden': 'false', 'is_internal_task': 'on',
+        }, follow_redirects=False)
+        check(f"internal task with no notes_for_techs is rejected (200, re-renders) ({r.status_code})", r.status_code == 200)
+        check("rejection message explains why", b'Describe what needs to be done' in r.data)
+
+        print("smoke_tag_replacements: Misc Task — create an internal task with no customer, notes instead of line items")
+        r = client.post('/getagrip/workorders/new', data={
+            'status': 'Scheduled', 'priority': 'Normal', 'start_date': TEST_DATE_1,
+            'arrival_window_start': '9:00 AM', 'line_items_json': line_items,  # deliberately sent anyway -- must be ignored, not saved
+            'notes_for_techs': 'Pick up supplies from the shop.',
             'duration_overridden': 'false', 'is_internal_task': 'on',
         }, follow_redirects=False)
         check(f"internal task WO created without a customer ({r.status_code})", r.status_code == 302)
@@ -59,6 +69,11 @@ def main():
         """, (TEST_DATE_1,))
         wo_internal = cur.fetchone()['id']
         wo_ids.append(wo_internal)
+
+        cur.execute("SELECT COUNT(*) AS n FROM work_order_line_items WHERE work_order_id = %s AND deleted_at IS NULL", (wo_internal,))
+        check("submitted line items were IGNORED, not saved (internal tasks are never billed)", cur.fetchone()['n'] == 0)
+        cur.execute("SELECT notes_for_techs FROM work_orders WHERE id = %s", (wo_internal,))
+        check("notes_for_techs saved instead", cur.fetchone()['notes_for_techs'] == 'Pick up supplies from the shop.')
 
         cur.execute("SELECT customer_id, is_internal_task FROM work_orders WHERE id = %s", (wo_internal,))
         row = cur.fetchone()
@@ -88,6 +103,7 @@ def main():
         r = client.post(f'/getagrip/workorders/{wo_internal}/edit', data={
             'status': 'Completed', 'priority': 'Normal', 'start_date': TEST_DATE_1,
             'arrival_window_start': '9:00 AM', 'line_items_json': line_items,
+            'notes_for_techs': 'Pick up supplies from the shop.',
             'duration_overridden': 'false', 'is_internal_task': 'on',
         }, follow_redirects=False)
         check(f"internal task marked Completed ({r.status_code})", r.status_code == 302)

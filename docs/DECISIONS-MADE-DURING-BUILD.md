@@ -1595,6 +1595,94 @@ suite (green).
 
 ---
 
+D-095 — Post-Stage-4 fixes (Chris, 2026-09-22): field-tech dispatch bug,
+dispatch board accidental-click, internal task couldn't save. Four issues
+reported together after using the built site; not directive increments.
+
+- **BUG: `_company_techs()` hard-required `role = 'technician'`.** The
+  "Field tech" checkbox on the user form (`is_field_tech`, "Does field work
+  vs. office-only") has existed since Increment 2.1 but was NEVER actually
+  read by any query — `_company_techs()`, the one shared source both the WO
+  form's tech checklist and the dispatch board read from, only ever
+  filtered on `role = 'technician'`. Real-world trigger: Chris
+  (`role='admin'`, `is_field_tech=TRUE`) was invisible on the getagrip
+  dispatch board despite the box being checked — the flag was pure
+  decoration for anyone whose role wasn't literally `technician`. Fixed:
+  `WHERE (role = 'technician' OR is_field_tech = TRUE) AND ...` — any role
+  marked as doing field work now shows up, matching what the checkbox's own
+  label has always promised. No schema change; the column already existed,
+  it just wasn't wired to anything.
+- **Dispatch board: right-click menu replaces click-to-create.** A plain
+  left-click on an empty timeline slot used to navigate straight into a new
+  WO form with no confirmation — one accidental click and you're mid-way
+  through creating a job that was never meant to exist. Left-click on empty
+  space is now a no-op (consistent with clicking empty space anywhere else
+  on the board); right-click opens a small custom menu (`#slotMenu`,
+  positioned at the cursor, `e.preventDefault()`s the browser's native
+  menu) with a single "+ New Work Order at `<time>`" action, matching the
+  time-slot math the old click handler already used. Closes on outside
+  click, Escape, or right-clicking elsewhere on the page. WO blocks
+  themselves keep their existing click-to-popover behavior and the
+  browser's native right-click menu — only empty-slot creation changed.
+- **BUG: an internal task could never actually be saved.** `is_internal_task`
+  correctly made the customer field optional (directive §3.4's original Misc
+  Task work), but line items stayed unconditionally required underneath —
+  both client-side (`if (lines.length === 0) alert(...)`) and server-side
+  (`_parse_wo_line_items`'s own `if len(submitted) == 0: return None, 'A
+  work order needs at least one line item.'`), neither aware
+  `is_internal_task` existed. An internal task has nothing to bill, so
+  there was never a sensible line item to add — the form was structurally
+  impossible to submit once "Internal task" was checked, regardless of
+  customer state, exactly matching Chris's report.
+- **Feature, same fix**: internal tasks now use a notes field **instead of**
+  line items entirely, per Chris's own framing ("specialized assignments,
+  never billed, we simply type in the details requested of the tech") —
+  reuses the existing `notes_for_techs` column (already shown to techs on
+  My Day/Day Sheet) rather than adding a new one. The form shows exactly
+  one of two cards at a time — "Line Items" or a new "Task Details"
+  textarea — toggled by the Internal Task checkbox; both write to the same
+  `name="notes_for_techs"` field (only the visible one is ever enabled, so
+  there's never a duplicate-value submission to reconcile), with whatever
+  was typed into either one carried over if the checkbox is flipped after
+  typing. Backend: when `is_internal_task`, `_save_work_order` skips
+  `_parse_wo_line_items` entirely and forces `lines = []` regardless of
+  what was submitted (defense in depth — the form shouldn't ever send line
+  items for an internal task, but the backend doesn't trust that), requires
+  `notes_for_techs` non-empty (a task with literally nothing typed isn't
+  useful to anyone), and — for a WO edited FROM having real line items INTO
+  an internal task — the existing "soft-delete anything not resubmitted"
+  logic already correctly removes them, since the resubmitted set is now
+  always empty.
+- Fixed a pre-existing test (`smoke_tag_replacements.py`) that had been
+  creating its internal-task fixtures with a submitted line item and no
+  `notes_for_techs`, which the new validation now correctly rejects —
+  updated to submit notes and added an explicit assertion that a
+  deliberately-submitted line item is ignored, not saved, for an internal
+  task (proving the "defense in depth" claim above, not just trusting it).
+
+**No migration** — `is_field_tech` already existed (just unused), the
+internal-task fix reuses the existing `notes_for_techs` column, and the
+dispatch-board change is JS/template only.
+
+**Smoke tests:** `tests/smoke_field_tech_dispatch.py` — 8/8 new checks: an
+admin marked Field tech appears in both `_company_techs()` and the live
+`/dispatch/data` JSON; an admin without the flag doesn't; deactivating the
+user drops them off the list (confirms `is_active` still gates independently
+of the role-vs-flag fix). `smoke_tag_replacements.py` — updated, +6 checks:
+an internal task with no `notes_for_techs` is rejected with the exact
+explanatory message; one created with notes has its deliberately-submitted
+line item verified absent from `work_order_line_items` and its notes
+verified saved. The right-click menu itself (client-side interaction) was
+verified by confirming the rendered HTML contains the new `#slotMenu`
+markup and `contextmenu` listener wiring — true click-driven UI behavior
+isn't exercisable through the Flask test client; a live-browser walkthrough
+wasn't done for this fix, flagged here as a disclosed gap. Full 27-file
+regression suite green.
+
+**Deferred:** nothing from this fix's own scope.
+
+---
+
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:
 #33 (OPS/VendorCafe export templates), #50 (SMS alerts via Twilio), and Stage 5.6
 (ServiceFusion price-list exports, company legal names/remit-to/reply-to/alert emails).
