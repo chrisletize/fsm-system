@@ -48,7 +48,7 @@ def main():
                 'email': f'{uname}@smoketest.invalid', 'role': 'technician',
                 'password': 'testpass123', 'confirm_password': 'testpass123',
                 'company_access': ['getagrip'],
-                'is_field_tech': 'on', 'can_be_dispatched': 'on',
+                'is_field_tech': 'on', 'can_be_dispatched_getagrip': 'on',
                 'dispatch_sort_order': '1',
             }, follow_redirects=False)
             check(f"{uname} created ({r.status_code})", r.status_code == 302)
@@ -244,6 +244,7 @@ def main():
             for uname in usernames:
                 c2 = get_db_connection(key)
                 cu2 = c2.cursor()
+                cu2.execute("DELETE FROM user_company_dispatch WHERE user_id = (SELECT id FROM users WHERE username = %s)", (uname,))
                 cu2.execute("DELETE FROM users WHERE username = %s", (uname,))
                 c2.commit()
                 cu2.close(); c2.close()

@@ -2813,18 +2813,28 @@ def _company_techs(company_key, dispatchable_only=False):
     per-company DB here would always return zero techs for the other three
     companies. Filters by company_access the same way session-based access
     control already does. Used by both the WO form's tech checklist and the
-    dispatch board (Increment 2.1) -- one source, not two."""
+    dispatch board (Increment 2.1) -- one source, not two.
+
+    can_be_dispatched/is_active_tech are PER-COMPANY (migration 028,
+    user_company_dispatch) -- a tech with access to multiple companies is
+    no longer forced onto every one of their companies' dispatch boards,
+    only the ones explicitly turned on for them. No row for this
+    (user, company_key) pair means not dispatchable there (COALESCE to
+    FALSE), same as it always defaulted."""
     conn = get_db_connection('getagrip')
     cur  = conn.cursor()
-    where = "role = 'technician' AND is_active = TRUE AND company_access ? %s"
+    where = "u.role = 'technician' AND u.is_active = TRUE AND u.company_access ? %s"
     if dispatchable_only:
-        where += " AND can_be_dispatched = TRUE AND is_active_tech = TRUE"
+        where += " AND COALESCE(ucd.can_be_dispatched, FALSE) = TRUE AND COALESCE(ucd.is_active_tech, TRUE) = TRUE"
     cur.execute(f"""
-        SELECT username, full_name, color_hex, phone_mobile, dispatch_sort_order
-        FROM users
+        SELECT u.username, u.full_name, u.color_hex, u.phone_mobile, u.dispatch_sort_order,
+               COALESCE(ucd.can_be_dispatched, FALSE) AS can_be_dispatched,
+               COALESCE(ucd.is_active_tech, TRUE) AS is_active_tech
+        FROM users u
+        LEFT JOIN user_company_dispatch ucd ON ucd.user_id = u.id AND ucd.company_key = %s
         WHERE {where}
-        ORDER BY dispatch_sort_order NULLS LAST, full_name
-    """, (company_key,))
+        ORDER BY u.dispatch_sort_order NULLS LAST, u.full_name
+    """, (company_key, company_key))
     techs = [dict(r) for r in cur.fetchall()]
     cur.close(); conn.close()
     return techs
@@ -7662,22 +7672,62 @@ def write_to_all_dbs(sql, params):
     return errors
 
 
-def get_all_users():
-    """Fetch all users from the canonical (getagrip) database."""
+def get_all_users(company_key=None):
+    """Fetch users from the canonical (getagrip) database. `company_key`
+    scopes the list to users who actually have that company in their
+    company_access -- the User Management page is per-company now (Chris,
+    2026-09-22): an employee shouldn't clutter every other company's list
+    just because they're a manager somewhere else entirely."""
     conn = get_db_connection('getagrip')
     cur  = conn.cursor()
-    cur.execute("""
+    where = "company_access ? %s" if company_key else "TRUE"
+    cur.execute(f"""
         SELECT id, username, email, full_name, role,
                company_access, is_active, last_login, created_at,
-               color_hex, is_field_tech, can_be_dispatched, is_active_tech,
+               color_hex, is_field_tech,
                phone_mobile, default_start_time, dispatch_sort_order
         FROM users
+        WHERE {where}
         ORDER BY full_name ASC
-    """)
+    """, (company_key,) if company_key else ())
     users = cur.fetchall()
     cur.close()
     conn.close()
     return users
+
+
+def get_user_dispatch_settings(user_id):
+    """{company_key: {'can_be_dispatched':, 'is_active_tech':}} for one user
+    -- powers the per-company checkboxes on the edit form (migration 028)."""
+    conn = get_db_connection('getagrip')
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT company_key, can_be_dispatched, is_active_tech
+        FROM user_company_dispatch WHERE user_id = %s
+    """, (user_id,))
+    settings = {r['company_key']: {'can_be_dispatched': r['can_be_dispatched'],
+                                    'is_active_tech': r['is_active_tech']} for r in cur.fetchall()}
+    cur.close(); conn.close()
+    return settings
+
+
+def _save_user_dispatch_settings(cur, user_id, company_access, form, username):
+    """Upserts one user_company_dispatch row per company the user has access
+    to (from the submitted checkboxes `can_be_dispatched_<company>`/
+    `is_active_tech_<company>`), and drops rows for companies no longer in
+    company_access -- getagrip-only, same as the users table itself."""
+    cur.execute("DELETE FROM user_company_dispatch WHERE user_id = %s AND company_key != ALL(%s)",
+                (user_id, company_access))
+    for co in company_access:
+        can_dispatch = form.get(f'can_be_dispatched_{co}') == 'on'
+        active_tech = form.get(f'is_active_tech_{co}', 'on') == 'on'
+        cur.execute("""
+            INSERT INTO user_company_dispatch (user_id, company_key, can_be_dispatched, is_active_tech, created_by)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (user_id, company_key) DO UPDATE
+            SET can_be_dispatched = EXCLUDED.can_be_dispatched, is_active_tech = EXCLUDED.is_active_tech,
+                updated_at = CURRENT_TIMESTAMP, updated_by = EXCLUDED.created_by
+        """, (user_id, co, can_dispatch, active_tech, username))
 
 
 def get_user_by_id(user_id):
@@ -7687,7 +7737,7 @@ def get_user_by_id(user_id):
     cur.execute("""
         SELECT id, username, email, full_name, role,
                company_access, is_active, last_login, created_at,
-               color_hex, is_field_tech, can_be_dispatched, is_active_tech,
+               color_hex, is_field_tech,
                phone_mobile, default_start_time, dispatch_sort_order
         FROM users
         WHERE id = %s
@@ -7706,7 +7756,7 @@ def user_list(company_key, branding, all_companies, company_access):
     if session.get('user_role') != 'admin':
         abort(403)
 
-    users = get_all_users()
+    users = get_all_users(company_key=company_key)
 
     return render_template('user_list.html',
         branding=branding, company_key=company_key,
@@ -7736,7 +7786,6 @@ def user_new(company_key, branding, all_companies, company_access):
         confirm_pw   = request.form.get('confirm_password', '')
         co_access    = request.form.getlist('company_access')  # multi-select checkboxes
         is_field_tech     = request.form.get('is_field_tech') == 'on'
-        can_be_dispatched = request.form.get('can_be_dispatched') == 'on'
         phone_mobile      = request.form.get('phone_mobile', '').strip() or None
         default_start_time = request.form.get('default_start_time', '').strip() or '08:00'
         dispatch_sort_order = _opt_num(request.form.get('dispatch_sort_order'))
@@ -7744,8 +7793,8 @@ def user_new(company_key, branding, all_companies, company_access):
         # Validation
         if not username or not full_name or not password or not email:
             error = 'Username, full name, email, and password are required.'
-        elif len(username) < 3:
-            error = 'Username must be at least 3 characters.'
+        elif len(username) < 3 or not re.match(r'^[a-z0-9._-]+$', username):
+            error = 'Username must be at least 3 characters (lowercase letters, numbers, dots, dashes, underscores only).'
         elif password != confirm_pw:
             error = 'Passwords do not match.'
         elif len(password) < 8:
@@ -7778,13 +7827,13 @@ def user_new(company_key, branding, all_companies, company_access):
             errs = write_to_all_dbs("""
                 INSERT INTO users (username, email, full_name, role, password_hash,
                                    company_access, is_active,
-                                   is_field_tech, can_be_dispatched, phone_mobile,
+                                   is_field_tech, phone_mobile,
                                    default_start_time, dispatch_sort_order)
-                VALUES (%s, %s, %s, %s, %s, %s, TRUE, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, TRUE, %s, %s, %s, %s)
                 ON CONFLICT (username) DO NOTHING
             """, (username, email, full_name, role, pw_hash,
                   json.dumps(co_access),
-                  is_field_tech, can_be_dispatched, phone_mobile,
+                  is_field_tech, phone_mobile,
                   default_start_time, dispatch_sort_order))
 
             # Color is assigned from the new user's canonical (getagrip) id, once
@@ -7804,11 +7853,13 @@ def user_new(company_key, branding, all_companies, company_access):
                 # failure here used to silently redirect to "success").
                 error = 'User was not created: ' + '; '.join(errs or ['unknown database error'])
             else:
-                # record_audit is written to getagrip only -- the canonical DB
-                # per D-003 (auth/session['company_access'] only ever reads
-                # getagrip's users table; the other 3 DBs' copies are inert).
+                # record_audit + per-company dispatch settings are written to
+                # getagrip only -- the canonical DB per D-003 (auth/
+                # session['company_access'] only ever reads getagrip's users
+                # table; the other 3 DBs' copies are inert).
                 conn = get_db_connection('getagrip')
                 cur  = conn.cursor()
+                _save_user_dispatch_settings(cur, row['id'], co_access, request.form, session.get('username'))
                 cur.execute("SELECT * FROM users WHERE id = %s", (row['id'],))
                 _record_audit(cur, 'users', row['id'], 'create', after=cur.fetchone(), changed_by=session.get('username'))
                 conn.commit(); cur.close(); conn.close()
@@ -7819,7 +7870,7 @@ def user_new(company_key, branding, all_companies, company_access):
     return render_template('user_form.html',
         branding=branding, company_key=company_key,
         company_access=company_access, all_companies=all_companies,
-        user=None, error=error,
+        user=None, error=error, dispatch_settings={},
         all_company_keys=ALL_COMPANY_KEYS,
         company_branding=COMPANY_BRANDING,
         valid_roles=VALID_ROLES,
@@ -7841,16 +7892,20 @@ def user_edit(company_key, user_id, branding, all_companies, company_access):
     error = None
 
     if request.method == 'POST':
+        # A disabled <input> (self-editing your own account, see the template)
+        # never gets submitted at all -- treat a missing value as "unchanged",
+        # not a validation error.
+        new_username = (request.form.get('username') or '').strip().lower() or user['username']
         full_name  = request.form.get('full_name', '').strip()
         email      = request.form.get('email', '').strip().lower()
         role       = request.form.get('role', 'tech')
         co_access  = request.form.getlist('company_access')
         is_field_tech      = request.form.get('is_field_tech') == 'on'
-        can_be_dispatched  = request.form.get('can_be_dispatched') == 'on'
-        is_active_tech     = request.form.get('is_active_tech') == 'on'
         phone_mobile       = request.form.get('phone_mobile', '').strip() or None
         default_start_time = request.form.get('default_start_time', '').strip() or '08:00'
         dispatch_sort_order = _opt_num(request.form.get('dispatch_sort_order'))
+
+        renaming = new_username and new_username != user['username']
 
         if not full_name:
             error = 'Full name is required.'
@@ -7858,25 +7913,65 @@ def user_edit(company_key, user_id, branding, all_companies, company_access):
             error = 'Invalid role selected.'
         elif not co_access:
             error = 'At least one company must be selected.'
+        elif not new_username or len(new_username) < 3 or not re.match(r'^[a-z0-9._-]+$', new_username):
+            error = 'Username must be at least 3 characters (lowercase letters, numbers, dots, dashes, underscores only).'
+        elif renaming and user['username'] == session.get('username'):
+            error = ("You can't rename your own account while logged in as it — "
+                      "have another admin do it, or log out and back in first.")
+        elif renaming:
+            conn = get_db_connection('getagrip')
+            cur  = conn.cursor()
+            cur.execute("SELECT id FROM users WHERE username = %s AND id != %s", (new_username, user_id))
+            taken = cur.fetchone()
+            cur.close(); conn.close()
+            if taken:
+                error = f'Username "{new_username}" is already taken.'
 
         if not error:
             errs = write_to_all_dbs("""
                 UPDATE users
-                SET full_name = %s, email = %s, role = %s,
+                SET username = %s, full_name = %s, email = %s, role = %s,
                     company_access = %s, updated_at = CURRENT_TIMESTAMP,
-                    is_field_tech = %s, can_be_dispatched = %s, is_active_tech = %s,
+                    is_field_tech = %s,
                     phone_mobile = %s, default_start_time = %s, dispatch_sort_order = %s
                 WHERE username = %s
-            """, (full_name, email if email else user['email'], role, json.dumps(co_access),
-                  is_field_tech, can_be_dispatched, is_active_tech,
+            """, (new_username, full_name, email if email else user['email'], role, json.dumps(co_access),
+                  is_field_tech,
                   phone_mobile, default_start_time, dispatch_sort_order,
                   user['username']))
 
-            # record_audit written to getagrip only (canonical DB, D-003).
-            # password_hash is never diffed -- a secret has no business in an
-            # audit trail even hashed.
+            if renaming and not errs:
+                # Rename cascade (Chris, 2026-09-22): only CURRENT-state
+                # references follow the rename -- a tech's live work-order
+                # assignments and "responsible tech" fields, so they don't
+                # silently fall off their own active jobs. Historical/audit
+                # attribution (customer_notes.created_by, status-history
+                # changed_by, record_audit itself, etc.) deliberately does
+                # NOT get rewritten -- same principle as a git log not
+                # rewriting old commit authors after a rename; those rows
+                # keep showing whoever it actually was at the time. Run
+                # against all 4 company DBs unconditionally -- a harmless
+                # no-op wherever the old username never appeared.
+                for co_key in ALL_COMPANY_KEYS:
+                    try:
+                        wconn = get_db_connection(co_key)
+                        wcur = wconn.cursor()
+                        wcur.execute("UPDATE work_order_techs SET username = %s WHERE username = %s",
+                                     (new_username, user['username']))
+                        wcur.execute("UPDATE work_orders SET followup_tech_username = %s WHERE followup_tech_username = %s",
+                                     (new_username, user['username']))
+                        wcur.execute("UPDATE work_orders SET callback_responsible_username = %s WHERE callback_responsible_username = %s",
+                                     (new_username, user['username']))
+                        wconn.commit(); wcur.close(); wconn.close()
+                    except Exception as e:
+                        errs.append(f"{co_key} (rename cascade): {e}")
+
+            # record_audit + per-company dispatch settings are written to
+            # getagrip only (canonical DB, D-003). password_hash is never
+            # diffed -- a secret has no business in an audit trail even hashed.
             conn = get_db_connection('getagrip')
             cur  = conn.cursor()
+            _save_user_dispatch_settings(cur, user_id, co_access, request.form, session.get('username'))
             cur.execute("SELECT * FROM users WHERE id = %s", (user_id,))
             after_user = dict(cur.fetchone())
             after_user.pop('password_hash', None)
@@ -7889,10 +7984,11 @@ def user_edit(company_key, user_id, branding, all_companies, company_access):
             else:
                 return redirect(f'/{company_key}/settings/users')
 
+    dispatch_settings = get_user_dispatch_settings(user_id)
     return render_template('user_form.html',
         branding=branding, company_key=company_key,
         company_access=company_access, all_companies=all_companies,
-        user=user, error=error,
+        user=user, error=error, dispatch_settings=dispatch_settings,
         all_company_keys=ALL_COMPANY_KEYS,
         company_branding=COMPANY_BRANDING,
         valid_roles=VALID_ROLES,

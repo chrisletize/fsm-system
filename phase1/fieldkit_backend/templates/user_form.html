@@ -123,6 +123,42 @@
         color: #888;
         font-weight: 400;
     }
+    .company-access-row {
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        overflow: hidden;
+    }
+    .company-access-row .company-checkbox-item {
+        border: none;
+        border-radius: 0;
+    }
+    .company-dispatch-subrow {
+        display: flex;
+        gap: 1.1rem;
+        padding: 0.5rem 1rem 0.65rem 2.6rem;
+        border-top: 1px solid #eee;
+        background: #fafafa;
+        transition: opacity 0.15s;
+    }
+    .company-dispatch-subrow.disabled-sub {
+        opacity: 0.4;
+        pointer-events: none;
+    }
+    .company-dispatch-subrow .inline-check {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        font-size: 0.85rem;
+        color: #555;
+        cursor: pointer;
+        margin: 0;
+        font-weight: 400;
+    }
+    .company-dispatch-subrow .inline-check input {
+        width: 14px;
+        height: 14px;
+        cursor: pointer;
+    }
     /* Password reset section */
     .reset-section {
         background: #fff8e1;
@@ -205,7 +241,7 @@
 <!-- ================================================================
      Main user form (create / edit core fields)
 ================================================================ -->
-<form method="POST" action="">
+<form method="POST" action="" id="userForm">
     <div class="card">
         <div class="form-section">
             <h3>Account Information</h3>
@@ -226,13 +262,18 @@
                     <label for="username">Username <span class="required">*</span></label>
                     <input type="text" id="username" name="username"
                            value="{{ user.username if user else '' }}"
-                           placeholder="e.g. michele"
-                           {% if user %}disabled{% endif %}
-                           {% if not user %}required{% endif %}>
-                    {% if user %}
-                    <span class="field-hint">Username cannot be changed after creation.</span>
+                           placeholder="e.g. michele" required
+                           {% if user and user.username == session.username %}disabled{% endif %}
+                           {% if user %}data-original-username="{{ user.username }}"{% endif %}>
+                    {% if user and user.username == session.username %}
+                    <span class="field-hint">You can't rename your own account while logged in as it — have another admin do it.</span>
+                    {% elif user %}
+                    <span class="field-hint">
+                        Changing this changes their login. Their current work-order assignments move
+                        with the rename; past notes/history keep showing the name used at the time.
+                    </span>
                     {% else %}
-                    <span class="field-hint">Lowercase letters and numbers only. Cannot be changed later.</span>
+                    <span class="field-hint">Lowercase letters, numbers, dots, dashes, underscores only.</span>
                     {% endif %}
                 </div>
                 <div class="form-group">
@@ -260,18 +301,40 @@
                 {% for co_key in all_company_keys %}
                 {% set co = company_branding.get(co_key) %}
                 {% set has_access = (user and co_key in user.company_access) or (not user) %}
-                <label class="company-checkbox-item">
-                    <input type="checkbox" name="company_access" value="{{ co_key }}"
-                           {% if has_access %}checked{% endif %}>
-                    <div>
-                        <div>{{ co.name if co else co_key }}</div>
-                        <div class="co-short">{{ co.short_name if co else co_key }}</div>
+                {% set ds = dispatch_settings.get(co_key, {}) %}
+                <div class="company-access-row">
+                    <label class="company-checkbox-item">
+                        <input type="checkbox" name="company_access" value="{{ co_key }}"
+                               class="company-access-cb" data-for="{{ co_key }}"
+                               {% if has_access %}checked{% endif %}>
+                        <div>
+                            <div>{{ co.name if co else co_key }}</div>
+                            <div class="co-short">{{ co.short_name if co else co_key }}</div>
+                        </div>
+                    </label>
+                    <div class="company-dispatch-subrow" data-sub-for="{{ co_key }}">
+                        <label class="inline-check">
+                            <input type="checkbox" name="can_be_dispatched_{{ co_key }}"
+                                   {% if ds.get('can_be_dispatched') %}checked{% endif %}>
+                            Dispatchable here
+                        </label>
+                        {% if user %}
+                        <label class="inline-check">
+                            <input type="checkbox" name="is_active_tech_{{ co_key }}"
+                                   {% if ds.get('is_active_tech', True) %}checked{% endif %}>
+                            Active here
+                        </label>
+                        {% endif %}
                     </div>
-                </label>
+                </div>
                 {% endfor %}
             </div>
             <span class="field-hint" style="margin-top:0.5rem;display:block;">
-                Select all companies this user should be able to access.
+                Select every company this user should be able to access. "Dispatchable here" is separate
+                per company — someone with access to two companies but only working dispatch for one no
+                longer has to appear on both boards.
+                {% if user %}"Active here" — uncheck when a tech leaves that company's crew specifically;
+                keeps their history, drops them off that company's board only.{% endif %}
             </span>
         </div>
 
@@ -286,24 +349,6 @@
                     </label>
                     <span class="field-hint">Does field work (vs. office-only).</span>
                 </div>
-                <div class="form-group">
-                    <label style="flex-direction:row;align-items:center;gap:.5rem;">
-                        <input type="checkbox" name="can_be_dispatched" style="width:16px;height:16px;"
-                               {% if user and user.can_be_dispatched %}checked{% endif %}>
-                        Can be dispatched
-                    </label>
-                    <span class="field-hint">Shows as a row on the dispatch board.</span>
-                </div>
-                {% if user %}
-                <div class="form-group">
-                    <label style="flex-direction:row;align-items:center;gap:.5rem;">
-                        <input type="checkbox" name="is_active_tech" style="width:16px;height:16px;"
-                               {% if user.is_active_tech %}checked{% endif %}>
-                        Active tech
-                    </label>
-                    <span class="field-hint">Uncheck when a tech leaves — keeps history, drops off the board.</span>
-                </div>
-                {% endif %}
                 <div class="form-group">
                     <label for="phone_mobile">Mobile Phone</label>
                     <input type="text" id="phone_mobile" name="phone_mobile"
@@ -417,4 +462,35 @@
 </div>
 {% endif %}
 
+<script>
+(function () {
+    // Grey out (but don't hide -- still submitted, harmless) a company's
+    // dispatch sub-row when that company's access box is unchecked.
+    document.querySelectorAll('.company-access-cb').forEach(function (cb) {
+        const sub = document.querySelector('.company-dispatch-subrow[data-sub-for="' + cb.dataset.for + '"]');
+        if (!sub) return;
+        function sync() { sub.classList.toggle('disabled-sub', !cb.checked); }
+        cb.addEventListener('change', sync);
+        sync();
+    });
+})();
+(function () {
+    const form = document.getElementById('userForm');
+    const usernameInput = document.getElementById('username');
+    if (!form || !usernameInput || usernameInput.disabled) return;
+    const original = usernameInput.dataset.originalUsername;
+    if (!original) return;  // new-user form, nothing to warn about
+    form.addEventListener('submit', function (e) {
+        const next = usernameInput.value.trim().toLowerCase();
+        if (next && next !== original) {
+            const ok = confirm(
+                'Change the login username from "' + original + '" to "' + next + '"?\n\n' +
+                'This changes what they type to log in. Their current work-order assignments ' +
+                'move with the rename; past notes and history keep showing "' + original + '".'
+            );
+            if (!ok) { e.preventDefault(); }
+        }
+    });
+})();
+</script>
 {% endblock %}

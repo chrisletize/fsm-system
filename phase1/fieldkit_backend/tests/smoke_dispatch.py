@@ -48,20 +48,25 @@ def main():
             'email': 'smoketech1@smoketest.invalid', 'role': 'technician',
             'password': 'testpass123', 'confirm_password': 'testpass123',
             'company_access': ['getagrip'],
-            'is_field_tech': 'on', 'can_be_dispatched': 'on',
+            'is_field_tech': 'on', 'can_be_dispatched_getagrip': 'on',
             'phone_mobile': '7045550100', 'default_start_time': '08:00',
             'dispatch_sort_order': '1',
         }, follow_redirects=False)
         check(f"tech created ({r.status_code})", r.status_code == 302)
         usernames.append(tech_username)
 
-        cur.execute("SELECT id, color_hex, is_field_tech, can_be_dispatched, is_active_tech FROM users WHERE username = %s", (tech_username,))
+        cur.execute("SELECT id, color_hex, is_field_tech FROM users WHERE username = %s", (tech_username,))
         u = cur.fetchone()
         expected_color = DISPATCH_COLOR_PALETTE[u['id'] % len(DISPATCH_COLOR_PALETTE)]
         check(f"color assigned by id %% 12 ({u['color_hex']} == {expected_color})", u['color_hex'] == expected_color)
         check("is_field_tech saved", u['is_field_tech'] is True)
-        check("can_be_dispatched saved", u['can_be_dispatched'] is True)
-        check("is_active_tech defaults true", u['is_active_tech'] is True)
+        cur.execute("""
+            SELECT can_be_dispatched, is_active_tech FROM user_company_dispatch
+            WHERE user_id = %s AND company_key = 'getagrip'
+        """, (u['id'],))
+        ucd = cur.fetchone()
+        check("can_be_dispatched saved (per-company, migration 028)", ucd is not None and ucd['can_be_dispatched'] is True)
+        check("is_active_tech defaults true", ucd['is_active_tech'] is True)
 
         print("smoke_dispatch: edit the tech, verify tech fields round-trip")
         cur.execute("SELECT id FROM users WHERE username = %s", (tech_username,))
@@ -69,7 +74,7 @@ def main():
         r = client.post(f'/getagrip/settings/users/{tech_id}/edit', data={
             'full_name': 'Smoke Tech One', 'email': 'smoketech1@smoketest.invalid',
             'role': 'technician', 'company_access': ['getagrip'],
-            'is_field_tech': 'on', 'can_be_dispatched': 'on', 'is_active_tech': 'on',
+            'is_field_tech': 'on', 'can_be_dispatched_getagrip': 'on', 'is_active_tech_getagrip': 'on',
             'phone_mobile': '7045550199', 'default_start_time': '07:30',
             'dispatch_sort_order': '1',
         }, follow_redirects=False)
@@ -221,6 +226,7 @@ def main():
             for uname in usernames:
                 c2 = get_db_connection(key)
                 cu2 = c2.cursor()
+                cu2.execute("DELETE FROM user_company_dispatch WHERE user_id = (SELECT id FROM users WHERE username = %s)", (uname,))
                 cu2.execute("DELETE FROM users WHERE username = %s", (uname,))
                 c2.commit()
                 cu2.close(); c2.close()

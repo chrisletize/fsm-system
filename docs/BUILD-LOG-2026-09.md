@@ -1390,3 +1390,39 @@ Full 25-file regression suite re-run clean.
 
 **Deferred:** the same import for Kleanit Charlotte, CTS, and Kleanit South
 Florida once Chris supplies their exports.
+
+## Post-Stage-4 fix — User Management scoping, per-company dispatch, username rename
+
+- Chris flagged three usability problems with User Management after using
+  the built site (not a directive increment). See D-094 for the full
+  design and every decision.
+- User list (`/settings/users`) now scoped to users who actually have the
+  current company in their `company_access`, instead of showing everyone
+  system-wide on every company's page.
+- `can_be_dispatched`/`is_active_tech` moved off `users` onto a new
+  per-(user, company) table, `user_company_dispatch` (migration 028) — a
+  tech with access to multiple companies is no longer forced onto every
+  one of their companies' dispatch boards, only the ones explicitly turned
+  on. Backfilled from the existing global flags so today's actual
+  dispatch-board behavior didn't change the moment the migration ran.
+- Username is now editable on the user edit form (was a disabled field
+  with a hardcoded "cannot be changed" message — never a real DB
+  constraint). Renaming re-points a tech's *current* work-order
+  assignments so they don't silently fall off their own active jobs;
+  historical/audit records keep showing whoever it was at the time.
+  Confirmed uniqueness check, a same-name-format validation edit never
+  had, and a self-rename block (can't rename the account you're logged in
+  as).
+- Fixed four pre-existing smoke tests broken by the schema change
+  (`smoke_dispatch.py`, `smoke_callbacks.py`, `smoke_reports.py`,
+  `smoke_audit_trail.py`) — form field names and cleanup order both needed
+  updating.
+
+**Migration:** 028 (`028_per_company_dispatch.sql`), applied to all four
+DBs, verified idempotent. Pre-migration backups in
+`~/db-backups/2026-09-22-pre-dispatch-migration/`.
+
+**Smoke test:** `tests/smoke_user_management.py` — 20/20 checks (see
+D-094). Full 26-file regression suite green.
+
+**Deferred:** nothing from this fix's own scope.

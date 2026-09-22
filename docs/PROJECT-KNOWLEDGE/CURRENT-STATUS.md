@@ -18,7 +18,7 @@ reporting until FieldKit's billing is complete.
 |---|---|
 | Auth, RBAC, company-in-URL multi-tab, branding | Built |
 | Customers: list/search/detail/new/edit, contacts (billing flags), service locations, custom fields, notes | Built |
-| Users: list/new/edit/reset-password/toggle-active/email reset via Resend | Built |
+| Users: list (per-company scoped)/new/edit (incl. username rename)/reset-password/toggle-active/email reset via Resend | Built. Dispatchable/active-tech are per-company (migration 028, `user_company_dispatch`), not global. See D-094. |
 | Catalog CRUD, equipment registry CRUD | Built |
 | Work orders: list/search/new/edit/detail/delete, two-row-type line items, per-day equipment accrual, `work_site_label`, auto-description, double-booking banner, status history, tech assignment (username-keyed), tech/date list filters, live catalog-duration estimate | Built |
 | Dispatch board | Built (2.1, migration 017, `/dispatch`): drag-to-move, resize, click-to-popover, day/week views, collision detection, tech profiles (color/dispatchable/sort order) on the user form. |
@@ -194,6 +194,19 @@ and the `smoke_dashboard.py` test fix real production data exposed.
 Florida once Chris supplies their exports; company settings fields (legal
 names, remit-to text, reply-to/alert emails) and non-admin user password
 resets still need Chris's input before they can be entered.
+
+**Post-Stage-4 fix (2026-09-22)** — User Management usability, flagged by
+Chris after using the built site, not a directive increment: `/settings/users`
+is now scoped per company (a user only appears on a company's page if they
+actually have access to it); `can_be_dispatched`/`is_active_tech` moved off
+`users` onto a new per-(user, company) table, `user_company_dispatch`
+(migration 028) — a tech with multi-company access is no longer forced onto
+every one of their companies' dispatch boards; and usernames are now editable
+(was a disabled field, never a real DB constraint) with a rename cascade that
+keeps a tech's current work-order assignments intact while leaving historical/
+audit records showing whoever it was at the time, plus a self-rename block.
+See D-094. 20/20 smoke checks (`tests/smoke_user_management.py`), full
+26-file regression suite green.
 
 Next: the same cutover import for the other three companies, then Stage 5's
 remaining items (drift check, `DEPLOYMENT/RUNBOOK.md`, final doc pass) once

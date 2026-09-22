@@ -1502,6 +1502,99 @@ Florida, once Chris supplies their exports the same way.
 
 ---
 
+D-094 — Post-Stage-4 fix (Chris, 2026-09-22): User Management page scoping,
+per-company dispatchable, username rename. Not a directive increment — a
+usability problem Chris flagged after using the built site.
+
+- **User list scoped per company** (`get_all_users(company_key=)`,
+  `WHERE company_access ? %s`): `/settings/users` on Company A's URL now
+  only lists users who actually have Company A in their `company_access`,
+  instead of every user in the system regardless of which company's page
+  you're on.
+- **`can_be_dispatched`/`is_active_tech` moved from single global columns
+  on `users` to a new per-(user, company) table**, `user_company_dispatch`
+  (migration 028). Root cause: a tech with access to two companies got the
+  exact same dispatchable flag on both boards, with no way to say
+  "dispatchable for Kleanit Charlotte, not for CTS" even though the account
+  legitimately needs to reach both. `is_field_tech`/`color_hex`/
+  `dispatch_sort_order`/`phone_mobile`/`default_start_time` stay global
+  columns — those are identity/personal properties that don't vary by which
+  company's board is showing them, unlike per-company dispatchability.
+  `_company_techs()` (the one shared source both the WO form's tech
+  checklist and the dispatch board already read from, per its own docstring)
+  now LEFT JOINs the new table by `company_key`, `COALESCE`d to
+  `FALSE`/`TRUE` respectively when no row exists — no row means "not
+  dispatchable there," same as the old column's default. Lives in all four
+  DBs per the blanket migration rule but, matching `users` itself, only the
+  canonical getagrip copy is ever read (D-003 — the other three DBs' `users`
+  tables are still out of sync, so per-company writes stay getagrip-only
+  too, via a new `_save_user_dispatch_settings()` helper). **Backfilled**
+  from the existing global flags before dropping the columns, one row per
+  company already in that user's `company_access` — preserves today's exact
+  dispatch-board behavior at migration time (verified live: `chris` — all 4
+  companies, was globally dispatchable — got 4 backfilled rows;
+  `braulio o` — getagrip only — got 1); Chris can narrow it down from there.
+- **Username is editable** (`user_form.html`'s field is no longer
+  `disabled`, with a confirm() on submit and a re-typed warning). The old
+  rigidity wasn't a deliberate rule or DB constraint — just a disabled form
+  field with a hardcoded "cannot be changed" message, dating back to
+  whenever the form was first built. The real reason changing it is risky:
+  usernames are referenced as plain-text strings (not foreign keys) in
+  several tables — `work_order_techs.username`, `work_orders.
+  followup_tech_username`/`callback_responsible_username` — so a naive
+  rename would silently drop a tech off their own current job assignments.
+  **Scope confirmed with Chris**: on rename, only CURRENT-state references
+  (the three columns above) get updated, run unconditionally against all
+  four company DBs (harmless no-op wherever the old username never
+  appeared) — HISTORICAL/audit attribution (`customer_notes.created_by`,
+  every `*_status_history.changed_by`, `record_audit.changed_by` itself,
+  etc.) is deliberately left untouched, same principle as a git log not
+  rewriting old commit authors after a rename. Also added: uniqueness
+  validation on the new name (excluding self), a same-character-set pattern
+  check matching what create already enforced (was previously only
+  enforced at create, never revisited for edit), and a **self-rename
+  block** — an admin can't rename the account they're currently logged in
+  as (the input is server-side-rejected and client-side `disabled` with an
+  explanatory hint, mirroring the existing `user_toggle_active` self-
+  deactivation guard) since their live session's username would otherwise
+  go stale mid-session.
+- **Caught during the regression pass**: four existing smoke tests
+  (`smoke_dispatch.py`, `smoke_callbacks.py`, `smoke_reports.py`,
+  `smoke_audit_trail.py`) create throwaway technician users through the
+  real `/settings/users/new` form and hard-delete them in cleanup — all
+  broke on the dropped columns and/or the new `user_company_dispatch`
+  foreign key blocking the delete. Fixed each: form field names updated to
+  the per-company shape (`can_be_dispatched_getagrip` instead of the old
+  flat `can_be_dispatched`), and cleanup now deletes the
+  `user_company_dispatch` row before the `users` row, in every company DB
+  the loop already touches.
+- No email/notification change — this is an internal-tooling fix, not a
+  workflow that alerts anyone.
+
+**Migration:** 028 (`028_per_company_dispatch.sql`) — `user_company_dispatch`
+(new table) + drops `users.can_be_dispatched`/`users.is_active_tech`,
+applied to all four DBs, verified idempotent (the backfill `DO` block
+guards on the column still existing via `information_schema`, since a
+naive re-run after the `DROP COLUMN` would otherwise try to `SELECT` a
+column that's gone). Pre-migration backups in
+`~/db-backups/2026-09-22-pre-dispatch-migration/`.
+
+**Smoke test:** `tests/smoke_user_management.py` — 20/20 new checks: user
+list scoping (a KC-only-access user is invisible on getagrip's list,
+visible on Kleanit Charlotte's); dispatchable set for getagrip only shows
+that tech on getagrip's dispatchable list, not Kleanit Charlotte's, then
+verified it *can* be turned on for the second company independently, and
+that removing company access cleans up the now-orphaned per-company
+dispatch row; a live WO's tech assignment followed a rename while
+`record_audit`'s own diff captured the change; rename-to-an-existing-name
+rejected; self-rename rejected. Plus the four pre-existing tests fixed
+above, verified individually and as part of the full 26-file regression
+suite (green).
+
+**Deferred:** nothing from this fix's own scope.
+
+---
+
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:
 #33 (OPS/VendorCafe export templates), #50 (SMS alerts via Twilio), and Stage 5.6
 (ServiceFusion price-list exports, company legal names/remit-to/reply-to/alert emails).

@@ -327,6 +327,7 @@ def main():
                 urow = cu2.fetchone()
                 if urow:
                     cu2.execute("DELETE FROM record_audit WHERE table_name='users' AND record_id=%s", (urow['id'],))
+                    cu2.execute("DELETE FROM user_company_dispatch WHERE user_id=%s", (urow['id'],))
                 cu2.execute("DELETE FROM users WHERE username = %s", (uname,))
                 c2.commit(); cu2.close(); c2.close()
 
