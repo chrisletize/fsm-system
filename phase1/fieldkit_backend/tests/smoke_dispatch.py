@@ -141,6 +141,9 @@ def main():
         wo_ids.append(wo_id2)
 
         print("smoke_dispatch: dispatch/data endpoint")
+        cur.execute("UPDATE work_orders SET auto_description = %s WHERE id = %s",
+                    ('Unit 308 OCC AM\nGuest Bathroom Regular Clean', wo_id))
+        conn.commit()
         r = client.get(f'/getagrip/dispatch/data?date={TEST_DATE}')
         check(f"dispatch data responds 200 ({r.status_code})", r.status_code == 200)
         data = r.get_json()
@@ -148,6 +151,9 @@ def main():
               any(t['username'] == tech_username for t in data['techs']))
         blocks_by_wo = {b['id']: b for b in data['blocks']}
         check("both WOs appear as blocks", wo_id in blocks_by_wo and wo_id2 in blocks_by_wo)
+        check("first block carries auto_description for the dispatch popover (Chris, 2026-09-23)",
+              blocks_by_wo[wo_id]['auto_description'] == 'Unit 308 OCC AM\nGuest Bathroom Regular Clean')
+        check("second block's auto_description is null (never set)", blocks_by_wo[wo_id2]['auto_description'] is None)
         check(f"first block duration = 4.0h ({blocks_by_wo[wo_id]['duration_hours']})",
               close(blocks_by_wo[wo_id]['duration_hours'], 4.0))
         check("first block collides with second (9:00-13:00 overlaps 10:00-...)",

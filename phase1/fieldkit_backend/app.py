@@ -4069,7 +4069,7 @@ def _dispatch_board_data(company_key, target_date):
     cur.execute("""
         SELECT wo.id, wo.work_order_number, wo.status, wo.priority,
                wo.scheduled_start, wo.estimated_duration_hours,
-               wo.is_extraction, wo.equipment_incomplete,
+               wo.is_extraction, wo.equipment_incomplete, wo.auto_description,
                c.property_name AS customer_name,
                (wo.customer_id IS NOT NULL AND NOT EXISTS (
                    SELECT 1 FROM work_orders wo2
@@ -4108,6 +4108,7 @@ def _dispatch_board_data(company_key, target_date):
         block = {
             'id': w['id'], 'work_order_number': w['work_order_number'],
             'customer_name': w['customer_name'], 'status': w['status'],
+            'auto_description': w['auto_description'],
             'priority': w['priority'], 'has_equipment': w['is_extraction'],
             'equipment_incomplete': w['equipment_incomplete'], 'is_new_customer': w['is_new_customer'],
             'is_delinquent': w['is_delinquent'], 'adjusted_letter_grade': w['adjusted_letter_grade'],

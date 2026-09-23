@@ -59,6 +59,8 @@
                padding:1rem; width:260px; z-index:50; display:none; }
     #popover h4 { font-size:.95rem; margin-bottom:.4rem; }
     #popover .row { font-size:.8rem; color:#666; margin-bottom:.25rem; }
+    #popover .row.wo-description { white-space:pre-line; max-height:5.4em; overflow-y:auto; color:#444;
+                                     background:#f7f7f7; border-radius:4px; padding:.35rem .5rem; }
     #popover .actions { margin-top:.75rem; display:flex; gap:.4rem; flex-wrap:wrap; }
     #popover .actions a, #popover .actions button { font-size:.76rem; padding:.3rem .6rem; border-radius:4px; border:1px solid #ddd; background:#f7f7f7; cursor:pointer; text-decoration:none; color:#333; }
 
@@ -173,6 +175,11 @@ function showSlotMenu(e, username, timeStr) {
     menu.style.display = 'block';
 }
 
+function escHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g,
+        c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
 function showPopover(block, anchorEl) {
     const pop = document.getElementById('popover');
     const badges = [];
@@ -184,12 +191,13 @@ function showPopover(block, anchorEl) {
     if (block.adjusted_letter_grade) badges.push('Rating: ' + block.adjusted_letter_grade);
     if (block.is_callback) badges.push('↩️ Callback');
     pop.innerHTML = `
-        <h4>${block.work_order_number}</h4>
-        <div class="row">${block.customer_name || 'Internal Task'}</div>
-        <div class="row">Status: ${block.status}</div>
-        ${badges.length ? `<div class="row">${badges.join(' · ')}</div>` : ''}
-        ${block.techs && block.techs.length ? `<div class="row">Techs: ${block.techs.join(', ')}</div>` : '<div class="row">Unassigned</div>'}
-        ${block.collides_with ? `<div class="row" style="color:#c0392b;">Overlaps with ${block.collides_with}</div>` : ''}
+        <h4>${escHtml(block.work_order_number)}</h4>
+        <div class="row">${escHtml(block.customer_name) || 'Internal Task'}</div>
+        <div class="row">Status: ${escHtml(block.status)}</div>
+        ${badges.length ? `<div class="row">${badges.map(escHtml).join(' · ')}</div>` : ''}
+        ${block.auto_description ? `<div class="row wo-description">${escHtml(block.auto_description)}</div>` : ''}
+        ${block.techs && block.techs.length ? `<div class="row">Techs: ${escHtml(block.techs.join(', '))}</div>` : '<div class="row">Unassigned</div>'}
+        ${block.collides_with ? `<div class="row" style="color:#c0392b;">Overlaps with ${escHtml(block.collides_with)}</div>` : ''}
         <div class="actions">
             <a href="/${companyKey}/workorders/${block.id}">View</a>
             <a href="/${companyKey}/workorders/${block.id}/edit">Edit</a>
@@ -289,6 +297,10 @@ function renderDay(data) {
             div.addEventListener('click', e => {
                 if (div._justDragged) { div._justDragged = false; return; }
                 e.stopPropagation(); showPopover(b, div);
+            });
+            div.addEventListener('dblclick', e => {
+                e.stopPropagation();
+                window.location.href = `/${companyKey}/workorders/${b.id}/edit`;
             });
             wireDrag(div, b, { startMin, pxPerMin });
             wireResize(div, b, { pxPerMin });
