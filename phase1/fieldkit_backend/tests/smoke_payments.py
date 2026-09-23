@@ -66,7 +66,7 @@ def main():
 
         r = client.post('/getagrip/payments/new', data={
             'customer_id': customer_id, 'amount': '40.00', 'payment_date': '2026-09-19',
-            'apply_to_invoice_id': str(inv1), 'redirect_to': f'/getagrip/invoices/{inv1}',
+            'apply_to_invoice_id': str(inv1), 'return_to': f'/getagrip/invoices/{inv1}',
         }, follow_redirects=False)
         check(f"payment recorded and applied ({r.status_code})", r.status_code == 302)
         cur.execute("SELECT id FROM payments WHERE customer_id=%s ORDER BY id DESC LIMIT 1", (customer_id,))
@@ -83,7 +83,7 @@ def main():
         print("smoke_payments: over-application is rejected")
         r = client.post('/getagrip/payments/new', data={
             'customer_id': customer_id, 'amount': '1000.00', 'payment_date': '2026-09-19',
-            'apply_to_invoice_id': str(inv1), 'redirect_to': f'/getagrip/invoices/{inv1}',
+            'apply_to_invoice_id': str(inv1), 'return_to': f'/getagrip/invoices/{inv1}',
         }, follow_redirects=False)
         cur.execute("SELECT id FROM payments WHERE customer_id=%s AND amount=1000.00", (customer_id,))
         over_pay = cur.fetchone()
@@ -96,7 +96,7 @@ def main():
         inv2 = make_invoice('ZZZ-PAY-0002', 25.00)  # a second open invoice for "next unpaid"
         r = client.post('/getagrip/payments/new', data={
             'customer_id': customer_id, 'amount': '60.00', 'payment_date': '2026-09-19',
-            'apply_to_invoice_id': str(inv1), 'redirect_to': f'/getagrip/invoices/{inv1}',
+            'apply_to_invoice_id': str(inv1), 'return_to': f'/getagrip/invoices/{inv1}',
         }, follow_redirects=False)
         cur.execute("SELECT id FROM payments WHERE customer_id=%s AND amount=60.00", (customer_id,))
         pay2 = cur.fetchone()['id']

@@ -504,7 +504,7 @@
             Estimates
             {% if customer_estimates %}<span style="font-weight:400; text-transform:none; letter-spacing:0; color:#aaa; margin-left:0.4rem;">({{ customer_estimates|length }})</span>{% endif %}
         </div>
-        <a href="/{{ company_key }}/estimates/new?customer_id={{ customer.id }}" class="btn btn-outline btn-sm">New Estimate</a>
+        <a href="/{{ company_key }}/estimates/new?customer_id={{ customer.id }}&return_to={{ current_url()|urlencode }}" class="btn btn-outline btn-sm">New Estimate</a>
     </div>
     {% if customer_estimates %}
     <table style="width:100%; border-collapse:collapse; font-size:.88rem;">
@@ -759,7 +759,7 @@ function openPortalModal(portal) {
         <h3>Record Payment</h3>
         <form method="POST" action="/{{ company_key }}/payments/new">
             <input type="hidden" name="customer_id" value="{{ customer.id }}">
-            <input type="hidden" name="redirect_to" value="/{{ company_key }}/customers/{{ customer.id }}">
+            <input type="hidden" name="return_to" value="/{{ company_key }}/customers/{{ customer.id }}">
             <div style="display:flex; flex-direction:column; gap:.7rem;">
                 <label style="font-size:.85rem; font-weight:600;">Amount
                     <input type="number" name="amount" step="0.01" min="0.01" required

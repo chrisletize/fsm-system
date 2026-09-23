@@ -27,7 +27,7 @@
     <h1>Estimates</h1>
     <div style="display:flex; gap:.6rem;">
         <a href="/{{ company_key }}/estimates/requests" class="btn btn-outline">Estimate Requests</a>
-        <a href="/{{ company_key }}/estimates/new" class="btn btn-primary">+ New Estimate</a>
+        <a href="/{{ company_key }}/estimates/new?return_to={{ current_url()|urlencode }}" class="btn btn-primary">+ New Estimate</a>
     </div>
 </div>
 

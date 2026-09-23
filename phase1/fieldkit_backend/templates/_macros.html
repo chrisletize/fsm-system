@@ -1,5 +1,15 @@
 {# Reusable Jinja macros for FieldKit #}
 
+{# Carries a return_to value through a POST so the handler can redirect back
+   to wherever the user launched this create/edit/action page from, instead
+   of a hardcoded fixed destination (Chris, 2026-09-23). Renders nothing
+   when return_to is empty -- the route's own default takes over. Pair with
+   the current_url() Jinja global on the launching page's own links:
+     href="...&return_to={{ current_url()|urlencode }}" #}
+{% macro return_to_field(return_to) -%}
+{%- if return_to %}<input type="hidden" name="return_to" value="{{ return_to }}">{% endif -%}
+{%- endmacro %}
+
 {% macro autocomplete_field(name, value='', suggestions=[], placeholder='', required=False, input_id='') -%}
 <div class="ac-wrap">
     <input type="text"

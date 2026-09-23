@@ -204,7 +204,7 @@
         <h3 id="billingPaymentModalTitle">Record Payment</h3>
         <form method="POST" action="/{{ company_key }}/payments/new">
             <input type="hidden" name="customer_id" id="billingPaymentCustomerId">
-            <input type="hidden" name="redirect_to" value="/{{ company_key }}/billing">
+            <input type="hidden" name="return_to" value="{{ current_url() }}">
             <div style="display:flex; flex-direction:column; gap:.7rem;">
                 <label style="font-size:.85rem; font-weight:600;">Amount
                     <input type="number" name="amount" id="billingPaymentAmount" step="0.01" min="0.01" required

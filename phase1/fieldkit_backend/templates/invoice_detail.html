@@ -358,7 +358,7 @@
         <form method="POST" action="/{{ company_key }}/payments/new">
             <input type="hidden" name="customer_id" value="{{ inv.customer_id }}">
             <input type="hidden" name="apply_to_invoice_id" value="{{ inv.id }}">
-            <input type="hidden" name="redirect_to" value="/{{ company_key }}/invoices/{{ inv.id }}">
+            <input type="hidden" name="return_to" value="/{{ company_key }}/invoices/{{ inv.id }}">
             <div style="display:flex; flex-direction:column; gap:.7rem;">
                 <label style="font-size:.85rem; font-weight:600;">Amount
                     <input type="number" name="amount" step="0.01" min="0.01" required

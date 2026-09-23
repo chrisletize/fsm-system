@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import restricted_combo_field %}
+{% from "_macros.html" import restricted_combo_field, return_to_field %}
 {% block title %}{% if est %}Edit{% else %}New{% endif %} Estimate — {{ branding.name }}{% endblock %}
 
 {% block extra_css %}
@@ -43,6 +43,7 @@
 
 <form method="POST" id="estForm" action="/{{ company_key }}/estimates{% if est %}/{{ est.id }}/edit{% else %}/new{% endif %}">
 <input type="hidden" name="line_items_json" id="lineItemsJson">
+{{ return_to_field(return_to) }}
 
 <div class="card">
     <div class="form-grid">

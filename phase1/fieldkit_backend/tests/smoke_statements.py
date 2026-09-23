@@ -101,7 +101,7 @@ def main():
         inv_paid, num_paid = make_open_invoice('ZZZ-STMT-0003', 20.00, 2)
         r = client.post('/getagrip/payments/new', data={
             'customer_id': customer_id, 'amount': '20.00', 'payment_date': '2026-09-19',
-            'apply_to_invoice_id': str(inv_paid), 'redirect_to': f'/getagrip/invoices/{inv_paid}',
+            'apply_to_invoice_id': str(inv_paid), 'return_to': f'/getagrip/invoices/{inv_paid}',
         }, follow_redirects=False)
         cur.execute("SELECT id FROM payments WHERE customer_id=%s AND amount=20.00 ORDER BY id DESC LIMIT 1", (customer_id,))
         pay_row = cur.fetchone()

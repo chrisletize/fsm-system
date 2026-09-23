@@ -94,7 +94,7 @@
         <input type="date" id="dateInput" value="{{ target_date }}">
         <a class="btn btn-outline" id="nextDay">&rarr;</a>
         <a class="btn btn-outline" id="todayBtn">Today</a>
-        <a class="btn btn-primary" href="/{{ company_key }}/workorders/new?date={{ target_date }}">+ New Work Order</a>
+        <a class="btn btn-primary" href="/{{ company_key }}/workorders/new?date={{ target_date }}&return_to={{ current_url()|urlencode }}">+ New Work Order</a>
     </div>
 </div>
 
@@ -120,6 +120,14 @@
 const companyKey = '{{ company_key }}';
 const viewMode = '{{ view }}';
 let targetDate = '{{ target_date }}';
+
+// Links created/edited from here should return here (Chris, 2026-09-23:
+// "if the work order was made using the dispatch board, then you should be
+// returned to the dispatch board"). Encoded once, reused on every WO
+// create/edit link this page builds client-side.
+function returnToQs() {
+    return 'return_to=' + encodeURIComponent(window.location.pathname + window.location.search);
+}
 
 // Drag/resize snap to 30-minute slots (Chris, 2026-09-23: 15 minutes gave
 // too many placement points to land on precisely -- 30 is coarser and more
@@ -169,7 +177,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') { hideSlotMe
 function showSlotMenu(e, username, timeStr) {
     hidePopover();
     const menu = document.getElementById('slotMenu');
-    menu.innerHTML = `<button onclick="window.location.href='/${companyKey}/workorders/new?tech=${encodeURIComponent(username)}&date=${targetDate}&time=${encodeURIComponent(timeStr)}'">+ New Work Order at ${timeStr}</button>`;
+    menu.innerHTML = `<button onclick="window.location.href='/${companyKey}/workorders/new?tech=${encodeURIComponent(username)}&date=${targetDate}&time=${encodeURIComponent(timeStr)}&${returnToQs()}'">+ New Work Order at ${timeStr}</button>`;
     menu.style.left = (window.scrollX + e.clientX) + 'px';
     menu.style.top = (window.scrollY + e.clientY) + 'px';
     menu.style.display = 'block';
@@ -200,7 +208,7 @@ function showPopover(block, anchorEl) {
         ${block.collides_with ? `<div class="row" style="color:#c0392b;">Overlaps with ${escHtml(block.collides_with)}</div>` : ''}
         <div class="actions">
             <a href="/${companyKey}/workorders/${block.id}">View</a>
-            <a href="/${companyKey}/workorders/${block.id}/edit">Edit</a>
+            <a href="/${companyKey}/workorders/${block.id}/edit?${returnToQs()}">Edit</a>
             <button onclick="quickStatus(${block.id}, 'Completed')">Mark Completed</button>
         </div>`;
     const rect = anchorEl.getBoundingClientRect();
@@ -299,7 +307,7 @@ function renderDay(data) {
             });
             div.addEventListener('dblclick', e => {
                 e.stopPropagation();
-                window.location.href = `/${companyKey}/workorders/${b.id}/edit`;
+                window.location.href = `/${companyKey}/workorders/${b.id}/edit?${returnToQs()}`;
             });
             wireDrag(div, b, { startMin, pxPerMin });
             wireResize(div, b, { pxPerMin });

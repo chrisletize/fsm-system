@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import restricted_combo_field, autocomplete_field, help_panel %}
+{% from "_macros.html" import restricted_combo_field, autocomplete_field, help_panel, return_to_field %}
 {% block title %}{% if wo %}Edit{% else %}New{% endif %} Work Order — {{ branding.name }}{% endblock %}
 
 {% block extra_css %}
@@ -138,6 +138,7 @@
 <input type="hidden" name="extraction_action" id="extractionActionHidden" value="">
 <input type="hidden" name="parent_work_order_id" value="{{ wo.parent_work_order_id if wo and wo.parent_work_order_id else (prefill_parent_id or '') }}">
 <input type="hidden" name="estimate_id" value="{{ prefill_estimate_id or '' }}">
+{{ return_to_field(return_to) }}
 
 <!-- ============================ Customer & Location ============================ -->
 <div class="card">

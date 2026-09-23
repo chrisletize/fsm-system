@@ -95,7 +95,7 @@
 {% block content %}
 <div class="page-header">
     <h1>Work Orders</h1>
-    <a href="/{{ company_key }}/workorders/new" class="btn btn-primary">+ New Work Order</a>
+    <a href="/{{ company_key }}/workorders/new?return_to={{ current_url()|urlencode }}" class="btn btn-primary" id="newWoLink">+ New Work Order</a>
 </div>
 
 <div class="card">
@@ -176,7 +176,7 @@
                 </td>
                 <td style="text-align:right;">${{ '%.2f'|format(wo.order_total or 0) }}</td>
                 <td>
-                    <a href="/{{ company_key }}/workorders/{{ wo.id }}/edit"
+                    <a href="/{{ company_key }}/workorders/{{ wo.id }}/edit?return_to={{ current_url()|urlencode }}"
                        style="color:{{ branding.color_primary }}; text-decoration:none; font-size:0.9rem;">
                         Edit →
                     </a>
@@ -214,6 +214,19 @@
         return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
     }
 
+    // The live-search filters below never touch window.location (it's all
+    // fetch()), so a plain window.location return_to would silently drop
+    // whatever the user just typed/selected. Build the URL the list would
+    // actually be at if this search were submitted normally, and use THAT.
+    function currentListUrl() {
+        const search = document.getElementById('searchInput').value;
+        const status = document.querySelector('select[name="status"]').value;
+        const callback = document.querySelector('select[name="callback"]').value;
+        const showInternal = document.getElementById('showInternalCheck').checked ? '1' : '';
+        const params = new URLSearchParams({ search, status, callback, show_internal: showInternal });
+        return `/${companyKey}/workorders?${params}`;
+    }
+
     function buildRow(wo) {
         const site = wo.work_site_label || '—';
         const accruing = wo.accruing_count > 0
@@ -222,6 +235,7 @@
             ? '<span style="color:#999;">Normal</span>'
             : `<span class="priority-${wo.priority.toLowerCase()}">${wo.priority}</span>`;
         const total = (wo.order_total || 0).toFixed(2);
+        const returnTo = encodeURIComponent(currentListUrl());
         return `<tr>
             <td style="font-weight:500;"><a href="/${companyKey}/workorders/${wo.id}" style="color:${colorPrimary};text-decoration:none;">${wo.work_order_number}</a></td>
             <td>${wo.customer_name || 'Internal Task'}</td>
@@ -230,7 +244,7 @@
             <td><span class="badge ${badgeClass(wo.status)}">${wo.status}</span>${accruing}${wo.is_callback ? ' <span class="badge badge-callback">Callback</span>' : ''}</td>
             <td>${priority}</td>
             <td style="text-align:right;">$${total}</td>
-            <td><a href="/${companyKey}/workorders/${wo.id}/edit" style="color:${colorPrimary};text-decoration:none;font-size:0.9rem;">Edit →</a></td>
+            <td><a href="/${companyKey}/workorders/${wo.id}/edit?return_to=${returnTo}" style="color:${colorPrimary};text-decoration:none;font-size:0.9rem;">Edit →</a></td>
         </tr>`;
     }
 
@@ -241,6 +255,8 @@
         const showInternal = document.getElementById('showInternalCheck').checked ? '1' : '';
 
         const params = new URLSearchParams({ search, status, callback, show_internal: showInternal });
+        document.getElementById('newWoLink').href =
+            `/${companyKey}/workorders/new?return_to=${encodeURIComponent(currentListUrl())}`;
         fetch(`/${companyKey}/workorders/search?${params}`)
             .then(r => r.json())
             .then(data => {

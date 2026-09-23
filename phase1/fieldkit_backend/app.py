@@ -18,7 +18,7 @@ import re
 import io
 import zipfile
 import base64
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote
 from openpyxl import Workbook
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
@@ -77,6 +77,45 @@ COMPANIES_WITHOUT_EXTRACTION = {'getagrip'}
 # route threading one more kwarg through with_branding + every render_template
 # call -- this is the one place that mapping needs to reach the template layer.
 app.jinja_env.globals['has_extraction'] = lambda company_key: company_key not in COMPANIES_WITHOUT_EXTRACTION
+
+# ============================================================================
+# Return-to-origin navigation (Chris, 2026-09-23: "after a separate page task
+# has been completed... return to the origin page" -- promoted from a single
+# WO-creation complaint to a sitewide rule). The pattern: a "launch" link
+# embeds return_to=<url of the page you're leaving>, the destination page's
+# form carries it through as a hidden field, and the POST handler reads it
+# back and redirects there instead of a hardcoded fixed page. First built
+# (untouched here) for Sales CRM's sales_contact_new/_edit; generalized here
+# so every other create/edit/action route can use the same two helpers
+# instead of reimplementing the round-trip each time.
+#
+# current_url() is a Jinja global (not passed from every route) so any
+# template can do `return_to={{ current_url()|urlencode }}` on an outbound
+# link without every GET route threading one more kwarg through.
+def current_url():
+    qs = request.query_string.decode()
+    return request.path + (('?' + qs) if qs else '')
+app.jinja_env.globals['current_url'] = current_url
+
+def safe_return_to(value, default):
+    """Validate a return_to value is a same-site relative path before ever
+    redirecting to it -- return_to is attacker-controllable (URL param/form
+    field), so an unvalidated redirect there is an open-redirect
+    vulnerability (this already existed, unvalidated, in the original
+    sales_contact_new/_edit implementation -- fixed here too, not just in
+    the new call sites). Anything not starting with a single '/' (rules out
+    both absolute URLs like 'https://evil.com' and protocol-relative
+    '//evil.com') is rejected in favor of the caller's own default."""
+    if not value or not value.startswith('/') or value.startswith('//') or '://' in value:
+        return default
+    return value
+
+def return_to_from_request(default):
+    """Read return_to from wherever the current request carries it (query
+    string on a GET, form field on a POST) and validate it. Use on the POST
+    handler of a create/edit/action route to decide the post-save redirect."""
+    raw = request.values.get('return_to', '')
+    return safe_return_to(raw, default)
 
 NC_COUNTIES = [
     'Alamance','Alexander','Alleghany','Anson','Ashe','Avery','Beaufort',
@@ -3799,7 +3838,11 @@ def workorder_new(company_key, branding, all_companies, company_access):
     if request.method == 'POST':
         new_id, error = _save_work_order(company_key, wo_id=None)
         if not error:
-            return redirect(f'/{company_key}/workorders')
+            # Design v2 Part Four's rule is "land on the new record's own
+            # detail page" -- that's the default when nothing else was
+            # specified. An explicit return_to (dispatch board, WO list,
+            # etc.) always wins, per Chris's 2026-09-23 sitewide rule.
+            return redirect(return_to_from_request(f'/{company_key}/workorders/{new_id}'))
     catalog_std, equipment, techs = _wo_form_data(company_key)
     customers = _load_wo_customers(company_key)
     # Prefill from the dispatch board: clicking an empty timeline slot links here
@@ -3859,6 +3902,7 @@ def workorder_new(company_key, branding, all_companies, company_access):
         prefill_followup=request.args.get('followup') == '1',
         prefill_estimate_id=prefill_estimate_id,
         prefill_line_items=prefill_line_items,
+        return_to=request.args.get('return_to', ''),
     )
 
 @app.route('/<company_key>/workorders/<int:wo_id>/edit', methods=['GET', 'POST'])
@@ -3873,11 +3917,14 @@ def workorder_edit(company_key, wo_id, branding, all_companies, company_access):
         new_status = request.form.get('status', 'Scheduled')
         _, error = _save_work_order(company_key, wo_id=wo_id)
         if not error:
-            # Completed is the moment a WO becomes invoiceable — land on the
-            # detail page so the "Generate invoice now?" banner is right there.
-            if new_status == 'Completed':
-                return redirect(f'/{company_key}/workorders/{wo_id}')
-            return redirect(f'/{company_key}/workorders')
+            # Completed is the moment a WO becomes invoiceable -- land on the
+            # detail page so the "Generate invoice now?" banner is right
+            # there. That's the DEFAULT when nothing else was specified; an
+            # explicit return_to (dispatch board, WO list, etc.) still wins,
+            # per Chris's 2026-09-23 sitewide rule.
+            default = f'/{company_key}/workorders/{wo_id}' if new_status == 'Completed' \
+                else f'/{company_key}/workorders'
+            return redirect(return_to_from_request(default))
     conn = get_db_connection(company_key)
     cur  = conn.cursor()
     cur.execute("""
@@ -3971,6 +4018,7 @@ def workorder_edit(company_key, wo_id, branding, all_companies, company_access):
         arrival_suggestions=WO_ARRIVAL_SUGGESTIONS,
         site_labels=WORK_SITE_LABELS,
         callback_source_label=callback_source_label,
+        return_to=request.args.get('return_to', ''),
     )
 
 @app.route('/<company_key>/workorders/<int:wo_id>/delete', methods=['POST'])
@@ -4543,7 +4591,8 @@ def workorder_followup_new(company_key, wo_id):
     cur.close(); conn.close()
     if not wo:
         abort(404)
-    params = {'parent_id': wo_id, 'followup': '1', 'customer_id': wo['customer_id']}
+    params = {'parent_id': wo_id, 'followup': '1', 'customer_id': wo['customer_id'],
+              'return_to': f'/{company_key}/workorders/{wo_id}'}
     if wo['service_location_id']:
         params['service_location_id'] = wo['service_location_id']
     if wo['work_site_label']:
@@ -6466,11 +6515,18 @@ def payment_new(company_key):
     reference_number  = request.form.get('reference_number', '').strip() or None
     notes             = request.form.get('notes', '').strip() or None
     apply_to_invoice_id = _opt_num(request.form.get('apply_to_invoice_id'))
-    redirect_to       = request.form.get('redirect_to') or f'/{company_key}/payments'
+    # This used to be its own ad-hoc field ('redirect_to'), unvalidated and
+    # never actually set by any template -- folded into the standard
+    # return_to mechanism (Chris, 2026-09-23) so recording a payment from
+    # the customer page, billing, or an invoice all return to wherever that
+    # payment was actually recorded from, not always the generic list.
+    default_redirect = f'/{company_key}/invoices/{apply_to_invoice_id}' if apply_to_invoice_id \
+        else f'/{company_key}/payments'
+    return_to = return_to_from_request(default_redirect)
 
     if not customer_id or not amount:
         flash('Customer and an amount are required.', 'error')
-        return redirect(redirect_to)
+        return redirect(return_to)
 
     conn = get_db_connection(company_key)
     cur  = conn.cursor()
@@ -6482,7 +6538,7 @@ def payment_new(company_key):
         conn.rollback()
         cur.close(); conn.close()
         flash(err, 'error')
-        return redirect(redirect_to)
+        return redirect(return_to)
     conn.commit()
 
     if apply_to_invoice_id:
@@ -6492,11 +6548,11 @@ def payment_new(company_key):
             flash('Payment recorded — invoice paid in full! 🎉', 'success')
         else:
             flash('Payment recorded.', 'success')
-        return redirect(f'/{company_key}/invoices/{apply_to_invoice_id}')
+        return redirect(return_to)
 
     cur.close(); conn.close()
     flash('Payment recorded.', 'success')
-    return redirect(redirect_to)
+    return redirect(return_to)
 
 
 @app.route('/<company_key>/invoices/<int:invoice_id>/payments/apply', methods=['POST'])
@@ -9682,7 +9738,7 @@ def estimate_new(company_key, branding, all_companies, company_access):
     if request.method == 'POST':
         new_id, error = _save_estimate(company_key, estimate_id=None)
         if not error:
-            return redirect(f'/{company_key}/estimates/{new_id}')
+            return redirect(return_to_from_request(f'/{company_key}/estimates/{new_id}'))
     catalog_std, _equipment, _techs = _wo_form_data(company_key)
     customers = _load_wo_customers(company_key)
     return render_template('estimate_form.html',
@@ -9691,6 +9747,7 @@ def estimate_new(company_key, branding, all_companies, company_access):
         est=None, line_items=[], error=error,
         customers=customers, catalog_std=catalog_std,
         prefill_customer_id=_opt_num(request.args.get('customer_id')),
+        return_to=request.args.get('return_to', ''),
     )
 
 
@@ -9734,6 +9791,7 @@ def estimate_edit(company_key, estimate_id, branding, all_companies, company_acc
         company_access=company_access, all_companies=all_companies,
         est=est, line_items=line_items, error=error,
         customers=customers, catalog_std=catalog_std, prefill_customer_id=None,
+        return_to='',
     )
 
 
@@ -9936,7 +9994,8 @@ def estimate_convert(company_key, estimate_id):
         flash('Only an Approved estimate can be converted.', 'error')
         return redirect(f'/{company_key}/estimates/{estimate_id}')
     cur.close(); conn.close()
-    params = {'estimate_id': estimate_id, 'customer_id': est['customer_id']}
+    params = {'estimate_id': estimate_id, 'customer_id': est['customer_id'],
+              'return_to': f'/{company_key}/estimates/{estimate_id}'}
     if est['service_location_id']:
         params['service_location_id'] = est['service_location_id']
     if est['work_site_label']:
@@ -10197,7 +10256,8 @@ def estimate_request_create_customer(company_key, request_id):
     """, (customer_id, username, username, request_id))
     conn.commit(); cur.close(); conn.close()
     flash('Customer created from the estimate request.', 'success')
-    return redirect(f'/{company_key}/estimates/new?customer_id={customer_id}')
+    return redirect(f'/{company_key}/estimates/new?customer_id={customer_id}'
+                     f'&return_to={quote(f"/{company_key}/estimates/requests")}')
 
 
 # ============================================================================
@@ -10695,8 +10755,7 @@ def sales_contact_new(company_key, branding, all_companies, company_access):
     if request.method == 'POST':
         new_id, error = _save_sales_contact(company_key, None)
         if not error:
-            return_to = request.form.get('return_to') or f'/{company_key}/sales/contacts/{new_id}/edit'
-            return redirect(return_to)
+            return redirect(return_to_from_request(f'/{company_key}/sales/contacts/{new_id}/edit'))
     prefill_property_type = request.args.get('property_type', '').strip() or None
     prefill_property_id   = _opt_num(request.args.get('property_id'))
     conn = get_db_connection(company_key)
@@ -10724,7 +10783,7 @@ def sales_contact_edit(company_key, contact_id, branding, all_companies, company
     if request.method == 'POST':
         _, error = _save_sales_contact(company_key, contact_id)
         if not error:
-            return redirect(f'/{company_key}/sales/contacts/{contact_id}/edit')
+            return redirect(return_to_from_request(f'/{company_key}/sales/contacts/{contact_id}/edit'))
     conn = get_db_connection(company_key)
     cur = conn.cursor()
     cur.execute("SELECT * FROM sales_contacts WHERE id = %s AND deleted_at IS NULL", (contact_id,))
@@ -10744,7 +10803,7 @@ def sales_contact_edit(company_key, contact_id, branding, all_companies, company
         contact=contact, error=error, history=history,
         prefill_property_type=contact['current_property_type'], prefill_property_id=contact['current_property_id'],
         prefill_property_name=prefill_property_name,
-        return_to='',
+        return_to=request.args.get('return_to', ''),
     )
 
 
