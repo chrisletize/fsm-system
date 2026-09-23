@@ -1482,10 +1482,69 @@ like this is structurally invisible to it. D-095 disclosed this exact gap
 attempted this session but the Chrome extension was not connected, so it
 could not be completed. Verified instead via static code re-read (confirms
 the fix logic is correct) and a full 27-file regression suite re-run
-(green, no server-side regression). **Not yet confirmed against the actual
-reported symptom in a real browser — awaiting Chris's re-test.**
+(green, no server-side regression). **Confirmed by Chris, 2026-09-23:
+internal tasks now save without a customer.**
 
 **Deferred:** none from this fix's scope, but flagging a standing gap —
 this build has no live-browser test coverage; future client-side-only JS
 bugs will keep slipping through the smoke suite until browser-based
 testing is added to the verification loop.
+
+## Dispatch board drag/drop rewrite + internal tasks hidden from WO list
+
+Two more reports from Chris after confirming the fix above: internal
+tasks were cluttering the work order list, and the dispatch board's drag
+physics were "clunky" — jobs "do not land well based on placement," time
+slots needed to go from 15 to 30 minutes, and more screen space should go
+to the calendar. Chris also flagged that this was called out as the most
+important interaction in the app "way back in the beginning" — confirmed
+true: `docs/PROJECT-KNOWLEDGE/PHASE-1-PLANNING.md` (2026-01-28, the
+project's very first planning doc) calls for the calendar to feel "like a
+video game," 60fps, with live drag feedback — planned as React/DnD-Kit,
+but dropped for vanilla JS during the actual build with the
+smoothness/feedback work never revisited until now.
+
+- **Internal tasks**: hidden from `/workorders` and its live-search
+  endpoint by default (`wo.is_internal_task IS NOT TRUE`), with a "Show
+  internal tasks" checkbox (`show_internal=1`) to bring them back on
+  demand — Chris's choice over a hard exclude, so they stay findable.
+- **Dispatch board**: native HTML5 drag/drop replaced entirely with manual
+  mouse tracking — the dragged block follows the cursor live, a dashed
+  placeholder shows exactly where it'll land (snapped to the new 30-minute
+  grid), the target tech row highlights, and the block's grab offset is
+  now preserved (previously hardcoded to 0, so a block always jumped to
+  place its left edge at the drop point regardless of where you grabbed
+  it — a likely cause of "does not land well based on placement"). The
+  move applies instantly and optimistically on release, with a short
+  eased glide into place, reverting only if the server rejects it.
+- Resize handle's snap and the right-click "new WO here" menu's snap both
+  moved to the same 30-minute grid as the drag-move (previously two
+  independently hardcoded 15-minute constants that could have drifted out
+  of sync).
+- Dispatch page now overrides the site's global 1200px container width up
+  to 98vw (scoped to this page only), and the timeline's pixel-per-minute
+  scale is computed from actual available width instead of a fixed
+  constant — a normal business day was already overflowing the old width
+  and forcing horizontal scroll. Row height increased 56px → 72px.
+
+**No migration.** See D-097 for full detail, including two bugs caught and
+fixed during implementation review before they shipped (drag target
+detection hitting the dragged block itself; a coordinate-space jump that
+would have silently skipped the landing animation).
+
+**Smoke tests:** strengthened `smoke_tag_replacements.py`'s internal-task
+list assertion, which turned out to be checking for a substring
+(`'Internal Task'`) that's also present verbatim in the page's own
+embedded JS and would have kept "passing" regardless of the new filter —
+replaced with real checks that the WO's own URL is absent by default and
+present with `show_internal=1`, in both the HTML list and the JSON search
+endpoint. Full 27-file regression suite green, plus direct render checks
+of `/dispatch` (day + week) and both `/workorders` filter states. **The
+drag physics themselves are NOT yet verified in a real browser** — same
+Chrome-extension-not-connected limitation as the fix above. **Chris:
+please try moving jobs around and confirm the feel, the 30-minute snap,
+and the wider calendar are working as intended.**
+
+**Deferred:** other pages that render internal tasks (`daysheet.html`,
+`jobs_report.html`, `extraction_queue.html`) left untouched — revisit only
+if Chris reports the same clutter there.

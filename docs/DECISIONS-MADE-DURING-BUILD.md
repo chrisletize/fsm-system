@@ -1731,9 +1731,8 @@ independent, older bug — disclosed gap from D-095 came true.
   confirm `customerCombo`'s `data-required` is toggled correctly and nothing
   else re-registers a stale listener; (2) full 27-file smoke/regression
   suite re-run, all green, confirming no server-side regression from the
-  change. **Chris: please re-test an internal task save in your browser
-  (hard refresh first) and confirm** — this fix is unverified against the
-  actual reported symptom pending that confirmation.
+  change. **Confirmed by Chris, 2026-09-23: internal tasks now save
+  without a customer.** This fix is closed out.
 
 **No migration** — JS-only change in shared `base.html` code.
 
@@ -1744,6 +1743,124 @@ submit-blocking logic, or similar will keep being invisible to the smoke
 suite until browser-based testing (claude-in-chrome, once the extension
 connection issue is resolved, or manual QA) is added to the verification
 loop for JS-touching changes.
+
+---
+
+D-097 — Dispatch board drag/drop rewrite + internal tasks hidden from WO
+list (Chris, 2026-09-23). Two more reports after confirming D-096 fixed
+internal-task saving: (1) internal tasks were cluttering the work order
+list, (2) the dispatch board's drag physics were "clunky," blocks "do not
+land well based on placement," and Chris referenced an original note from
+"way back in the beginning of our work" that this should be the most
+premium interaction in the whole site.
+
+- **Internal tasks hidden from the WO list by default, filter to show.**
+  Prior design (2026-09-19 build note) deliberately showed internal tasks
+  everywhere a customer name would render, including the main WO list —
+  Chris's "clutter" complaint is a genuine behavior change, not a bug fix.
+  `workorder_list` and `workorders_search` (`app.py`) both gained a
+  `wo.is_internal_task IS NOT TRUE` condition, skipped when the new
+  `show_internal=1` query param is present. `workorder_list.html` got a
+  "Show internal tasks" checkbox wired into both the server-rendered form
+  and the live-search JS, matching the existing status/callback filter
+  pattern. Chose "hide by default, filter to show" over a hard exclude
+  (Chris's call, asked directly) so office staff can still find one if
+  ever needed.
+- **Confirmed the "premium calendar" note is real and in the repo.** Found
+  in `docs/PROJECT-KNOWLEDGE/PHASE-1-PLANNING.md` (2026-01-28, the
+  project's first planning doc): the calendar should feel "like a video
+  game" — 60fps, smooth, with ghost-image drag feedback and live drop-zone
+  highlighting — planned as a React/DnD-Kit build and literally the first
+  thing to prototype ("START HERE"). That got explicitly dropped for a
+  no-framework vanilla-JS stack during the September build
+  (`FIELDKIT_BUILD_DIRECTIVE_2026-09.md`), and the smoothness/feedback work
+  never got revisited until now — what existed before this fix was native
+  HTML5 drag/drop with zero custom visual feedback, a fixed 15-minute snap,
+  and a full-page-data reload after every move.
+- **Full rewrite of `dispatch.html`'s drag/move (Chris's choice: full
+  rewrite over incremental polish).** Replaced the native HTML5 drag/drop
+  API entirely with manual mouse tracking (`mousedown`/`mousemove`/
+  `mouseup`): the dragged block itself follows the cursor in real time
+  (reparented to `<body>`, `position:fixed`, `pointer-events:none` so
+  `elementFromPoint` can see the timeline underneath it rather than hitting
+  the block itself), a dashed placeholder shows exactly where it will land
+  — snapped live to the grid, inside whichever tech's timeline is under the
+  cursor — and the hovered row gets a highlight. The block's original grab
+  offset is now preserved (previously hardcoded to 0, meaning a block
+  always jumped to place its LEFT EDGE wherever the mouse was released,
+  regardless of where you grabbed it — a likely contributor to "does not
+  land well based on placement"). On release, the move applies
+  optimistically and instantly (no waiting on the server round-trip to see
+  it land) with a short eased glide into its final resting spot, and only
+  reverts if the server actually rejects the move. A `_justDragged` flag
+  suppresses the click-to-open-popover that would otherwise fire right
+  after a drag.
+- **Snap increment: 15 minutes → 30 minutes** (Chris: fewer placement
+  points to land on precisely). Applies uniformly to drag-move, the resize
+  handle, and the right-click "new WO here" menu — previously the resize
+  handle used an independent quarter-hour (`* 4) / 4`) constant that would
+  have silently drifted out of sync with the move snap if only one had been
+  updated; both now derive from the same `SNAP_MIN = 30` constant.
+  Half-hour tick marks added to the ruler as a visual reference for the new
+  grid (previously only full-hour labels existed, so the 15-minute snap
+  had no visible grid at all — invisible until you dropped a block).
+- **More screen space for the board.** `dispatch.html` overrides the
+  site's global `max-width: 1200px` container (`base.html:279`, unchanged
+  everywhere else) up to `98vw` for this page only, since a normal ~10-hour
+  business day was already overflowing the old 1136px usable width and
+  forcing horizontal scrolling on any standard desktop viewport. The
+  timeline's former fixed `PX_PER_MIN = 2` constant (pixels-per-minute,
+  unrelated to actual screen size) is now computed per-render from the
+  board's real available width (`computePxPerMin()`), so the full business
+  day fits without scrolling on ordinary viewports and blocks are
+  proportionally bigger, easier targets — and it recomputes on window
+  resize. Row height increased 56px → 72px for a bigger drop target per
+  tech.
+- **Visual polish**: dragged block lifts with a shadow + slight scale;
+  target row highlights while hovered during drag; resize handle gets its
+  own subtle shadow while active. All CSS-transition-based, none of it
+  interferes with the live 1:1 cursor tracking during an actual drag
+  (verified the base `.wo-block` transition only covers `box-shadow`/
+  `transform`, never `left`/`top`, so per-frame position updates during
+  drag are never fighting a transition).
+
+**No migration** — JS/template/CSS changes plus one new `WHERE` condition
+on existing columns; no schema change.
+
+**Smoke tests:** extended `tests/smoke_tag_replacements.py`'s existing
+internal-task checks — the old assertion (`b'Internal Task' in r.data`)
+was checking for a substring that's ALSO present verbatim in the page's own
+embedded JS source (`wo.customer_name || 'Internal Task'`), so it would
+have silently kept "passing" even with the new hide-by-default behavior
+and wasn't actually proving what it claimed. Replaced with real checks: the
+internal task's own URL is absent from the default list's HTML and from
+`/workorders/search`'s JSON, then present in both once `show_internal=1`
+is added. Full 27-file regression suite green, plus a direct
+`test_client()` render check of `/dispatch` (day + week), `/workorders`
+(both filter states), and `/dispatch/data` confirming no Jinja/template
+errors. **The drag/move physics themselves (the actual point of this fix)
+could not be verified in a real browser** — the claude-in-chrome Chrome
+extension was not connected in this environment (same limitation as
+D-096). Verified instead via careful static trace of the event-handler
+logic, including two bugs caught and fixed during that trace before they
+ever shipped: (1) `document.elementFromPoint` would have hit the dragged
+block itself instead of the timeline underneath it without
+`pointer-events:none` during drag; (2) switching straight from
+`position:fixed` to a timeline-relative `position:absolute` in one
+synchronous step would have skipped the CSS transition entirely (two
+different coordinate spaces, no committed frame between them for the
+browser to animate across) — fixed by animating the last stretch while
+still `position:fixed`, in viewport coordinates, then swapping to
+`absolute` only once that motion settles. **Chris: please try moving jobs
+around on the dispatch board and let me know if the drag feel, 30-minute
+snap, and wider calendar are working the way you wanted** — this is a
+substantial rewrite of the site's highest-priority interaction and hasn't
+had eyes on it in an actual browser yet.
+
+**Deferred:** other internal-task-aware pages the investigation surfaced
+(`daysheet.html`, `jobs_report.html`, `extraction_queue.html`) were left
+untouched — Chris's complaint was specifically about the work order list;
+revisit only if he reports the same clutter there.
 
 ---
 

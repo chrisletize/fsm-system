@@ -80,10 +80,23 @@ def main():
         check("customer_id is NULL", row['customer_id'] is None)
         check("is_internal_task saved true", row['is_internal_task'] is True)
 
-        print("smoke_tag_replacements: internal task appears in lists with 'Internal Task' label")
+        print("smoke_tag_replacements: internal task is hidden from the WO list by default (Chris, 2026-09-23: 'clutter'), visible with the show_internal toggle")
         r = client.get('/getagrip/workorders')
         check(f"WO list renders ({r.status_code})", r.status_code == 200)
-        check("WO list shows 'Internal Task' for it", b'Internal Task' in r.data)
+        check("default list does NOT link to the internal task",
+              f'/getagrip/workorders/{wo_internal}"'.encode() not in r.data)
+        r = client.get('/getagrip/workorders/search')
+        check(f"live search endpoint responds 200 ({r.status_code})", r.status_code == 200)
+        check("live search JSON does NOT include the internal task by default",
+              wo_internal not in [w['id'] for w in r.get_json()['workorders']])
+
+        r = client.get('/getagrip/workorders?show_internal=1')
+        check(f"show_internal=1 list renders ({r.status_code})", r.status_code == 200)
+        check("with the toggle on, the internal task IS linked",
+              f'/getagrip/workorders/{wo_internal}"'.encode() in r.data)
+        r = client.get('/getagrip/workorders/search?show_internal=1')
+        check("live search JSON DOES include it with show_internal=1",
+              wo_internal in [w['id'] for w in r.get_json()['workorders']])
 
         r = client.get(f'/getagrip/dispatch/data?date={TEST_DATE_1}')
         check(f"dispatch data responds 200 ({r.status_code})", r.status_code == 200)

@@ -3,6 +3,12 @@
 
 {% block extra_css %}
 <style>
+    /* Dispatch is the highest-traffic screen in the app -- jobs get dragged
+       around on it constantly -- so it gets more width than the site's
+       default 1200px container (base.html:279) to give the timeline more
+       room and cut down on horizontal scrolling (Chris, 2026-09-23). */
+    .container { max-width: 98vw; padding: 0 1rem; }
+
     .page-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; flex-wrap:wrap; gap:.75rem; }
     .page-header h1 { font-size:1.6rem; color:{{ branding.color_primary }}; }
     .controls { display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; }
@@ -18,19 +24,32 @@
     .ruler .tech-col-spacer { flex-shrink:0; width:160px; border-right:1px solid #eee; }
     .ruler .hours { position:relative; }
     .hour-label { position:absolute; top:0; font-size:.7rem; color:#999; border-left:1px solid #f0f0f0; padding-left:.25rem; height:24px; }
+    .half-hour-line { position:absolute; top:0; bottom:0; border-left:1px dashed #f2f2f2; }
 
-    .tech-row { display:flex; border-bottom:1px solid #f0f0f0; min-height:56px; }
+    .tech-row { display:flex; border-bottom:1px solid #f0f0f0; min-height:72px; }
     .tech-row.unassigned { background:#fafafa; }
     .tech-label { flex-shrink:0; width:160px; border-right:1px solid #eee; padding:.5rem .75rem; display:flex; align-items:center; gap:.5rem; font-size:.85rem; }
     .tech-color-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
-    .tech-timeline { position:relative; flex:1; }
+    .tech-timeline { position:relative; flex:1; transition:background-color .1s; }
+    .tech-timeline.drag-over { background-color:rgba(0,0,0,.04); }
 
-    .wo-block { position:absolute; top:4px; bottom:4px; border-radius:4px; color:white; font-size:.72rem;
-                padding:.25rem .4rem; overflow:hidden; cursor:grab; box-shadow:0 1px 2px rgba(0,0,0,.15); }
+    .wo-block { position:absolute; top:5px; bottom:5px; border-radius:5px; color:white; font-size:.74rem;
+                padding:.3rem .45rem; overflow:hidden; cursor:grab; box-shadow:0 1px 2px rgba(0,0,0,.15);
+                transition:box-shadow .12s, transform .12s; user-select:none; }
     .wo-block.collision { outline:2px solid #c0392b; outline-offset:-2px; }
     .wo-block.delinquent { border-left:4px solid #c0392b; }
-    .wo-block .resize-handle { position:absolute; right:0; top:0; bottom:0; width:8px; cursor:ew-resize; }
+    .wo-block .resize-handle { position:absolute; right:0; top:0; bottom:0; width:10px; cursor:ew-resize; }
     .wo-block .badges { font-size:.68rem; opacity:.9; }
+    .wo-block.dragging { cursor:grabbing; box-shadow:0 8px 20px rgba(0,0,0,.35); transform:scale(1.015); z-index:1000; opacity:.95; }
+    .wo-block.resizing { box-shadow:0 4px 12px rgba(0,0,0,.3); }
+    .wo-block.landing { transition:left .14s ease-out, top .14s ease-out; }
+
+    /* Dashed placeholder showing exactly where a dragged block will land,
+       snapped to the grid -- shown live during drag so placement is
+       predictable instead of "wherever the mouse happened to be" (Chris,
+       2026-09-23: "they do not land well based on placement"). */
+    .drop-preview { position:absolute; top:5px; bottom:5px; border:2px dashed rgba(0,0,0,.4); border-radius:5px;
+                     background:rgba(0,0,0,.06); pointer-events:none; z-index:5; }
 
     .unscheduled-strip { padding:.75rem; border-top:2px solid #eee; }
     .unscheduled-strip h3 { font-size:.8rem; color:#888; text-transform:uppercase; margin-bottom:.5rem; }
@@ -99,7 +118,13 @@
 const companyKey = '{{ company_key }}';
 const viewMode = '{{ view }}';
 let targetDate = '{{ target_date }}';
-const PX_PER_MIN = 2;
+
+// Drag/resize snap to 30-minute slots (Chris, 2026-09-23: 15 minutes gave
+// too many placement points to land on precisely -- 30 is coarser and more
+// forgiving). Applies to drag-move, the resize handle, and the right-click
+// "new WO here" menu, so all three agree on the same grid.
+const SNAP_MIN = 30;
+const MOVE_THRESHOLD_PX = 4;
 
 document.getElementById('dateInput').addEventListener('change', e => navigate(e.target.value, viewMode));
 document.getElementById('todayBtn').addEventListener('click', () => navigate(new Date().toISOString().slice(0,10), viewMode));
@@ -191,21 +216,44 @@ function loadDay() {
         .then(renderDay);
 }
 
+// Fills whatever width the (now much wider, see .container override above)
+// board actually has, instead of a fixed 2px/minute constant that used to
+// overflow a standard business day and force horizontal scrolling on every
+// normal desktop viewport (Chris, 2026-09-23: "more space can be used to
+// make the calendar larger"). Recomputed on every render, including on
+// window resize, so it always fits without scrolling except on unusually
+// narrow windows (the 1.1px/min floor keeps blocks from becoming unreadably
+// thin at that point -- #boardWrap's overflow-x:auto remains as a fallback).
+function computePxPerMin(totalMin) {
+    const wrap = document.getElementById('boardWrap');
+    const available = Math.max(wrap.clientWidth - 162, 300); // minus the 160px tech-label column + border
+    return Math.max(available / totalMin, 1.1);
+}
+
 function renderDay(data) {
     const startMin = timeToMinutes(data.business_hours.start) - 60;
     const endMin   = timeToMinutes(data.business_hours.end) + 120;
     const totalMin = endMin - startMin;
-    const widthPx  = totalMin * PX_PER_MIN;
+    const pxPerMin = computePxPerMin(totalMin);
+    const widthPx  = totalMin * pxPerMin;
 
     const ruler = document.getElementById('rulerHours');
     ruler.style.width = widthPx + 'px';
     ruler.innerHTML = '';
-    for (let m = Math.ceil(startMin/60)*60; m <= endMin; m += 60) {
-        const label = document.createElement('div');
-        label.className = 'hour-label';
-        label.style.left = ((m - startMin) * PX_PER_MIN) + 'px';
-        label.textContent = minutesToLabel(m);
-        ruler.appendChild(label);
+    for (let m = Math.ceil(startMin/30)*30; m <= endMin; m += 30) {
+        const x = (m - startMin) * pxPerMin;
+        if (m % 60 === 0) {
+            const label = document.createElement('div');
+            label.className = 'hour-label';
+            label.style.left = x + 'px';
+            label.textContent = minutesToLabel(m);
+            ruler.appendChild(label);
+        } else {
+            const tick = document.createElement('div');
+            tick.className = 'half-hour-line';
+            tick.style.left = x + 'px';
+            ruler.appendChild(tick);
+        }
     }
 
     const rowsEl = document.getElementById('techRows');
@@ -226,38 +274,27 @@ function renderDay(data) {
 
         blocksForRow.forEach(b => {
             const startM = timeToMinutes(b.scheduled_start.slice(11, 16));
-            const left = (startM - startMin) * PX_PER_MIN;
-            const width = b.duration_hours * 60 * PX_PER_MIN;
+            const left = (startM - startMin) * pxPerMin;
+            const width = b.duration_hours * 60 * pxPerMin;
             const div = document.createElement('div');
             div.className = 'wo-block' + (b.collides_with ? ' collision' : '') + (b.is_delinquent ? ' delinquent' : '');
             div.style.left = left + 'px';
             div.style.width = Math.max(width, 20) + 'px';
             div.style.background = row.color;
-            div.draggable = true;
             div.dataset.woId = b.id;
             const badges = [b.priority !== 'Normal' ? b.priority[0] : '', b.has_equipment ? '💧' : '', b.is_new_customer ? '🆕' : '', b.is_delinquent ? '🔴' : '', b.is_callback ? '↩️' : ''].filter(Boolean).join(' ');
             div.innerHTML = `<div><strong>${b.work_order_number}</strong> ${badges ? '<span class="badges">' + badges + '</span>' : ''}</div>
                               <div>${b.customer_name || 'Internal Task'}</div>
                               <div class="resize-handle"></div>`;
-            div.addEventListener('click', e => { e.stopPropagation(); showPopover(b, div); });
-            div.addEventListener('dragstart', e => {
-                e.dataTransfer.setData('text/plain', JSON.stringify({ woId: b.id, offsetMin: 0 }));
+            div.addEventListener('click', e => {
+                if (div._justDragged) { div._justDragged = false; return; }
+                e.stopPropagation(); showPopover(b, div);
             });
-            wireResize(div, b);
+            wireDrag(div, b, { startMin, pxPerMin });
+            wireResize(div, b, { pxPerMin });
             timeline.appendChild(div);
         });
 
-        timeline.addEventListener('dragover', e => e.preventDefault());
-        timeline.addEventListener('drop', e => {
-            e.preventDefault();
-            const payload = JSON.parse(e.dataTransfer.getData('text/plain') || '{}');
-            if (!payload.woId) return;
-            const rect = timeline.getBoundingClientRect();
-            const x = e.clientX - rect.left;
-            const minutes = Math.round((x / PX_PER_MIN) / 15) * 15 + startMin;
-            const newTime = minutesToTimeStr(minutes);
-            moveBlock(payload.woId, row.username, `${targetDate}T${newTime}:00`);
-        });
         // A plain left-click on an empty slot used to jump straight into a
         // new WO form -- one stray click and you're mid-way through
         // creating a job you never meant to (Chris, 2026-09-22). Right-
@@ -269,7 +306,7 @@ function renderDay(data) {
             e.preventDefault();
             const rect = timeline.getBoundingClientRect();
             const x = e.clientX - rect.left;
-            const minutes = Math.round((x / PX_PER_MIN) / 15) * 15 + startMin;
+            const minutes = Math.round((x / pxPerMin) / SNAP_MIN) * SNAP_MIN + startMin;
             const timeStr = minutesToLabel(minutes, true);
             showSlotMenu(e, row.username, timeStr);
         });
@@ -285,12 +322,164 @@ function renderDay(data) {
     }
 }
 
-function wireResize(div, block) {
+// ============================== Drag to move ==============================
+// Manual mouse tracking instead of the native HTML5 drag/drop API (which
+// gave no control over the drag image, no live drop-zone feedback, and felt
+// choppy/imprecise -- Chris, 2026-09-23: "moving jobs is very clunky, they
+// do not land well based on placement"). The dragged block itself follows
+// the cursor in real time (position:fixed, reparented to <body>); a dashed
+// placeholder shows exactly where it will land, snapped to the grid, inside
+// whichever tech's timeline the cursor is currently over. The move is
+// applied optimistically the instant the mouse is released -- no waiting on
+// the server round-trip to see the block land -- and only reverts if the
+// server actually rejects it.
+function clearDragVisuals() {
+    document.querySelectorAll('.tech-timeline.drag-over').forEach(t => t.classList.remove('drag-over'));
+    document.querySelectorAll('.drop-preview').forEach(p => p.remove());
+}
+
+// Glides the block (still position:fixed, viewport coordinates, from the
+// drag) the last short distance to its exact snapped resting spot, THEN
+// swaps it to position:absolute inside the target row. Switching straight
+// from fixed to a timeline-relative absolute position in one step would
+// jump between two different coordinate spaces with no frame in between
+// for a CSS transition to animate across -- animating while still fixed,
+// against the timeline's own on-screen position, avoids that jump.
+function settleBlock(div, timeline, leftPx) {
+    const timelineRect = timeline.getBoundingClientRect();
+    const targetLeft = timelineRect.left + leftPx;
+    const targetTop = timelineRect.top + 5;
+
+    div.classList.add('landing');
+    div.style.left = targetLeft + 'px';
+    div.style.top = targetTop + 'px';
+
+    const finish = () => {
+        div.removeEventListener('transitionend', finish);
+        clearTimeout(fallback);
+        div.classList.remove('landing');
+        div.style.position = 'absolute';
+        div.style.left = leftPx + 'px';
+        div.style.top = '5px';
+        div.style.bottom = '5px';
+        div.style.height = '';
+        div.style.zIndex = '';
+        div.style.pointerEvents = '';
+        timeline.appendChild(div);
+    };
+    div.addEventListener('transitionend', finish);
+    const fallback = setTimeout(finish, 220); // in case transitionend never fires
+}
+
+function wireDrag(div, block, ctx) {
+    div.addEventListener('mousedown', e => {
+        if (e.target.closest('.resize-handle')) return;
+        if (e.button !== 0) return;
+        const startClientX = e.clientX, startClientY = e.clientY;
+        const origRect = div.getBoundingClientRect();
+        const grabOffsetX = startClientX - origRect.left;
+        const grabOffsetY = startClientY - origRect.top;
+        const origTimeline = div.parentElement;
+        const origLeftPx = parseFloat(div.style.left);
+        const widthPx = div.offsetWidth;
+        const heightPx = origRect.height;
+        let dragging = false;
+        let dropTimeline = null;
+        let snappedMinutes = null;
+
+        function onMove(ev) {
+            const dx = ev.clientX - startClientX, dy = ev.clientY - startClientY;
+            if (!dragging) {
+                if (Math.abs(dx) < MOVE_THRESHOLD_PX && Math.abs(dy) < MOVE_THRESHOLD_PX) return;
+                dragging = true;
+                div.classList.add('dragging');
+                div.style.position = 'fixed';
+                div.style.left = origRect.left + 'px';
+                div.style.top = origRect.top + 'px';
+                div.style.width = widthPx + 'px';
+                div.style.height = heightPx + 'px';
+                // Without this, elementFromPoint below would keep hitting
+                // this block itself (it's directly under the cursor by
+                // construction) instead of the timeline underneath it.
+                div.style.pointerEvents = 'none';
+                document.body.appendChild(div);
+            }
+            div.style.left = (ev.clientX - grabOffsetX) + 'px';
+            div.style.top = (ev.clientY - grabOffsetY) + 'px';
+
+            const el = document.elementFromPoint(ev.clientX, ev.clientY);
+            const timelineEl = el ? el.closest('.tech-timeline') : null;
+            clearDragVisuals();
+            if (timelineEl) {
+                timelineEl.classList.add('drag-over');
+                const rect = timelineEl.getBoundingClientRect();
+                let x = (ev.clientX - rect.left) - grabOffsetX;
+                x = Math.max(0, Math.min(x, rect.width - widthPx));
+                const minutes = Math.round((x / ctx.pxPerMin) / SNAP_MIN) * SNAP_MIN;
+                snappedMinutes = minutes;
+                dropTimeline = timelineEl;
+                const preview = document.createElement('div');
+                preview.className = 'drop-preview';
+                preview.style.left = (minutes * ctx.pxPerMin) + 'px';
+                preview.style.width = widthPx + 'px';
+                timelineEl.appendChild(preview);
+            } else {
+                dropTimeline = null;
+                snappedMinutes = null;
+            }
+        }
+
+        function onUp() {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            clearDragVisuals();
+            if (!dragging) return; // a plain click -- let the click event open the popover as usual
+
+            div.classList.remove('dragging');
+            div._justDragged = true;
+            setTimeout(() => { div._justDragged = false; }, 300); // safety net if click never fires
+
+            if (dropTimeline && snappedMinutes !== null) {
+                settleBlock(div, dropTimeline, snappedMinutes * ctx.pxPerMin);
+                const absMinutes = ((snappedMinutes + ctx.startMin) % 1440 + 1440) % 1440;
+                const newTime = minutesToTimeStr(absMinutes);
+                const newUsername = dropTimeline.dataset.username;
+                commitMove(block.id, newUsername, `${targetDate}T${newTime}:00`, div, origTimeline, origLeftPx);
+            } else {
+                settleBlock(div, origTimeline, origLeftPx);
+            }
+        }
+
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    });
+}
+
+function commitMove(woId, username, scheduledStart, div, origTimeline, origLeftPx) {
+    fetch(`/${companyKey}/dispatch/move`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ wo_id: woId, username: username, scheduled_start: scheduledStart }),
+    }).then(r => r.json()).then(res => {
+        if (!res.ok) {
+            alert(res.error || 'Move failed.');
+            settleBlock(div, origTimeline, origLeftPx);
+            return;
+        }
+        // Refresh in the background to pick up recomputed collision/badge
+        // state -- the block is already sitting in its new spot, so this
+        // reconciles data without the user having to watch it happen.
+        loadDay();
+    }).catch(() => { settleBlock(div, origTimeline, origLeftPx); });
+}
+
+// ============================== Resize (drag right edge) ==============================
+function wireResize(div, block, ctx) {
     const handle = div.querySelector('.resize-handle');
     handle.addEventListener('mousedown', e => {
         e.stopPropagation(); e.preventDefault();
         const startX = e.clientX;
         const startWidth = div.offsetWidth;
+        div.classList.add('resizing');
         function onMove(ev) {
             const newWidth = Math.max(startWidth + (ev.clientX - startX), 20);
             div.style.width = newWidth + 'px';
@@ -298,22 +487,13 @@ function wireResize(div, block) {
         function onUp(ev) {
             document.removeEventListener('mousemove', onMove);
             document.removeEventListener('mouseup', onUp);
+            div.classList.remove('resizing');
             const newWidth = Math.max(startWidth + (ev.clientX - startX), 20);
-            const hours = Math.max(Math.round((newWidth / PX_PER_MIN / 60) * 4) / 4, 0.5);
+            const hours = Math.max(Math.round((newWidth / ctx.pxPerMin / 60) * 2) / 2, 0.5);
             resizeBlock(block.id, hours);
         }
         document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', onUp);
-    });
-}
-
-function moveBlock(woId, username, scheduledStart) {
-    fetch(`/${companyKey}/dispatch/move`, {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ wo_id: woId, username: username, scheduled_start: scheduledStart }),
-    }).then(r => r.json()).then(res => {
-        if (!res.ok) { alert(res.error || 'Move failed.'); }
-        loadDay();
     });
 }
 
@@ -326,6 +506,13 @@ function resizeBlock(woId, hours) {
         loadDay();
     });
 }
+
+let resizeRenderTimer;
+window.addEventListener('resize', () => {
+    if (viewMode === 'week') return;
+    clearTimeout(resizeRenderTimer);
+    resizeRenderTimer = setTimeout(loadDay, 200);
+});
 
 function timeToMinutes(hhmm) { const [h, m] = hhmm.split(':').map(Number); return h * 60 + m; }
 function minutesToLabel(m, as24 = false) {

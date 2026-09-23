@@ -237,17 +237,40 @@ listener. Fixed by always registering the listener and checking
 shared code, affects every restricted-combo field app-wide. This is
 exactly the disclosed-gap scenario from D-095 coming true: the smoke suite
 uses Flask's `test_client()`, which never executes JS, so this class of
-bug is structurally invisible to it. See D-096. Static code re-verified
-correct and full 27-file regression suite green (no server-side
-regression), but live-browser confirmation of the actual fix was not
-completed this session — the Chrome extension was not connected in this
-environment. **Awaiting Chris's re-test to confirm.**
+bug is structurally invisible to it. See D-096. **Confirmed by Chris,
+2026-09-23: internal tasks now save without a customer.**
 
-Next: Chris to re-test the internal-task save in a real browser; if
-confirmed, commit D-096 (currently uncommitted). Then the same cutover
-import for the other three companies, then Stage 5's remaining items
-remaining items (drift check, `DEPLOYMENT/RUNBOOK.md`, final doc pass) once
-all four companies are done, or continue at Chris's direction.
+**Dispatch board drag/drop rewrite + internal tasks hidden from WO list
+(2026-09-23)** — Chris then reported internal tasks cluttering the work
+order list, and the dispatch board's drag-and-drop feeling "clunky" with
+jobs not landing well — plus a callback to an original note from the very
+start of the project that the dispatch board should be the most premium
+interaction in the app. Confirmed real:
+`docs/PROJECT-KNOWLEDGE/PHASE-1-PLANNING.md` (2026-01-28) calls for a
+"like a video game" 60fps calendar with live drag feedback, planned as
+React/DnD-Kit but dropped for vanilla JS during the September build with
+the smoothness work never revisited — until now. Per Chris's direction:
+internal tasks now hidden from `/workorders` by default with a "Show
+internal tasks" toggle (not a hard exclude); the dispatch board's native
+HTML5 drag/drop was fully replaced with manual mouse tracking (live
+cursor-following block, snapped drop-zone preview, preserved grab offset,
+optimistic instant placement with eased landing, revert only on server
+rejection); snap granularity moved from 15 to 30 minutes everywhere
+(drag, resize, right-click menu); and the board now uses up to 98vw
+instead of the sitewide 1200px cap, with pixel-per-minute computed from
+actual available width instead of a fixed constant. See D-097. Full
+27-file regression suite green; **the actual drag feel is NOT yet
+verified in a real browser** (Chrome extension not connected in this
+environment, same limitation as D-096) — awaiting Chris's hands-on test.
+
+Next: Chris to try the new dispatch board drag/drop and the internal-task
+list filter and report back — if the drag feel needs further tuning
+(easing timing, snap increment, etc.) that's a quick follow-up now that
+the underlying mechanism is real mouse tracking instead of native
+HTML5 drag/drop. Then the same ServiceFusion cutover import for the other
+three companies, then Stage 5's remaining items (drift check,
+`DEPLOYMENT/RUNBOOK.md`, final doc pass) once all four companies are
+done, or continue at Chris's direction.
 
 Decisions Chris has already made for this build (delinquent threshold = 90 days past
 invoice date, FL tax left empty/exempt for Kleanit SF, SF-import receivables excluded

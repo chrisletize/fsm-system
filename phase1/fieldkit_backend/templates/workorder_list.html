@@ -88,6 +88,7 @@
     .priority-urgent { color: #a32d2d; font-weight: 600; }
     .empty-state { text-align: center; padding: 3rem 1rem; color: #999; }
     .empty-state .icon { font-size: 2.5rem; margin-bottom: 0.5rem; }
+    .toolbar label.check-toggle { display: flex; align-items: center; gap: .35rem; font-size: 0.85rem; color: #555; cursor: pointer; white-space: nowrap; }
 </style>
 {% endblock %}
 
@@ -117,6 +118,12 @@
                 <option value="">All Jobs</option>
                 <option value="1" {% if callback_filter %}selected{% endif %}>Callbacks Only</option>
             </select>
+            <label class="check-toggle">
+                <input type="checkbox" name="show_internal" value="1" id="showInternalCheck"
+                       {% if show_internal %}checked{% endif %}
+                       onchange="document.getElementById('filterForm').submit()">
+                Show internal tasks
+            </label>
             <input type="hidden" name="tech" value="{{ tech_filter }}">
             {% if tech_filter %}
             <span class="result-count">tech: {{ tech_filter }}
@@ -231,8 +238,9 @@
         const search = document.getElementById('searchInput').value;
         const status = document.querySelector('select[name="status"]').value;
         const callback = document.querySelector('select[name="callback"]').value;
+        const showInternal = document.getElementById('showInternalCheck').checked ? '1' : '';
 
-        const params = new URLSearchParams({ search, status, callback });
+        const params = new URLSearchParams({ search, status, callback, show_internal: showInternal });
         fetch(`/${companyKey}/workorders/search?${params}`)
             .then(r => r.json())
             .then(data => {
@@ -266,6 +274,9 @@
         sel.removeAttribute('onchange');
         sel.addEventListener('change', liveSearch);
     });
+    const showInternalCheck = document.getElementById('showInternalCheck');
+    showInternalCheck.removeAttribute('onchange');
+    showInternalCheck.addEventListener('change', liveSearch);
 
     document.getElementById('searchInput').addEventListener('keydown', function(e) {
         if (e.key === 'Enter') { e.preventDefault(); liveSearch(); }

@@ -3375,6 +3375,7 @@ def workorder_list(company_key, branding, all_companies, company_access):
     tech_filter   = request.args.get('tech', '').strip()
     date_filter   = request.args.get('date', '').strip()
     callback_filter = request.args.get('callback') == '1'
+    show_internal = request.args.get('show_internal') == '1'
 
     conditions = ["wo.deleted_at IS NULL"]
     params     = []
@@ -3397,6 +3398,8 @@ def workorder_list(company_key, branding, all_companies, company_access):
         params.append(date_filter)
     if callback_filter:
         conditions.append("wo.callback_of_work_order_id IS NOT NULL")
+    if not show_internal:
+        conditions.append("wo.is_internal_task IS NOT TRUE")
     where = " AND ".join(conditions)
 
     conn = get_db_connection(company_key)
@@ -3434,7 +3437,7 @@ def workorder_list(company_key, branding, all_companies, company_access):
         workorders=workorders, total=total,
         search=search, status_filter=status_filter,
         tech_filter=tech_filter, date_filter=date_filter,
-        callback_filter=callback_filter,
+        callback_filter=callback_filter, show_internal=show_internal,
         statuses=WO_OFFICE_STATUSES,
     )
 
@@ -3448,6 +3451,7 @@ def workorders_search(company_key):
     search        = request.args.get('search', '').strip()
     status_filter = request.args.get('status', '').strip()
     callback_filter = request.args.get('callback') == '1'
+    show_internal = request.args.get('show_internal') == '1'
 
     conditions = ["wo.deleted_at IS NULL"]
     params     = []
@@ -3461,6 +3465,8 @@ def workorders_search(company_key):
         params.append(status_filter)
     if callback_filter:
         conditions.append("wo.callback_of_work_order_id IS NOT NULL")
+    if not show_internal:
+        conditions.append("wo.is_internal_task IS NOT TRUE")
     where = " AND ".join(conditions)
 
     conn = get_db_connection(company_key)
