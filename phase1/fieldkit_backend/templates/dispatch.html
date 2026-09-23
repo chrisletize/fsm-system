@@ -202,7 +202,6 @@ function showPopover(block, anchorEl) {
             <a href="/${companyKey}/workorders/${block.id}">View</a>
             <a href="/${companyKey}/workorders/${block.id}/edit">Edit</a>
             <button onclick="quickStatus(${block.id}, 'Completed')">Mark Completed</button>
-            <button onclick="quickStatus(${block.id}, 'No Charge')">Mark No Charge</button>
         </div>`;
     const rect = anchorEl.getBoundingClientRect();
     pop.style.left = (window.scrollX + rect.left) + 'px';

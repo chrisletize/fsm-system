@@ -40,6 +40,12 @@
     /* Line items */
     .li-row { border:1px solid #e4e4e4; border-radius:6px; padding:.9rem 1rem; margin-bottom:.8rem; background:#fff; }
     .li-row.li-eq { background:#f3f7fc; border-color:#cfdff0; }
+    /* A thin 1px color-only border was too easy to miss, and plain red
+       reads too close to Get a Grip's own maroon brand color (#8B1538) --
+       Chris, 2026-09-23. This is a fixed color, not branding.color_primary,
+       specifically so it never blends into whichever company's colors are
+       on screen. */
+    .li-row.li-error { border:3px solid #FF6600; box-shadow:0 0 0 3px rgba(255,102,0,.18); }
     .li-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:.7rem; }
     .li-badge { font-size:.72rem; padding:.15rem .6rem; border-radius:10px; font-weight:600;
                 text-transform:uppercase; letter-spacing:.03em; }
@@ -707,8 +713,8 @@
         let valid = true;
         liRows.querySelectorAll('.li-row').forEach(row => {
             const hidden = row.querySelector('.ac-wrap input[type=hidden]');
-            if (!hidden.value) { valid = false; row.style.borderColor = '#c33'; return; }
-            row.style.borderColor = '';
+            if (!hidden.value) { valid = false; row.classList.add('li-error'); return; }
+            row.classList.remove('li-error');
             if (row.dataset.kind === 'std') {
                 lines.push({
                     id: row.dataset.lineId || null, kind: 'std',
