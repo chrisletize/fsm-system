@@ -1913,9 +1913,11 @@ removal and CSS color/width change aren't meaningfully testable via
 `test_client()` (no JS execution), and the stress-test data is throwaway,
 not a permanent fixture.
 
-**Deferred:** the 19 `ZZTEST-DISPATCH-STRESS` work orders/customers stay
+**Deferred:** ~~the 19 `ZZTEST-DISPATCH-STRESS` work orders/customers stay
 in `fieldkit_getagrip` until Chris confirms he's done reviewing the board
-under load, then get hard-deleted in one pass.
+under load, then get hard-deleted in one pass.~~ Done — Chris confirmed
+the board held up well under load (2026-09-23); all 19 work orders and
+customers hard-deleted, verified zero remain.
 
 ---
 
