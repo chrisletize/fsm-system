@@ -1919,6 +1919,75 @@ under load, then get hard-deleted in one pass.
 
 ---
 
+D-099 — Catalog default descriptions cleared; sitewide return-to-origin
+navigation (Chris, 2026-09-23). Two requests after confirming the dispatch
+rewrite is ready to show Michele.
+
+- **Catalog `default_description` cleared, all four DBs.** Per Chris:
+  these were pre-filled generic descriptions carried over from
+  ServiceFusion's import ("A full resurface of a bathtub..." etc); the
+  company now writes specific per-job description text instead, so a
+  generic default just gets silently prepended/confused with it. Cleared
+  via direct SQL (`UPDATE catalog_items SET default_description = NULL`),
+  backed up first (`~/db-backups/2026-09-23-clear-catalog-descriptions/`).
+  Only getagrip had any set (18 of 47 items); kleanit_charlotte (8 items),
+  cts, and kleanit_sf (0 items each) were no-ops. The column and the
+  catalog-item edit UI for it stay — office can still type one in per
+  item if ever wanted, it's just not pre-filled from the catalog anymore.
+  Pure data change, no code touched, so the existing 27-file suite is
+  sufficient confidence; not re-run for this alone.
+- **Return-to-origin navigation.** Investigated first: this was already a
+  documented "hard UX rule" from May 2026's design doc, actively violated
+  by work-order creation (hardcoded to the WO list). Chris chose "full
+  sitewide sweep" over "work orders now, expand later" when asked. Full
+  detail, rationale, and the open-redirect fix are in the commit message
+  (`3ea41de`) and `tests/smoke_return_to_navigation.py`. Summary: shared
+  `safe_return_to()`/`return_to_from_request()` helpers in `app.py`, a
+  `current_url()` Jinja global, and a `return_to_field()` macro
+  (`_macros.html`) generalize the pattern Sales CRM's contact form already
+  had (and fix its unvalidated open-redirect gap while doing so). Wired
+  into every route with a genuine multiple-entry-point situation: work
+  order create/edit (dispatch board x2, WO list incl. live search, WO
+  detail), estimate creation (customer detail, estimates list,
+  estimate-request conversion), and payment recording (folded the
+  pre-existing separate/unvalidated `redirect_to` field into the standard
+  mechanism). `estimate_convert` and `workorder_followup_new` (launchers
+  into the WO/estimate form) now chain a sensible return_to of their own.
+- **Scope note — NOT yet touched, on purpose:** ~30 other create/edit/
+  action routes (customer sub-resources, invoice status transitions,
+  catalog/equipment/tax-rate/user/field settings CRUD, sales
+  prospects/approvals, extraction/myday/billing/compliance actions) were
+  inventoried but left alone. Every one of them has exactly ONE real entry
+  point today (their own list or parent-record page), which is also
+  already their hardcoded redirect target — so the "return to origin"
+  principle is already satisfied for all of them without any code change.
+  Converting them to the new mechanism would be pure mechanical churn
+  (same behavior, more surface area, more regression risk) for zero
+  visible difference. Flagged to Chris directly rather than silently
+  under-delivering against "full sweep" — his call whether to still
+  convert them for engineering consistency (so a future second entry
+  point automatically inherits return_to support) or leave them as
+  intentionally-out-of-scope single-origin routes.
+
+**No migration** — the catalog change is a data UPDATE on existing
+columns; the navigation change is app.py/template code only.
+
+**Smoke tests:** `tests/smoke_return_to_navigation.py` (new) — directly
+tests `safe_return_to()`'s rejection of absolute/protocol-relative/
+malformed values, then drives the real routes end-to-end (with, without,
+and with a malicious return_to) for work orders, estimates, payments, and
+sales contacts. This is the only place any of these routes' redirect
+*target* gets asserted — the pre-existing smoke tests for all of them only
+ever checked `status_code == 302`, never where the 302 pointed, so this
+class of regression was previously invisible to the suite entirely (same
+category of gap as D-096's JS-execution blind spot, but on the Python
+side: nothing was wrong with the tests' logic, they just never asked the
+question). Full 28-file regression suite green.
+
+**Deferred:** the ~30 single-origin routes noted above.
+
+---
+
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:
 #33 (OPS/VendorCafe export templates), #50 (SMS alerts via Twilio), and Stage 5.6
 (ServiceFusion price-list exports, company legal names/remit-to/reply-to/alert emails).
