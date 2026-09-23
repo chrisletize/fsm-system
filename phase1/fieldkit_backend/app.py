@@ -3148,16 +3148,15 @@ def _save_work_order(company_key, wo_id):
         for l in lines
     )
     catalog_duration_hours = round(catalog_minutes / 60.0, 2) if catalog_minutes else 0.0
-    duration_warning = None
+    duration_mismatch = None  # (catalog_hours, scheduled_hours) -- the WO number
+                               # isn't known yet this early (new WO: not assigned
+                               # until INSERT below); message built at flash time.
     if not duration_overridden:
         est_duration = catalog_duration_hours
     elif est_duration is not None:
         est_duration = float(est_duration)  # _opt_num returns a string
         if abs(est_duration - catalog_duration_hours) > 0.25:  # +-15 minutes
-            duration_warning = (
-                f'Catalog estimate is {catalog_duration_hours:g}h, scheduled is '
-                f'{est_duration:g}h — non-blocking, just flagging the gap.'
-            )
+            duration_mismatch = (catalog_duration_hours, est_duration)
 
     # Extraction (directive §3.2). is_extraction auto-sets TRUE the moment any
     # per_day_equipment line is present in THIS save -- editable off again only
@@ -3396,8 +3395,13 @@ def _save_work_order(company_key, wo_id):
             _record_audit(cur, 'work_orders', wo_id, 'update', before=existing, after=after_wo, changed_by=username)
 
         conn.commit()
-        if duration_warning:
-            flash(duration_warning, 'info')
+        if duration_mismatch:
+            catalog_h, scheduled_h = duration_mismatch
+            flash(
+                f'{after_wo["work_order_number"]}: catalog estimate is {catalog_h:g}h, '
+                f'scheduled is {scheduled_h:g}h — non-blocking, just flagging the gap.',
+                'info'
+            )
         return wo_id, None
     finally:
         cur.close(); conn.close()
@@ -4296,7 +4300,7 @@ def dispatch_resize(company_key):
 
     conn = get_db_connection(company_key)
     cur  = conn.cursor()
-    cur.execute("SELECT catalog_estimated_duration_hours FROM work_orders WHERE id = %s AND deleted_at IS NULL", (wo_id,))
+    cur.execute("SELECT work_order_number, catalog_estimated_duration_hours FROM work_orders WHERE id = %s AND deleted_at IS NULL", (wo_id,))
     wo = cur.fetchone()
     if not wo:
         cur.close(); conn.close()
@@ -4313,7 +4317,8 @@ def dispatch_resize(company_key):
     catalog_hours = float(wo['catalog_estimated_duration_hours'] or 0)
     warning = None
     if abs(hours - catalog_hours) > 0.25:
-        warning = f'Catalog estimate is {catalog_hours:g}h, scheduled is {hours:g}h — non-blocking, just flagging the gap.'
+        warning = (f'{wo["work_order_number"]}: catalog estimate is {catalog_hours:g}h, '
+                    f'scheduled is {hours:g}h — non-blocking, just flagging the gap.')
     return jsonify({'ok': True, 'warning': warning, 'duration_hours': hours})
 
 
