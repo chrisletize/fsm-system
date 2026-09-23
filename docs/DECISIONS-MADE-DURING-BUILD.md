@@ -1864,6 +1864,61 @@ revisit only if he reports the same clutter there.
 
 ---
 
+D-098 — Dispatch board rewrite confirmed working; small follow-ups (Chris,
+2026-09-23). Chris tried the D-097 rewrite live: "moving work orders
+around even on a busy schedule and swapping them between techs and
+resizing the jobs is smooth and seamless... fantastic, especially when
+compared to ServiceFusion." Double-click-to-edit also confirmed good. Two
+things needed fixing:
+
+- **"Mark No Charge" was still on the popover.** Investigated first (see
+  the popover work above): it's a general billing status (estimate
+  visits, warranty, goodwill jobs — any WO type), not extraction-specific,
+  confirmed via `WO_OFFICE_STATUSES` and the invoice-creation guard that
+  checks it. Asked Chris directly whether to keep it now that the
+  extraction theory was wrong; he said remove it from the popover anyway
+  (still reachable from the full WO edit page). **This got asked about but
+  never actually implemented in the same turn — Chris caught it still
+  showing up.** Removed now, `dispatch.html`'s popover `actions` div.
+- **Line-item validation border too easy to miss, and too close to Get a
+  Grip's own brand color.** The missing-catalog/equipment-selection
+  highlight on the WO and estimate forms was a 1px `border-color: #c33`
+  change — thin, and Get a Grip's `color_primary` is `#8B1538` (a dark
+  maroon-red), so a muted red error state risks blending into the
+  company's own buttons/headers. Replaced with a fixed, deliberately
+  non-branding color: vivid orange `#FF6600` at 3px plus a soft glow
+  (`.li-error` class, `box-shadow:0 0 0 3px rgba(255,102,0,.18)`), chosen
+  to sit far from all four companies' primary colors (maroon `#8B1538`,
+  blue `#0052CC`, dark gray `#2C2C2C`, green `#00D66C`). Same fix applied
+  identically to `estimate_form.html`, which had the exact same pattern.
+- **Stress-tested the dispatch board with synthetic load** at Chris's
+  request: 19 throwaway work orders across both dispatchable getagrip
+  techs plus a few unassigned, spread over a full business day with mixed
+  durations, back-to-back runs, and deliberate overlaps to exercise
+  collision styling under the new drag mechanics. Tagged
+  `ZZTEST-DISPATCH-STRESS` in the customer property name for reliable
+  bulk cleanup once Chris is done looking. (One incidental cleanup: an
+  earlier version of the seeding script committed its customer inserts
+  only once at the very end of the script, so the Flask route's separate
+  DB connection couldn't see them yet and every WO-creation POST failed —
+  fixed by committing each customer insert immediately before referencing
+  it. A stray WO from manually diagnosing that bug was cleaned up by
+  hand.)
+
+**No migration.** CSS/JS-only changes.
+
+**Smoke tests:** full 27-file regression suite green; no new smoke
+coverage added for these three items specifically — the popover button
+removal and CSS color/width change aren't meaningfully testable via
+`test_client()` (no JS execution), and the stress-test data is throwaway,
+not a permanent fixture.
+
+**Deferred:** the 19 `ZZTEST-DISPATCH-STRESS` work orders/customers stay
+in `fieldkit_getagrip` until Chris confirms he's done reviewing the board
+under load, then get hard-deleted in one pass.
+
+---
+
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:
 #33 (OPS/VendorCafe export templates), #50 (SMS alerts via Twilio), and Stage 5.6
 (ServiceFusion price-list exports, company legal names/remit-to/reply-to/alert emails).
