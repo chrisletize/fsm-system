@@ -40,6 +40,7 @@
     .wo-block.delinquent { border-left:4px solid #c0392b; }
     .wo-block .resize-handle { position:absolute; right:0; top:0; bottom:0; width:10px; cursor:ew-resize; }
     .wo-block .badges { font-size:.68rem; opacity:.9; }
+    .wo-block .wo-number { font-size:.66rem; opacity:.8; font-weight:400; }
     .wo-block.dragging { cursor:grabbing; box-shadow:0 8px 20px rgba(0,0,0,.35); transform:scale(1.015); z-index:1000; opacity:.95; }
     .wo-block.resizing { box-shadow:0 4px 12px rgba(0,0,0,.3); }
     .wo-block.landing { transition:left .14s ease-out, top .14s ease-out; }
@@ -199,8 +200,8 @@ function showPopover(block, anchorEl) {
     if (block.adjusted_letter_grade) badges.push('Rating: ' + block.adjusted_letter_grade);
     if (block.is_callback) badges.push('↩️ Callback');
     pop.innerHTML = `
-        <h4>${escHtml(block.work_order_number)}</h4>
-        <div class="row">${escHtml(block.customer_name) || 'Internal Task'}</div>
+        <h4>${escHtml(block.customer_name) || 'Internal Task'}</h4>
+        <div class="row" style="color:#999;font-size:.72rem;margin-top:-.3rem;">${escHtml(block.work_order_number)}</div>
         <div class="row">Status: ${escHtml(block.status)}</div>
         ${badges.length ? `<div class="row">${badges.map(escHtml).join(' · ')}</div>` : ''}
         ${block.auto_description ? `<div class="row wo-description">${escHtml(block.auto_description)}</div>` : ''}
@@ -298,8 +299,8 @@ function renderDay(data) {
             div.style.background = row.color;
             div.dataset.woId = b.id;
             const badges = [b.priority !== 'Normal' ? b.priority[0] : '', b.has_equipment ? '💧' : '', b.is_new_customer ? '🆕' : '', b.is_delinquent ? '🔴' : '', b.is_callback ? '↩️' : ''].filter(Boolean).join(' ');
-            div.innerHTML = `<div><strong>${b.work_order_number}</strong> ${badges ? '<span class="badges">' + badges + '</span>' : ''}</div>
-                              <div>${b.customer_name || 'Internal Task'}</div>
+            div.innerHTML = `<div><strong>${escHtml(b.customer_name) || 'Internal Task'}</strong> ${badges ? '<span class="badges">' + badges + '</span>' : ''}</div>
+                              <div class="wo-number">${escHtml(b.work_order_number)}</div>
                               <div class="resize-handle"></div>`;
             div.addEventListener('click', e => {
                 if (div._justDragged) { div._justDragged = false; return; }
@@ -334,7 +335,7 @@ function renderDay(data) {
     const unschEl = document.getElementById('unscheduledList');
     if (data.unscheduled.length) {
         unschEl.innerHTML = data.unscheduled.map(b =>
-            `<a class="unsch-chip" href="/${companyKey}/workorders/${b.id}">${b.work_order_number} — ${b.customer_name || 'Internal Task'}</a>`
+            `<a class="unsch-chip" href="/${companyKey}/workorders/${b.id}">${escHtml(b.customer_name) || 'Internal Task'} — ${escHtml(b.work_order_number)}</a>`
         ).join('');
     } else {
         unschEl.innerHTML = '<span style="color:#aaa;font-size:.8rem;">None.</span>';
