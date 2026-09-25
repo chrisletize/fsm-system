@@ -4244,6 +4244,21 @@ def _dispatch_board_data(company_key, target_date):
         for row in cur.fetchall():
             techs_by_wo.setdefault(row['work_order_id'], []).append(row['username'])
     visit_statuses = _current_visit_statuses(cur, wo_ids)
+
+    # Once the invoice has actually been SENT to the customer (not just
+    # created -- invoice_versions.sent_at, distinct from the invoice's
+    # existence), the visit LEDs stop mattering: office already closed the
+    # loop, so the flashing would only be a distraction from here on. Chris:
+    # "the flashing led can be turned off so it's not distracting."
+    invoiced_wo_ids = set()
+    if wo_ids:
+        cur.execute("""
+            SELECT DISTINCT inv.work_order_id
+            FROM invoices inv
+            JOIN invoice_versions iv ON iv.id = inv.current_version_id
+            WHERE inv.work_order_id = ANY(%s) AND inv.deleted_at IS NULL AND iv.sent_at IS NOT NULL
+        """, (wo_ids,))
+        invoiced_wo_ids = {row['work_order_id'] for row in cur.fetchall()}
     cur.close(); conn.close()
 
     blocks, unscheduled = [], []
@@ -4260,7 +4275,7 @@ def _dispatch_board_data(company_key, target_date):
             'is_delinquent': w['is_delinquent'], 'adjusted_letter_grade': w['adjusted_letter_grade'],
             'is_callback': w['is_callback'],
             'techs': techs_by_wo.get(w['id'], []),
-            'visit_status_by_tech': {
+            'visit_status_by_tech': {} if w['id'] in invoiced_wo_ids else {
                 uname: visit_statuses.get(w['id'], {}).get(uname, {}).get('status')
                 for uname in techs_by_wo.get(w['id'], [])
             },
