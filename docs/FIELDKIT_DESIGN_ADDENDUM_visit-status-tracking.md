@@ -48,11 +48,14 @@ Real timestamps, not just a note field — per Chris: "it's not a common or cruc
 ## Dispatch board: status color as the block, tech as an animated LED
 
 - **Block fill color** = the work order's actual `status` (Scheduled / Extraction Active / Completed / No Charge / Cancelled / Invoiced) — lets office see at a glance what's actually done vs. still open, without a job disappearing off the board when it's finished.
-- **One dot per assigned tech** (unifies with the earlier "which tech is behind on a shared job" idea) — each dot is that tech's own color, and *animates* according to that tech's current visit status on this job:
-  - No visit logged yet → static, no animation
-  - On The Way → solid blue, no pulse
-  - Started → slow pulse, red
-  - Completed → faster pulse, green
+- **One dot per assigned tech** (unifies with the earlier "which tech is behind on a shared job" idea), built as an actual LED rather than a fade — dark/off when no visit has been logged, genuinely glowing (brightened fill + box-shadow halo) when lit, since a fade-to-transparent just makes the dot vanish rather than read as "off." Tech identity moved to a thin ring around the dot (`--tech-ring`) so the fill itself is free to mean status, not identity:
+  - No visit logged yet → dark/off, identity ring only
+  - On The Way → solid blue glow, no pulse
+  - Started → red, pulsing dark→bright every ~1.7s
+  - Completed → green, pulsing dark→bright every ~0.85s with a bigger glow — deliberately the loudest of the three (brightest, fastest, biggest halo), since that's the one that needs to catch office's eye and get invoiced
+  - Cancelled → flat grey, no pulse
+
+  Revised after first real use: the original version only animated `opacity` on top of the tech's own color, which (a) never actually showed red/green at all — just the assigned tech's own arbitrary color fading in and out — and (b) was hard to read for anyone with red/green color vision deficiency, since the only differentiator was hue at full-vs-faded opacity. Brightness/glow-based pulsing plus a real dark "off" state fixes both: status is now legible from animation intensity and speed alone, hue is a second cue rather than the only one, and the tech-identity ring keeps "whose job is this" from being lost.
 - **Refresh cadence**: the dispatch board has no live-refresh today — it only reloads after the office's own drag/resize action. A tech's phone-side status tap wouldn't appear until something reloads it. Added a **60-second background poll** rather than push/websockets — explicitly agreed this doesn't need to be instant, and a slow poll is a small addition with no new infrastructure.
 
 ## What's explicitly deferred to the native mobile app
@@ -62,7 +65,7 @@ GPS-driven automation — auto-setting "On The Way" when a tech taps a maps link
 What's being built now instead, so the office side is ready to receive that input the moment the native app ships:
 - The full data model and permission logic above.
 - The dispatch board's status-color + per-tech LED rendering.
-- A **bare-bones, phone-usable web page** (no native capability required) exposing the same visit-status and extraction actions as simple buttons, scoped to "my assigned jobs." This is not a preview of the native app's UI — it exists to (1) let the whole flow be exercised and validated today, well ahead of the native build, and (2) double as office's manual override panel, which was already wanted regardless. The underlying routes are written so a real JSON API for the native app is a thin addition later, not a rebuild.
+- A phone-usable web page exposing the same visit-status and extraction actions as simple buttons, scoped to "my assigned jobs" — **this turned out to already exist** as `/myday` (directive §5.4, predating this work), gated to `role == 'technician'` and, at the time, writing its three statuses directly onto `work_orders.status`. That's exactly the design this addendum moves away from, so `/myday` was retrofitted rather than left alongside a second, competing page: it now posts to the shared `workorder_visit_status` route (visit log, not `work_orders.status`), gained the Extraction Follow-Ups section, and its permission check and nav link were broadened from "role is literally technician" to "is a field tech" (`session.is_field_tech`, set at login) — the same is_field_tech-over-role fix already applied elsewhere in this codebase (see `_company_techs`), which My Day had never picked up. A first pass at this work built a brand-new `/my-jobs` page instead of finding `/myday` — retired once the duplication was caught. The underlying `workorder_visit_status` route still returns JSON when called without `return_to`, so a real API for the native app is a thin addition later, not a rebuild.
 
 ## Extraction daily log: notes now actually save
 

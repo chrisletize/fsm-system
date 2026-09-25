@@ -35,7 +35,16 @@
     .btn-onway { color:#8a6100; border-color:#f0d9a0; }
     .btn-start { color:#a04b00; border-color:#f0c0a0; }
     .btn-complete { color:#2e7d32; border-color:#a0d0a8; }
+    .btn-cancel { color:#a33; border-color:#e0b0b0; }
+    .visit-pill { display:inline-block; padding:.2rem .6rem; border-radius:10px; font-size:.74rem;
+                  font-weight:600; background:#f0f0f0; color:#666; margin-top:.4rem; }
     .empty { text-align:center; color:#aaa; padding:3rem 1rem; }
+    .section-label { font-size:.76rem; text-transform:uppercase; letter-spacing:.05em; color:#999; margin:1.5rem 0 .5rem; }
+    .notes-box { width:100%; min-height:4rem; padding:.5rem; border:1px solid #ddd; border-radius:6px;
+                 font-size:.85rem; margin:.6rem 0; font-family:inherit; }
+    .retrieve-line { display:flex; justify-content:space-between; align-items:center; gap:.5rem; margin-bottom:.4rem; font-size:.82rem; }
+    .retrieve-line input[type=date] { padding:.3rem; border:1px solid #ddd; border-radius:4px; }
+    .escalated { color:#c0392b; font-weight:600; }
     @media (max-width:600px) {
         .job-actions button { flex:1; }
     }
@@ -45,12 +54,15 @@
 {% block content %}
 {% call help_panel('How the buttons work') %}
 <p>Tap a button when it actually happens, not ahead of time — <strong>On The Way</strong>
-   when you leave for the job, <strong>Start</strong> when you're working it, and
-   <strong>Complete</strong> when you're done. These update the same status the office sees
-   on the dispatch board and work order in real time.</p>
-<p>Once a job is Complete you can't move it backward from here — if that was a mistake, ask
-   the office to fix it.</p>
-<p>You'll only ever see jobs assigned to you.</p>
+   when you leave for the job, <strong>Started</strong> when you're working it, and
+   <strong>Completed</strong> or <strong>Cancelled</strong> when you're done. These track
+   <em>this visit</em> only — they never change the work order's own status or close out an
+   extraction job, so tapping Completed on a quick follow-up check is always safe.</p>
+<p>For an active extraction job you're the follow-up tech on, use the Extraction Follow-Ups
+   section below instead to log the day's outcome (Ready for Pickup, Needs More Time, etc.) —
+   those jobs stay on this page every day until they're picked up, not just on the day they
+   started.</p>
+<p>You'll only ever see jobs connected to you.</p>
 {% endcall %}
 <div class="page-header"><h1>My Day</h1></div>
 
@@ -95,32 +107,100 @@
             {% endfor %}
         </ul>
         {% endif %}
+        <div class="visit-pill">Visit: {{ j.my_visit_status.status if j.my_visit_status else 'Not started' }}</div>
     </div>
 
     {% if j.actionable %}
+    {% set rt = '/' + company_key + '/myday?date=' + target_date %}
     <div class="job-actions">
-        <form method="POST" action="/{{ company_key }}/myday/{{ j.id }}/status">
-            <input type="hidden" name="date" value="{{ target_date }}">
+        <form method="POST" action="/{{ company_key }}/workorders/{{ j.id }}/visit-status">
+            <input type="hidden" name="return_to" value="{{ rt }}">
             <input type="hidden" name="status" value="On The Way">
             <button type="submit" class="btn-onway">On The Way</button>
         </form>
-        <form method="POST" action="/{{ company_key }}/myday/{{ j.id }}/status">
-            <input type="hidden" name="date" value="{{ target_date }}">
-            <input type="hidden" name="status" value="In Progress">
-            <button type="submit" class="btn-start">Start</button>
+        <form method="POST" action="/{{ company_key }}/workorders/{{ j.id }}/visit-status">
+            <input type="hidden" name="return_to" value="{{ rt }}">
+            <input type="hidden" name="status" value="Started">
+            <button type="submit" class="btn-start">Started</button>
         </form>
-        <form method="POST" action="/{{ company_key }}/myday/{{ j.id }}/status"
-              onsubmit="return confirm('Mark this job Completed?')">
-            <input type="hidden" name="date" value="{{ target_date }}">
+        <form method="POST" action="/{{ company_key }}/workorders/{{ j.id }}/visit-status"
+              onsubmit="return confirm('Mark this visit Completed?')">
+            <input type="hidden" name="return_to" value="{{ rt }}">
             <input type="hidden" name="status" value="Completed">
-            <button type="submit" class="btn-complete">Complete</button>
+            <button type="submit" class="btn-complete">Completed</button>
         </form>
-    </div>
-    {% elif j.is_extraction %}
-    <div class="job-detail" style="margin-top:.75rem; color:#999; font-size:.82rem;">
-        Extraction job — managed from the office extraction queue, not My Day.
+        <form method="POST" action="/{{ company_key }}/workorders/{{ j.id }}/visit-status"
+              onsubmit="return confirm('Mark this visit Cancelled?')">
+            <input type="hidden" name="return_to" value="{{ rt }}">
+            <input type="hidden" name="status" value="Cancelled">
+            <button type="submit" class="btn-cancel">Cancelled</button>
+        </form>
     </div>
     {% endif %}
 </div>
 {% endfor %}
+
+<div class="section-label">Extraction Follow-Ups Assigned to Me</div>
+{% if extraction_jobs %}
+    {% for j in extraction_jobs %}
+    {% set rt = '/' + company_key + '/myday?date=' + target_date %}
+    <div class="job-card">
+        <div class="job-head">
+            <div>
+                <div class="job-customer">{{ j.customer_name or 'Internal Task' }}</div>
+                <div class="job-detail" style="margin-top:0;">{{ j.work_order_number }} · {{ j.work_site_label or '' }}
+                    · Day {{ j.day_count }}{% if j.day_count and j.day_count >= 5 %}<span class="escalated"> (escalated)</span>{% endif %}
+                </div>
+            </div>
+            <span class="job-status status-Scheduled">{{ j.extraction_status or 'Active' }}</span>
+        </div>
+        <div class="visit-pill">Visit: {{ j.my_visit_status.status if j.my_visit_status else 'Not started' }}</div>
+
+        <div class="job-actions">
+            <form method="POST" action="/{{ company_key }}/workorders/{{ j.id }}/visit-status">
+                <input type="hidden" name="return_to" value="{{ rt }}">
+                <input type="hidden" name="status" value="On The Way">
+                <button type="submit" class="btn-onway">On The Way</button>
+            </form>
+            <form method="POST" action="/{{ company_key }}/workorders/{{ j.id }}/visit-status">
+                <input type="hidden" name="return_to" value="{{ rt }}">
+                <input type="hidden" name="status" value="Started">
+                <button type="submit" class="btn-start">Started</button>
+            </form>
+            <form method="POST" action="/{{ company_key }}/workorders/{{ j.id }}/visit-status">
+                <input type="hidden" name="return_to" value="{{ rt }}">
+                <input type="hidden" name="status" value="Completed">
+                <button type="submit" class="btn-complete">Visit Completed</button>
+            </form>
+        </div>
+
+        <form method="POST" action="/{{ company_key }}/extraction/{{ j.id }}/log">
+            <div class="section-label" style="margin-top:1rem;">Today's Check-In</div>
+            <textarea class="notes-box" name="notes" placeholder="What did you find? e.g. still damp near the baseboard, repositioned fans..."></textarea>
+            <div class="job-actions">
+                <button type="submit" name="extraction_status" value="Ready for Pickup" class="btn-complete">Mark Ready</button>
+                <button type="submit" name="extraction_status" value="Needs More Time" class="btn-onway">Needs More Time</button>
+                <button type="submit" name="extraction_status" value="Missed Today" class="btn-cancel">Missed Today</button>
+            </div>
+        </form>
+
+        {% if j.open_lines %}
+        <form method="POST" action="/{{ company_key }}/extraction/{{ j.id }}/retrieve">
+            <div class="section-label">Retrieve Equipment</div>
+            {% for line in j.open_lines %}
+            <div class="retrieve-line">
+                <span>{{ line.description or 'Unit' }} (deployed {{ line.deployed_at }})</span>
+                <input type="date" name="retrieved_{{ line.id }}">
+            </div>
+            {% endfor %}
+            <div class="job-actions">
+                <button type="submit" class="btn-start">Retrieve Checked Units</button>
+            </div>
+        </form>
+        {% endif %}
+    </div>
+    {% endfor %}
+{% else %}
+    <div class="job-card empty">No active extraction jobs assigned to you as follow-up tech.</div>
+{% endif %}
 {% endblock %}

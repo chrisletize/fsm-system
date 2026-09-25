@@ -49,13 +49,33 @@
        Tech color moves to the per-tech LED dots below, which also animate
        per-tech to show the CURRENT VISIT's progress -- independent of the
        work order's own status, since one WO can span many visits. */
-    .wo-block .tech-dots { position:absolute; top:3px; right:4px; display:flex; gap:3px; }
-    .tech-dot { width:8px; height:8px; border-radius:50%; box-shadow:0 0 0 1px rgba(0,0,0,.25); }
-    .tech-dot.visit-on-the-way { animation:none; }
-    .tech-dot.visit-started { animation:pulse-slow 1.8s ease-in-out infinite; }
-    .tech-dot.visit-completed { animation:pulse-fast 0.9s ease-in-out infinite; }
-    @keyframes pulse-slow { 0%,100% { opacity:1; } 50% { opacity:.25; } }
-    @keyframes pulse-fast { 0%,100% { opacity:1; } 50% { opacity:.2; } }
+    /* Real LED behavior, not a fade: dark when unlit, an actual glow when
+       lit, brightness/speed doing the signaling rather than hue alone
+       (Chris is mildly colorblind -- red vs. green hue alone wasn't enough).
+       Tech identity moves to a thin ring (--tech-ring) so the fill color is
+       free to mean status. Completed is deliberately the loudest -- biggest
+       glow, fastest pulse -- since that's the one office needs to catch. */
+    .wo-block .tech-dots { position:absolute; top:4px; right:5px; display:flex; gap:6px; }
+    .tech-dot {
+        width:10px; height:10px; border-radius:50%; background:#2b2b2b;
+        box-shadow:0 0 0 2px var(--tech-ring, rgba(255,255,255,.65));
+        transition:background-color .2s, box-shadow .2s;
+    }
+    .tech-dot.visit-on-the-way {
+        background:#00b0ff;
+        box-shadow:0 0 0 2px var(--tech-ring, rgba(255,255,255,.65)), 0 0 6px 2px #00b0ff;
+    }
+    .tech-dot.visit-cancelled { background:#777; }
+    .tech-dot.visit-started { animation:led-red 1.7s ease-in-out infinite; }
+    .tech-dot.visit-completed { animation:led-green 0.85s ease-in-out infinite; }
+    @keyframes led-red {
+        0%, 100% { background:#3a0a0a; box-shadow:0 0 0 2px var(--tech-ring, rgba(255,255,255,.65)); }
+        50%      { background:#ff2020; box-shadow:0 0 0 2px var(--tech-ring, rgba(255,255,255,.65)), 0 0 10px 3px #ff2020; }
+    }
+    @keyframes led-green {
+        0%, 100% { background:#06280f; box-shadow:0 0 0 2px var(--tech-ring, rgba(255,255,255,.65)); }
+        50%      { background:#2bff5e; box-shadow:0 0 0 2px var(--tech-ring, rgba(255,255,255,.65)), 0 0 16px 5px #2bff5e; }
+    }
 
     /* Dashed placeholder showing exactly where a dragged block will land,
        snapped to the grid -- shown live during drag so placement is
@@ -165,7 +185,8 @@ function visitStatusClass(status) {
     if (status === 'On The Way') return 'visit-on-the-way';
     if (status === 'Started') return 'visit-started';
     if (status === 'Completed') return 'visit-completed';
-    return '';
+    if (status === 'Cancelled') return 'visit-cancelled';
+    return ''; // no visit logged yet -- LED stays dark/off
 }
 
 // Guards the 60s background poll from clobbering an in-progress drag --
@@ -339,7 +360,7 @@ function renderDay(data) {
             const dots = (b.techs || []).map(uname => {
                 const color = techColorByUsername[uname] || '#888';
                 const vClass = visitStatusClass((b.visit_status_by_tech || {})[uname]);
-                return `<span class="tech-dot ${vClass}" style="background:${color}" title="${escHtml(uname)}${vClass ? ': ' + escHtml((b.visit_status_by_tech || {})[uname]) : ''}"></span>`;
+                return `<span class="tech-dot ${vClass}" style="--tech-ring:${color}" title="${escHtml(uname)}${vClass ? ': ' + escHtml((b.visit_status_by_tech || {})[uname]) : ''}"></span>`;
             }).join('');
             div.innerHTML = `<div class="tech-dots">${dots}</div>
                               <div><strong>${escHtml(b.customer_name) || 'Internal Task'}</strong> ${badges ? '<span class="badges">' + badges + '</span>' : ''}</div>

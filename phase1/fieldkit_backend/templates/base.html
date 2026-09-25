@@ -558,7 +558,7 @@
             </a>
             {% endif %}
 
-            {% if session.user_role == 'technician' %}
+            {% if session.user_role == 'technician' or session.is_field_tech %}
             <a href="/{{ company_key }}/myday"
                class="subnav-link {% if '/myday' in current_path %}active{% endif %}">
                 My Day

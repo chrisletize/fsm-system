@@ -153,7 +153,7 @@ def get_user_by_username(username):
     cur  = conn.cursor()
     cur.execute("""
         SELECT id, username, email, password_hash, full_name, role,
-               company_access, is_active, last_login
+               company_access, is_active, last_login, is_field_tech
         FROM users WHERE username = %s AND is_active = TRUE
     """, (username,))
     user = cur.fetchone()
@@ -337,6 +337,7 @@ def login():
     session['username']       = user['username']
     session['full_name']      = user['full_name']
     session['user_role']      = user['role']
+    session['is_field_tech']  = user['is_field_tech']
     session['company_access'] = user['company_access']
     update_last_login(username)
 
@@ -4109,6 +4110,22 @@ def _current_visit_statuses(cur, wo_ids):
     return out
 
 
+def _visit_status_allowed(cur, wo_id, target_user, is_office):
+    """A tech may log a visit status for themselves on a job they're
+    actually connected to -- either a dispatch assignment (work_order_techs)
+    or, for an extraction job, being the named follow-up tech (which doesn't
+    require a work_order_techs row -- the follow-up tech is often not the
+    one who was originally dispatched). Office may act for anyone."""
+    if is_office:
+        return True
+    cur.execute("""
+        SELECT 1 FROM work_order_techs WHERE work_order_id = %s AND username = %s
+        UNION
+        SELECT 1 FROM work_orders WHERE id = %s AND followup_tech_username = %s AND deleted_at IS NULL
+    """, (wo_id, target_user, wo_id, target_user))
+    return cur.fetchone() is not None
+
+
 @app.route('/<company_key>/workorders/<int:wo_id>/visit-status', methods=['POST'])
 @login_required
 @company_access_required
@@ -4116,8 +4133,10 @@ def workorder_visit_status(company_key, wo_id):
     """On The Way / Started / Completed / Cancelled for ONE tech's visit to
     this job — independent of the work order's own status (see design
     addendum: visit-status-tracking). A tech may only set their own status,
-    and only on a job they're assigned to; office may set or override any
-    assigned tech's status."""
+    and only on a job they're connected to; office may set or override any
+    tech's status. Used both by My Day (a plain HTML form -- pass
+    return_to to get a redirect back) and, eventually, any JS/API caller
+    (omit return_to to get JSON back)."""
     new_status = request.form.get('status')
     if new_status not in VISIT_STATUSES:
         abort(400)
@@ -4127,23 +4146,19 @@ def workorder_visit_status(company_key, wo_id):
 
     conn = get_db_connection(company_key)
     cur  = conn.cursor()
-    cur.execute("SELECT username FROM work_order_techs WHERE work_order_id = %s", (wo_id,))
-    assigned = {r['username'] for r in cur.fetchall()}
-    if not assigned:
+    cur.execute("SELECT id FROM work_orders WHERE id = %s AND deleted_at IS NULL", (wo_id,))
+    if not cur.fetchone():
         cur.close(); conn.close()
         abort(404)
-
     if target_user != session_user and not is_office:
         cur.close(); conn.close()
         abort(403)
-    if target_user not in assigned and not is_office:
+    if not _visit_status_allowed(cur, wo_id, target_user, is_office):
         cur.close(); conn.close()
-        abort(403)
-    if target_user not in assigned:
-        # Office setting a status for someone not actually assigned isn't
-        # meaningful data -- refuse rather than silently log a phantom visit.
-        cur.close(); conn.close()
-        return jsonify({'ok': False, 'error': f'{target_user} is not assigned to this work order.'}), 400
+        if request.form.get('return_to'):
+            flash(f'{target_user} is not connected to this work order.', 'error')
+            return redirect(return_to_from_request(f'/{company_key}/workorders/{wo_id}'))
+        return jsonify({'ok': False, 'error': f'{target_user} is not connected to this work order.'}), 400
 
     cur.execute("""
         INSERT INTO work_order_visit_status_log (work_order_id, username, status, changed_by)
@@ -4155,82 +4170,11 @@ def workorder_visit_status(company_key, wo_id):
                    after={'work_order_id': wo_id, 'username': target_user, 'status': new_status},
                    changed_by=session_user)
     conn.commit(); cur.close(); conn.close()
+
+    if request.form.get('return_to'):
+        flash(f'Marked {new_status}.', 'success')
+        return redirect(return_to_from_request(f'/{company_key}/workorders/{wo_id}'))
     return jsonify({'ok': True, 'status': new_status, 'changed_at': row['changed_at'].isoformat()})
-
-
-@app.route('/<company_key>/my-jobs')
-@login_required
-@company_access_required
-@with_branding
-def my_jobs(company_key, branding, all_companies, company_access):
-    """Bare-bones, phone-usable page scoped to 'my assigned jobs' -- exposes
-    the same visit-status and extraction actions office already has, as
-    plain buttons. Not a preview of the native mobile app: it exists so the
-    whole flow can be exercised and validated now, ahead of that build, and
-    doubles as office's own manual-entry option. See design addendum:
-    visit-status-tracking."""
-    username = session.get('username')
-    today = date.today()
-    conn = get_db_connection(company_key)
-    cur  = conn.cursor()
-
-    cur.execute("""
-        SELECT wo.id, wo.work_order_number, wo.work_site_label, wo.status,
-               wo.arrival_window_start, wo.priority,
-               c.property_name AS customer_name
-        FROM work_orders wo
-        JOIN work_order_techs wt ON wt.work_order_id = wo.id AND wt.username = %s
-        LEFT JOIN customers c ON c.id = wo.customer_id
-        WHERE wo.deleted_at IS NULL AND wo.start_date = %s AND wo.status = 'Scheduled'
-        ORDER BY wo.arrival_window_start NULLS LAST, wo.id
-    """, (username, today))
-    todays_jobs = cur.fetchall()
-
-    extraction_jobs = []
-    if company_key not in COMPANIES_WITHOUT_EXTRACTION:
-        cur.execute("""
-            SELECT wo.id, wo.work_order_number, wo.work_site_label, wo.extraction_status,
-                   wo.extraction_started_at, c.property_name AS customer_name
-            FROM work_orders wo
-            LEFT JOIN customers c ON c.id = wo.customer_id
-            WHERE wo.deleted_at IS NULL AND wo.status = 'Extraction Active'
-              AND wo.followup_tech_username = %s
-            ORDER BY wo.extraction_started_at ASC NULLS LAST
-        """, (username,))
-        extraction_jobs = cur.fetchall()
-
-    wo_ids = [w['id'] for w in todays_jobs] + [w['id'] for w in extraction_jobs]
-    visit_statuses = _current_visit_statuses(cur, wo_ids)
-
-    open_lines_by_wo = {}
-    ex_ids = [w['id'] for w in extraction_jobs]
-    if ex_ids:
-        cur.execute("""
-            SELECT id, work_order_id, description, deployed_at
-            FROM work_order_line_items
-            WHERE work_order_id = ANY(%s) AND deleted_at IS NULL
-              AND equipment_unit_id IS NOT NULL AND retrieved_at IS NULL
-            ORDER BY deployed_at
-        """, (ex_ids,))
-        for row in cur.fetchall():
-            open_lines_by_wo.setdefault(row['work_order_id'], []).append(dict(row))
-    cur.close(); conn.close()
-
-    todays_jobs = [dict(w, my_visit_status=visit_statuses.get(w['id'], {}).get(username)) for w in todays_jobs]
-    extraction_jobs = [
-        dict(w, my_visit_status=visit_statuses.get(w['id'], {}).get(username),
-             day_count=_extraction_day_count(w['extraction_started_at']),
-             open_lines=open_lines_by_wo.get(w['id'], []))
-        for w in extraction_jobs
-    ]
-
-    return render_template('my_jobs.html',
-        branding=branding, company_key=company_key,
-        company_access=company_access, all_companies=all_companies,
-        todays_jobs=todays_jobs, extraction_jobs=extraction_jobs,
-        visit_statuses=VISIT_STATUSES, log_statuses=EXTRACTION_LOG_STATUSES,
-        today=today,
-    )
 
 
 # ============================================================================
@@ -4604,7 +4548,7 @@ def extraction_log(company_key, wo_id):
             notes = EXCLUDED.notes
     """, (wo_id, new_status, username, notes, username))
     conn.commit(); cur.close(); conn.close()
-    dest = 'extraction' if session.get('user_role') in ('admin', 'manager', 'office') else 'my-jobs'
+    dest = 'extraction' if session.get('user_role') in ('admin', 'manager', 'office') else 'myday'
     return redirect(f'/{company_key}/{dest}')
 
 
@@ -4696,7 +4640,7 @@ def extraction_retrieve(company_key, wo_id):
     else:
         flash(f'Retrieved. {still_open} unit(s) still deployed — job stays active.', 'success')
     conn.commit(); cur.close(); conn.close()
-    dest = 'extraction' if session.get('user_role') in ('admin', 'manager', 'office') else 'my-jobs'
+    dest = 'extraction' if session.get('user_role') in ('admin', 'manager', 'office') else 'myday'
     return redirect(f'/{company_key}/{dest}')
 
 
@@ -4857,22 +4801,28 @@ def report_daysheet(company_key, branding, all_companies, company_access):
 
 
 # ============================================================================
-# My Day  (technician only, directive §5.4 -- the office-web stand-in for
-# mobile status updates: read-only day sheet + WO detail scoped to the
-# logged-in tech's own assignments, plus the three mobile-reserved statuses
-# WO_OFFICE_STATUSES deliberately excludes: On The Way / In Progress / Completed)
+# My Day  (technician + field techs -- the office-web stand-in for mobile
+# status updates, until the native app exists. Day sheet scoped to the
+# logged-in tech's own assignments, PLUS any extraction job they're the
+# follow-up tech on regardless of date, since those persist across many
+# days on their original start_date. Visit status (On The Way / Started /
+# Completed / Cancelled) is set via the shared workorder_visit_status route
+# -- see design addendum: visit-status-tracking. Retrofitted 2026-09:
+# this page used to write MYDAY_STATUSES directly onto work_orders.status
+# and explicitly excluded extraction jobs to avoid corrupting the
+# multi-day Extraction Active state; the visit-status log makes that
+# exclusion unnecessary, since a visit completing no longer touches the
+# work order's own status at all.)
 # ============================================================================
-
-MYDAY_STATUSES = ('On The Way', 'In Progress', 'Completed')
 
 @app.route('/<company_key>/myday')
 @login_required
 @company_access_required
 @with_branding
 def myday(company_key, branding, all_companies, company_access):
-    if session.get('user_role') != 'technician':
-        abort(403)
     username = session.get('username')
+    if session.get('user_role') != 'technician' and not session.get('is_field_tech'):
+        abort(403)
     target_date = request.args.get('date') or date.today().isoformat()
 
     conn = get_db_connection(company_key)
@@ -4896,80 +4846,68 @@ def myday(company_key, branding, all_companies, company_access):
     """, (username, target_date))
     jobs = [dict(r) for r in cur.fetchall()]
 
-    wo_ids = [j['id'] for j in jobs]
+    extraction_jobs = []
+    if company_key not in COMPANIES_WITHOUT_EXTRACTION:
+        cur.execute("""
+            SELECT wo.id, wo.work_order_number, wo.work_site_label, wo.extraction_status,
+                   wo.extraction_started_at, c.property_name AS customer_name
+            FROM work_orders wo
+            LEFT JOIN customers c ON c.id = wo.customer_id
+            WHERE wo.deleted_at IS NULL AND wo.status = 'Extraction Active'
+              AND wo.followup_tech_username = %s
+            ORDER BY wo.extraction_started_at ASC NULLS LAST
+        """, (username,))
+        extraction_jobs = [dict(r) for r in cur.fetchall()]
+
+    wo_ids = [j['id'] for j in jobs] + [j['id'] for j in extraction_jobs]
+    visit_statuses = _current_visit_statuses(cur, wo_ids)
+
     lines_by_wo = {}
-    if wo_ids:
+    if jobs:
         cur.execute("""
             SELECT li.work_order_id, li.description, ci.name AS catalog_name
             FROM work_order_line_items li
             JOIN catalog_items ci ON ci.id = li.catalog_item_id
             WHERE li.work_order_id = ANY(%s) AND li.deleted_at IS NULL
             ORDER BY li.sort_order, li.id
-        """, (wo_ids,))
+        """, ([j['id'] for j in jobs],))
         for row in cur.fetchall():
             lines_by_wo.setdefault(row['work_order_id'], []).append(row['description'] or row['catalog_name'])
+
+    open_lines_by_wo = {}
+    ex_ids = [j['id'] for j in extraction_jobs]
+    if ex_ids:
+        cur.execute("""
+            SELECT id, work_order_id, description, deployed_at
+            FROM work_order_line_items
+            WHERE work_order_id = ANY(%s) AND deleted_at IS NULL
+              AND equipment_unit_id IS NOT NULL AND retrieved_at IS NULL
+            ORDER BY deployed_at
+        """, (ex_ids,))
+        for row in cur.fetchall():
+            open_lines_by_wo.setdefault(row['work_order_id'], []).append(dict(row))
     cur.close(); conn.close()
 
     for j in jobs:
         j['address_display'] = ', '.join(filter(None, [j['address'], j['city'], j['state']]))
         j['line_descriptions'] = lines_by_wo.get(j['id'], [])
-        # The extraction lifecycle (Increment 2.2) has its own daily-log/retrieve
-        # workflow -- My Day's plain 3-button flow isn't the right surface for
-        # it, so those WOs render read-only here, same "don't build a second
-        # half-implementation of an existing workflow" instinct as elsewhere
-        # in this build.
-        j['actionable'] = (not j['is_extraction']) and j['status'] in ('Scheduled',) + MYDAY_STATUSES[:-1]
+        j['my_visit_status'] = visit_statuses.get(j['id'], {}).get(username)
+        # Visit status no longer touches work_orders.status, so there's no
+        # more reason to hide extraction jobs here the way this page used to.
+        j['actionable'] = j['status'] not in ('Completed', 'No Charge', 'Cancelled', 'Invoiced')
+
+    for j in extraction_jobs:
+        j['my_visit_status'] = visit_statuses.get(j['id'], {}).get(username)
+        j['day_count'] = _extraction_day_count(j['extraction_started_at'])
+        j['open_lines'] = open_lines_by_wo.get(j['id'], [])
 
     return render_template('myday.html',
         branding=branding, company_key=company_key,
         company_access=company_access, all_companies=all_companies,
-        jobs=jobs, target_date=target_date, today=date.today().isoformat(),
-        myday_statuses=MYDAY_STATUSES,
+        jobs=jobs, extraction_jobs=extraction_jobs,
+        target_date=target_date, today=date.today().isoformat(),
+        visit_statuses=VISIT_STATUSES, log_statuses=EXTRACTION_LOG_STATUSES,
     )
-
-
-@app.route('/<company_key>/myday/<int:wo_id>/status', methods=['POST'])
-@login_required
-@company_access_required
-def myday_status(company_key, wo_id):
-    if session.get('user_role') != 'technician':
-        abort(403)
-    username = session.get('username')
-    new_status = request.form.get('status')
-    if new_status not in MYDAY_STATUSES:
-        abort(400)
-
-    conn = get_db_connection(company_key)
-    cur  = conn.cursor()
-    cur.execute("""
-        SELECT wo.status FROM work_orders wo
-        JOIN work_order_techs wt ON wt.work_order_id = wo.id AND wt.username = %s
-        WHERE wo.id = %s AND wo.deleted_at IS NULL
-    """, (username, wo_id))
-    wo = cur.fetchone()
-    if not wo:
-        cur.close(); conn.close()
-        abort(404)  # doesn't exist, or this tech isn't assigned to it
-    if wo['status'] not in ('Scheduled',) + MYDAY_STATUSES[:-1]:
-        cur.close(); conn.close()
-        flash('This job can no longer be updated from My Day.', 'error')
-        return redirect(f'/{company_key}/myday')
-
-    cur.execute("""
-        UPDATE work_orders SET status = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
-        WHERE id = %s
-    """, (new_status, username, wo_id))
-    cur.execute("""
-        INSERT INTO work_order_status_history (work_order_id, status, changed_by, notes)
-        VALUES (%s, %s, %s, 'Updated from My Day (office-web mobile stand-in)')
-    """, (wo_id, new_status, username))
-    _record_audit(cur, 'work_orders', wo_id, 'update',
-                   before={'status': wo['status']}, after={'status': new_status}, changed_by=username)
-    conn.commit(); cur.close(); conn.close()
-    flash(f'Marked {new_status}.', 'success')
-
-    redirect_date = request.form.get('date')
-    return redirect(f'/{company_key}/myday' + (f'?date={redirect_date}' if redirect_date else ''))
 
 
 @app.route('/<company_key>/reports/hours')
