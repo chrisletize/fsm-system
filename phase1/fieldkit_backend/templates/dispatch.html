@@ -45,6 +45,18 @@
     .wo-block.resizing { box-shadow:0 4px 12px rgba(0,0,0,.3); }
     .wo-block.landing { transition:left .14s ease-out, top .14s ease-out; }
 
+    /* Block fill = work order status (design addendum: visit-status-tracking).
+       Tech color moves to the per-tech LED dots below, which also animate
+       per-tech to show the CURRENT VISIT's progress -- independent of the
+       work order's own status, since one WO can span many visits. */
+    .wo-block .tech-dots { position:absolute; top:3px; right:4px; display:flex; gap:3px; }
+    .tech-dot { width:8px; height:8px; border-radius:50%; box-shadow:0 0 0 1px rgba(0,0,0,.25); }
+    .tech-dot.visit-on-the-way { animation:none; }
+    .tech-dot.visit-started { animation:pulse-slow 1.8s ease-in-out infinite; }
+    .tech-dot.visit-completed { animation:pulse-fast 0.9s ease-in-out infinite; }
+    @keyframes pulse-slow { 0%,100% { opacity:1; } 50% { opacity:.25; } }
+    @keyframes pulse-fast { 0%,100% { opacity:1; } 50% { opacity:.2; } }
+
     /* Dashed placeholder showing exactly where a dragged block will land,
        snapped to the grid -- shown live during drag so placement is
        predictable instead of "wherever the mouse happened to be" (Chris,
@@ -136,6 +148,29 @@ function returnToQs() {
 // "new WO here" menu, so all three agree on the same grid.
 const SNAP_MIN = 30;
 const MOVE_THRESHOLD_PX = 4;
+
+// Block fill = work order status (design addendum: visit-status-tracking).
+// Tech color moved to the per-tech LED dots -- see renderDay().
+const STATUS_COLORS = {
+    'Scheduled':         '#5b7fb5',
+    'Extraction Active': '#1d5c9e',
+    'Completed':         '#3f9142',
+    'Invoiced':          '#2c6e2f',
+    'No Charge':         '#8a8a8a',
+    'Cancelled':         '#b0492e',
+};
+function statusColor(status) { return STATUS_COLORS[status] || '#888'; }
+
+function visitStatusClass(status) {
+    if (status === 'On The Way') return 'visit-on-the-way';
+    if (status === 'Started') return 'visit-started';
+    if (status === 'Completed') return 'visit-completed';
+    return '';
+}
+
+// Guards the 60s background poll from clobbering an in-progress drag --
+// set true on any block mousedown, cleared on mouseup (wireDrag below).
+let interacting = false;
 
 document.getElementById('dateInput').addEventListener('change', e => navigate(e.target.value, viewMode));
 document.getElementById('todayBtn').addEventListener('click', () => navigate(new Date().toISOString().slice(0,10), viewMode));
@@ -276,6 +311,8 @@ function renderDay(data) {
     rowsEl.innerHTML = '';
     const rows = data.techs.map(t => ({ username: t.username, label: t.full_name, color: t.color_hex || '#888' }));
     rows.push({ username: '', label: 'Unassigned', color: '#999', unassigned: true });
+    const techColorByUsername = {};
+    rows.forEach(r => { if (r.username) techColorByUsername[r.username] = r.color; });
 
     rows.forEach(row => {
         const rowEl = document.createElement('div');
@@ -296,10 +333,16 @@ function renderDay(data) {
             div.className = 'wo-block' + (b.collides_with ? ' collision' : '') + (b.is_delinquent ? ' delinquent' : '');
             div.style.left = left + 'px';
             div.style.width = Math.max(width, 20) + 'px';
-            div.style.background = row.color;
+            div.style.background = statusColor(b.status);
             div.dataset.woId = b.id;
             const badges = [b.priority !== 'Normal' ? b.priority[0] : '', b.has_equipment ? '💧' : '', b.is_new_customer ? '🆕' : '', b.is_delinquent ? '🔴' : '', b.is_callback ? '↩️' : ''].filter(Boolean).join(' ');
-            div.innerHTML = `<div><strong>${escHtml(b.customer_name) || 'Internal Task'}</strong> ${badges ? '<span class="badges">' + badges + '</span>' : ''}</div>
+            const dots = (b.techs || []).map(uname => {
+                const color = techColorByUsername[uname] || '#888';
+                const vClass = visitStatusClass((b.visit_status_by_tech || {})[uname]);
+                return `<span class="tech-dot ${vClass}" style="background:${color}" title="${escHtml(uname)}${vClass ? ': ' + escHtml((b.visit_status_by_tech || {})[uname]) : ''}"></span>`;
+            }).join('');
+            div.innerHTML = `<div class="tech-dots">${dots}</div>
+                              <div><strong>${escHtml(b.customer_name) || 'Internal Task'}</strong> ${badges ? '<span class="badges">' + badges + '</span>' : ''}</div>
                               <div class="wo-number">${escHtml(b.work_order_number)}</div>
                               <div class="resize-handle"></div>`;
             div.addEventListener('click', e => {
@@ -395,6 +438,7 @@ function wireDrag(div, block, ctx) {
     div.addEventListener('mousedown', e => {
         if (e.target.closest('.resize-handle')) return;
         if (e.button !== 0) return;
+        interacting = true;
         const startClientX = e.clientX, startClientY = e.clientY;
         const origRect = div.getBoundingClientRect();
         const grabOffsetX = startClientX - origRect.left;
@@ -453,6 +497,7 @@ function wireDrag(div, block, ctx) {
             document.removeEventListener('mousemove', onMove);
             document.removeEventListener('mouseup', onUp);
             clearDragVisuals();
+            interacting = false;
             if (!dragging) return; // a plain click -- let the click event open the popover as usual
 
             div.classList.remove('dragging');
@@ -584,5 +629,14 @@ function renderWeek(days, results) {
 }
 
 if (viewMode === 'week') { loadWeek(); } else { loadDay(); }
+
+// Background refresh so a tech's phone-side status tap shows up without the
+// office reloading the page. 60s is plenty -- explicitly agreed this
+// doesn't need to be instant (design addendum: visit-status-tracking).
+// Skipped mid-drag (see `interacting`) so a poll can't clobber a block the
+// office is actively moving.
+if (viewMode !== 'week') {
+    setInterval(() => { if (!interacting) loadDay(); }, 60000);
+}
 </script>
 {% endblock %}

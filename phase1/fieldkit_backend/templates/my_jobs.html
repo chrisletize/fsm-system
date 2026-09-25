@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% from "_macros.html" import help_panel %}
+{% block title %}My Jobs — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    body { background:#f7f7f7; }
+    .page-header h1 { font-size:1.4rem; color:{{ branding.color_primary }}; margin-bottom:.25rem; }
+    .page-header p { color:#888; font-size:.85rem; margin-bottom:1rem; }
+    .job-card { background:white; border:1px solid #eee; border-radius:8px; padding:1rem; margin-bottom:1rem; }
+    .job-card h3 { font-size:1.05rem; margin-bottom:.15rem; }
+    .job-card .meta { font-size:.8rem; color:#888; margin-bottom:.6rem; }
+    .job-card .meta a { color:inherit; }
+    .status-pill { display:inline-block; padding:.2rem .55rem; border-radius:12px; font-size:.72rem;
+                   font-weight:600; background:#eee; color:#555; margin-bottom:.6rem; }
+    .btn-row { display:flex; flex-wrap:wrap; gap:.5rem; margin-bottom:.4rem; }
+    .btn-row form { flex:1; min-width:100px; }
+    .btn-row button { width:100%; padding:.65rem .5rem; border-radius:6px; border:1px solid #ddd;
+                       background:#f7f7f7; font-size:.82rem; cursor:pointer; }
+    .btn-row button.active { background:{{ branding.color_primary }}; color:white; border-color:{{ branding.color_primary }}; }
+    textarea.notes-box { width:100%; min-height:4.5rem; padding:.5rem; border:1px solid #ddd; border-radius:6px;
+                          font-size:.85rem; margin-bottom:.6rem; font-family:inherit; }
+    .section-label { font-size:.72rem; text-transform:uppercase; letter-spacing:.04em; color:#999; margin:.7rem 0 .3rem; }
+    .retrieve-line { display:flex; justify-content:space-between; align-items:center; gap:.5rem; margin-bottom:.4rem; font-size:.82rem; }
+    .retrieve-line input[type=date] { padding:.3rem; border:1px solid #ddd; border-radius:4px; }
+    .escalated { color:#c0392b; font-weight:600; }
+    .empty-note { color:#aaa; text-align:center; padding:1.5rem; font-size:.85rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+{% call help_panel('About this page') %}
+<p>This is a bare-bones stand-in for the native mobile app's daily status controls, scoped to
+   your own assigned jobs. On The Way / Started / Completed / Cancelled track <strong>this
+   visit</strong> only — they never change the work order's own status. For an active extraction
+   job, the Ready for Pickup / Needs More Time / Missed Today / Retrieve actions still control the
+   job itself, same as the office's Extraction Queue.</p>
+{% endcall %}
+
+<div class="page-header">
+    <h1>My Jobs — {{ branding.name }}</h1>
+    <p>{{ today.strftime('%A, %B %d') }}</p>
+</div>
+
+<div class="section-label">Today's Jobs</div>
+{% if todays_jobs %}
+    {% for j in todays_jobs %}
+    <div class="job-card">
+        <h3><a href="/{{ company_key }}/workorders/{{ j.id }}">{{ j.work_order_number }}</a> — {{ j.customer_name or 'Internal Task' }}</h3>
+        <div class="meta">
+            {{ j.work_site_label or '' }}
+            {% if j.arrival_window_start %} · arrival {{ j.arrival_window_start.strftime('%-I:%M %p') }}{% endif %}
+            {% if j.priority != 'Normal' %} · <strong>{{ j.priority }}</strong>{% endif %}
+        </div>
+        <div class="status-pill">{{ j.my_visit_status.status if j.my_visit_status else 'Not started' }}</div>
+        <div class="btn-row">
+            {% for s in visit_statuses %}
+            <form method="POST" action="/{{ company_key }}/workorders/{{ j.id }}/visit-status">
+                <input type="hidden" name="status" value="{{ s }}">
+                <button type="submit" class="{{ 'active' if j.my_visit_status and j.my_visit_status.status == s }}">{{ s }}</button>
+            </form>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+{% else %}
+    <div class="empty-note">No jobs scheduled for you today.</div>
+{% endif %}
+
+<div class="section-label">Extraction Follow-Ups Assigned to Me</div>
+{% if extraction_jobs %}
+    {% for j in extraction_jobs %}
+    <div class="job-card">
+        <h3><a href="/{{ company_key }}/workorders/{{ j.id }}">{{ j.work_order_number }}</a> — {{ j.customer_name or 'Internal Task' }}</h3>
+        <div class="meta">
+            {{ j.work_site_label or '' }} · Day {{ j.day_count }}
+            {% if j.day_count and j.day_count >= 5 %}<span class="escalated"> (escalated)</span>{% endif %}
+        </div>
+        <div class="status-pill">Visit: {{ j.my_visit_status.status if j.my_visit_status else 'Not started' }}</div>
+        <div class="btn-row">
+            {% for s in visit_statuses %}
+            <form method="POST" action="/{{ company_key }}/workorders/{{ j.id }}/visit-status">
+                <input type="hidden" name="status" value="{{ s }}">
+                <button type="submit" class="{{ 'active' if j.my_visit_status and j.my_visit_status.status == s }}">{{ s }}</button>
+            </form>
+            {% endfor %}
+        </div>
+
+        <form method="POST" action="/{{ company_key }}/extraction/{{ j.id }}/log">
+            <div class="section-label" style="margin-top:.8rem;">Today's Check-In (currently: {{ j.extraction_status or '—' }})</div>
+            <textarea class="notes-box" name="notes" placeholder="What did you find? e.g. still damp near the baseboard, repositioned fans..."></textarea>
+            <div class="btn-row">
+                <button type="submit" name="extraction_status" value="Ready for Pickup">Mark Ready</button>
+                <button type="submit" name="extraction_status" value="Needs More Time">Needs More Time</button>
+                <button type="submit" name="extraction_status" value="Missed Today">Missed Today</button>
+            </div>
+        </form>
+
+        {% if j.open_lines %}
+        <form method="POST" action="/{{ company_key }}/extraction/{{ j.id }}/retrieve">
+            <div class="section-label">Retrieve Equipment</div>
+            {% for line in j.open_lines %}
+            <div class="retrieve-line">
+                <span>{{ line.description or 'Unit' }} (deployed {{ line.deployed_at }})</span>
+                <input type="date" name="retrieved_{{ line.id }}">
+            </div>
+            {% endfor %}
+            <div class="btn-row">
+                <button type="submit">Retrieve Checked Units</button>
+            </div>
+        </form>
+        {% endif %}
+    </div>
+    {% endfor %}
+{% else %}
+    <div class="empty-note">No active extraction jobs assigned to you as follow-up tech.</div>
+{% endif %}
+{% endblock %}
