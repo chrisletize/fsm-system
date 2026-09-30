@@ -56,6 +56,16 @@
             text-decoration: none;
         }
         .open-btn:hover { text-decoration: underline; }
+        .overview-banner {
+            display: flex; justify-content: space-between; align-items: center;
+            background: white; border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+            padding: 1rem 1.25rem; margin-bottom: 1.75rem; text-decoration: none; color: inherit;
+            transition: box-shadow 0.15s;
+        }
+        .overview-banner:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.15); }
+        .overview-banner .title { font-weight: 600; color: #2C2C2C; }
+        .overview-banner .sub { font-size: 0.85rem; color: #888; margin-top: 0.15rem; }
+        .overview-banner .arrow { font-size: 1.3rem; color: #aaa; }
     </style>
 </head>
 <body>
@@ -73,9 +83,19 @@
             <p>Select a company to open it — each opens in a new tab so you can work across companies simultaneously.</p>
         </div>
 
+        {% if session.user_role in ('admin', 'manager', 'salesperson') %}
+        <a class="overview-banner" href="/sales-overview">
+            <div>
+                <div class="title">Sales Overview — all companies</div>
+                <div class="sub">Overdue and the next 5 days of follow-ups, across every company you have access to.</div>
+            </div>
+            <span class="arrow">→</span>
+        </a>
+        {% endif %}
+
         <div class="company-grid">
             {% for company in companies %}
-            <a class="company-card" href="/{{ company.key }}/dashboard" target="_blank" rel="noopener">
+            <a class="company-card" href="/{{ company.key }}/{{ 'sales' if session.user_role == 'salesperson' else 'dashboard' }}" target="_blank" rel="noopener">
                 <div class="card-header" style="background: {{ company.color_primary }};">
                     <h3>{{ company.name }}</h3>
                 </div>
@@ -83,7 +103,7 @@
                     <div class="stat" style="color: {{ company.color_primary }};">{{ company.count }}</div>
                     <div class="stat-label">Active Customers</div>
                     <span class="open-btn" style="color: {{ company.color_primary }};">
-                        Open dashboard →
+                        {{ 'Open sales →' if session.user_role == 'salesperson' else 'Open dashboard →' }}
                     </span>
                 </div>
             </a>

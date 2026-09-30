@@ -68,6 +68,23 @@
             {% endfor %}
         </select>
         {% if not property_name %}<div class="sub">Pick a property first to see its contacts.</div>{% endif %}
+
+        <button type="button" id="toggleNewContact"
+                style="background:none; border:none; padding:0; margin-top:.5rem; text-align:left;
+                       color:{{ branding.color_primary }}; cursor:pointer; font-size:.88rem; text-decoration:underline;">
+            + Someone not on this list
+        </button>
+
+        <div id="newContactBlock" style="display:none; flex-direction:column; gap:.6rem; margin-top:.6rem;
+                    border:1px solid #eee; border-radius:8px; padding:.85rem; background:#fafafa;">
+            <div style="display:flex; gap:.5rem;">
+                <input type="text" id="newContactFirst" placeholder="First name">
+                <input type="text" id="newContactLast" placeholder="Last name">
+            </div>
+            <input type="text" id="newContactTitle" placeholder="Title (optional) — Property Manager, Maintenance…">
+            <button type="button" id="addContactBtn" class="btn btn-secondary" style="width:100%;">Add &amp; Select</button>
+            <div id="contactError" style="display:none; color:#c33; font-size:.85rem;"></div>
+        </div>
     </div>
 
     <div class="form-group">
@@ -136,6 +153,68 @@
     function syncDormant() { dormantBlock.classList.toggle('open', dormantCheck.checked); }
     dormantCheck.addEventListener('change', syncDormant);
     syncDormant();
+
+    var contactSelect = document.getElementById('contactSelect');
+    var toggleNewContact = document.getElementById('toggleNewContact');
+    var newContactBlock = document.getElementById('newContactBlock');
+    var addContactBtn = document.getElementById('addContactBtn');
+    var contactError = document.getElementById('contactError');
+    toggleNewContact.addEventListener('click', function() {
+        var open = newContactBlock.style.display === 'flex';
+        newContactBlock.style.display = open ? 'none' : 'flex';
+    });
+    addContactBtn.addEventListener('click', function() {
+        var first = document.getElementById('newContactFirst').value.trim();
+        var last = document.getElementById('newContactLast').value.trim();
+        var title = document.getElementById('newContactTitle').value.trim();
+        var propIdField = document.querySelector('[name="property_id"]');
+        var propTypeField = document.querySelector('[name="property_type"]');
+        var propId = propIdField ? propIdField.value : '';
+        var propType = propTypeField ? propTypeField.value : '';
+        contactError.style.display = 'none';
+        if (!propId || !propType) {
+            contactError.textContent = 'Pick a property above first.';
+            contactError.style.display = 'block';
+            return;
+        }
+        if (!first || !last) {
+            contactError.textContent = 'First and last name are required.';
+            contactError.style.display = 'block';
+            return;
+        }
+        addContactBtn.disabled = true;
+        var body = 'first_name=' + encodeURIComponent(first) + '&last_name=' + encodeURIComponent(last) +
+                   '&title=' + encodeURIComponent(title) + '&current_property_id=' + encodeURIComponent(propId) +
+                   '&current_property_type=' + encodeURIComponent(propType);
+        fetch('/{{ company_key }}/sales/contacts/quick-add', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: body
+        })
+        .then(function(r) { return r.json().then(function(data) { return {ok: r.ok, data: data}; }); })
+        .then(function(res) {
+            addContactBtn.disabled = false;
+            if (!res.ok) {
+                contactError.textContent = res.data.error || 'Could not add contact.';
+                contactError.style.display = 'block';
+                return;
+            }
+            var opt = document.createElement('option');
+            opt.value = res.data.id;
+            opt.textContent = res.data.name;
+            opt.selected = true;
+            contactSelect.appendChild(opt);
+            document.getElementById('newContactFirst').value = '';
+            document.getElementById('newContactLast').value = '';
+            document.getElementById('newContactTitle').value = '';
+            newContactBlock.style.display = 'none';
+        })
+        .catch(function() {
+            addContactBtn.disabled = false;
+            contactError.textContent = 'Could not add contact — check your connection.';
+            contactError.style.display = 'block';
+        });
+    });
 
     {% if not property_name %}
     var input = document.getElementById('propertySearch');

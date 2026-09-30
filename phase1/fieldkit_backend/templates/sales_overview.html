@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}Sales Overview — All Companies{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { margin-bottom:.35rem; }
+    .page-header h1 { font-size:1.6rem; color:#2C2C2C; }
+    .page-sub { color:#888; font-size:.9rem; margin-bottom:1.25rem; }
+    .company-pills { display:flex; gap:.5rem; flex-wrap:wrap; margin-bottom:1.5rem; }
+    .company-pill { padding:.35rem .9rem; border-radius:14px; font-size:.82rem; font-weight:600; color:white; text-decoration:none; }
+    .overdue-card { background:#fff6f6; border:1px solid #f0c5c5; border-radius:8px; padding:1rem 1.25rem; margin-bottom:1.75rem; }
+    .overdue-card h2 { color:#a32d2d; font-size:1rem; margin-bottom:.75rem; }
+    .day-strip { display:grid; grid-template-columns:repeat(5, 1fr); gap:1rem; }
+    @media (max-width:900px) { .day-strip { grid-template-columns:1fr; } }
+    .day-col { background:white; border:1px solid #eee; border-radius:8px; padding:.9rem; }
+    .day-col.is-today { border-color:#bbb; box-shadow:0 0 0 1px #bbb inset; }
+    .day-col h3 { font-size:.8rem; color:#777; margin-bottom:.7rem; text-transform:uppercase; letter-spacing:.03em; }
+    .day-col h3 .date { font-weight:400; text-transform:none; letter-spacing:0; color:#aaa; }
+    .visit-item { padding:.55rem 0; border-bottom:1px solid #f5f5f5; font-size:.85rem; }
+    .visit-item:last-child { border-bottom:none; }
+    .visit-company-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:.4rem; flex-shrink:0; }
+    .visit-name { font-weight:600; color:#333; }
+    .visit-sub { color:#888; font-size:.78rem; margin-top:.1rem; }
+    .visit-sub a { text-decoration:none; }
+    .empty { color:#bbb; font-size:.82rem; padding:.3rem 0; }
+    .check-input { width:100%; padding:.75rem .9rem; border:1px solid #ddd; border-radius:6px; font-size:1rem; font-family:inherit; }
+    .check-hit { display:flex; align-items:flex-start; gap:.5rem; padding:.5rem 0; border-bottom:1px solid #f5f5f5; }
+    .check-hit:last-child { border-bottom:none; }
+    .check-dot { display:inline-block; width:12px; height:12px; border-radius:50%; margin-top:.2rem; flex-shrink:0; }
+    .check-company { font-weight:600; font-size:.88rem; }
+    .check-match { color:#888; font-size:.8rem; }
+    .check-empty { color:#888; font-size:.88rem; padding:.4rem 0; }
+    .check-none { color:#2d8a4e; font-size:.88rem; padding:.4rem 0; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header"><h1>Sales Overview</h1></div>
+<div class="page-sub">Overdue and the next 5 days of follow-ups, across every company you have access to.</div>
+
+<div class="company-pills">
+    {% for co in companies %}
+    <a href="/{{ co.key }}/sales" class="company-pill" style="background:{{ co.color_primary }};">{{ co.short_name or co.key }}</a>
+    {% endfor %}
+</div>
+
+<div class="card">
+    <h2 style="font-size:1rem;color:#444;margin-bottom:.6rem;">Customer Check</h2>
+    <div class="page-sub" style="margin-bottom:.6rem;">Is this property already a customer anywhere? Read-only — checks every company you have access to.</div>
+    <input type="text" id="custCheckInput" class="check-input" autocomplete="off" placeholder="Type a property name…">
+    <div id="custCheckResults" style="margin-top:.75rem;"></div>
+</div>
+
+{% if overdue %}
+<div class="overdue-card">
+    <h2>Overdue ({{ overdue|length }})</h2>
+    {% for r in overdue %}
+    <div class="visit-item">
+        <span class="visit-company-dot" style="background:{{ r.company_color }};"></span>
+        <span class="visit-name">{{ r.property_name or 'Unknown property' }}</span>
+        <div class="visit-sub">
+            {{ r.company_name }}{% if r.visit_tag %} · {{ r.visit_tag }}{% endif %} · due {{ r.follow_up_date.strftime('%b %-d') }}
+            · <a href="/{{ r.company_key }}/sales/visits/log?property_type={{ r.property_type }}&property_id={{ r.property_id }}" style="color:{{ r.company_color }};">Log Visit</a>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<div class="day-strip">
+    {% for day in days %}
+    <div class="day-col {% if loop.first %}is-today{% endif %}">
+        <h3>{{ day.label }} <span class="date">{{ day.date.strftime('%b %-d') }}</span></h3>
+        {% for r in day.visits %}
+        <div class="visit-item">
+            <span class="visit-company-dot" style="background:{{ r.company_color }};"></span>
+            <span class="visit-name">{{ r.property_name or 'Unknown property' }}</span>
+            <div class="visit-sub">{{ r.company_name }}{% if r.visit_tag %} · {{ r.visit_tag }}{% endif %}</div>
+            <div class="visit-sub">
+                <a href="/{{ r.company_key }}/sales/visits/log?property_type={{ r.property_type }}&property_id={{ r.property_id }}" style="color:{{ r.company_color }};">Log Visit</a>
+            </div>
+        </div>
+        {% else %}
+        <div class="empty">Nothing due.</div>
+        {% endfor %}
+    </div>
+    {% endfor %}
+</div>
+
+<script>
+(function() {
+    var input = document.getElementById('custCheckInput');
+    var results = document.getElementById('custCheckResults');
+    var timer = null;
+
+    function esc(s) {
+        return String(s).replace(/[&<>"']/g, function(c){
+            return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+        });
+    }
+
+    function render(data) {
+        var hits = data.results || [];
+        if (hits.length === 0) {
+            results.innerHTML = '<div class="check-none">No match in any company.</div>';
+            return;
+        }
+        results.innerHTML = hits.map(function(h) {
+            var matchText = h.matches.map(function(m) {
+                return esc(m.name) + (m.city ? ' (' + esc(m.city) + (m.state ? ', ' + esc(m.state) : '') + ')' : '');
+            }).join('; ');
+            return '<div class="check-hit">' +
+                   '<span class="check-dot" style="background:' + h.color + ';"></span>' +
+                   '<div><div class="check-company">' + esc(h.company_name) + '</div>' +
+                   '<div class="check-match">' + matchText + '</div></div></div>';
+        }).join('');
+    }
+
+    input.addEventListener('input', function() {
+        var q = input.value.trim();
+        clearTimeout(timer);
+        if (q.length < 2) { results.innerHTML = ''; return; }
+        timer = setTimeout(function() {
+            fetch('/sales-overview/customer-check?q=' + encodeURIComponent(q))
+                .then(function(r) { return r.json(); })
+                .then(render)
+                .catch(function() { results.innerHTML = '<div class="check-empty">Could not check — try again.</div>'; });
+        }, 250);
+    });
+})();
+</script>
+{% endblock %}

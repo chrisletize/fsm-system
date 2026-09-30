@@ -464,7 +464,7 @@
     <nav class="topnav">
         <div class="topnav-left">
             {% if company_key is defined %}
-            <a href="/{{ company_key }}/dashboard" class="topnav-brand">FieldKit</a>
+            <a href="/{{ company_key }}/{{ 'sales' if session.user_role == 'salesperson' else 'dashboard' }}" class="topnav-brand">FieldKit</a>
             {% else %}
             <a href="/home" class="topnav-brand">FieldKit</a>
             {% endif %}
@@ -483,7 +483,7 @@
                     {% for ck in company_access %}
                     {% set co = all_companies.get(ck) %}
                     {% if co %}
-                    <a href="/{{ ck }}/dashboard"
+                    <a href="/{{ ck }}/{{ 'sales' if session.user_role == 'salesperson' else 'dashboard' }}"
                        class="{% if ck == company_key %}current{% endif %}">
                         {{ co.name }}
                     </a>
@@ -507,6 +507,7 @@
     {% set current_path = request.path %}
     <nav class="subnav">
         <div class="subnav-links">
+            {% if session.user_role != 'salesperson' %}
             <a href="/{{ company_key }}/dashboard"
                class="subnav-link {% if current_path == '/' + company_key + '/dashboard' or current_path == '/' + company_key + '/' %}active{% endif %}">
                 Dashboard
@@ -516,8 +517,9 @@
                class="subnav-link {% if '/customers' in current_path and '/settings' not in current_path %}active{% endif %}">
                 Customers
             </a>
+            {% endif %}
 
-            {% if session.user_role in ('admin', 'manager', 'salesperson') %}
+            {% if session.user_role in ('admin', 'manager') %}
             <a href="/{{ company_key }}/estimates"
                class="subnav-link {% if '/estimates' in current_path %}active{% endif %}">
                 Estimates
@@ -551,7 +553,7 @@
                 Extraction
             </a>
             {% endif %}
-            {% if session.user_role in ('admin', 'manager', 'office', 'salesperson') %}
+            {% if session.user_role in ('admin', 'manager', 'office') %}
             <a href="/{{ company_key }}/reports"
                class="subnav-link {% if '/reports' in current_path %}active{% endif %}">
                 Reports

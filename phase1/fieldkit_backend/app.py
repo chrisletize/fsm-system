@@ -302,6 +302,34 @@ def with_branding(f):
         return f(*args, **kwargs)
     return decorated
 
+# 2026-09-30: Chris O's account (role 'salesperson') is locked, site-wide, to
+# the Sales module only -- a trust-driven restriction, not a role definition
+# change (he's the only 'salesperson' user; see DECISIONS-MADE-DURING-BUILD.md).
+# Default-deny rather than enumerating every non-sales route: anything under a
+# company_key that isn't /sales/... is blocked for this role. Runs as
+# before_request (not a per-route decorator) so it can't be forgotten on a
+# future route the way one more entry in a role tuple could be.
+SALES_ONLY_ROLE = 'salesperson'
+SALES_ONLY_SKIP_ENDPOINTS = ('static', 'index', 'login', 'logout', 'home', 'reset_password',
+                              'sales_overview', 'sales_customer_check')
+
+@app.before_request
+def _restrict_sales_only_role():
+    if session.get('user_role') != SALES_ONLY_ROLE:
+        return
+    if request.endpoint in SALES_ONLY_SKIP_ENDPOINTS:
+        return
+    path_parts = request.path.strip('/').split('/', 1)
+    company_key = path_parts[0] if path_parts else ''
+    if company_key not in DB_CONFIG:
+        return
+    rest = path_parts[1] if len(path_parts) > 1 else ''
+    if rest == 'sales' or rest.startswith('sales/'):
+        return
+    if rest in ('', 'dashboard'):
+        return redirect(f'/{company_key}/sales')
+    abort(403)
+
 # ============================================================================
 # Auth routes
 # ============================================================================
@@ -377,6 +405,103 @@ def home():
         companies=companies,
         full_name=session.get('full_name'),
     )
+
+# ----------------------------------------------------------------------------
+# Sales overview -- the one page in the whole site that spans all four
+# company databases at once (2026-09-30). Read-only by design: it only ever
+# opens a connection per company to SELECT follow-ups, same query shape as
+# sales_dashboard's card, then closes it -- no writes cross a company
+# boundary here, so this doesn't touch the "no company_id column, no shared
+# table" rule elsewhere in the schema. Not nested under /<company_key>/sales
+# because it isn't scoped to one company; lives at a standalone path instead,
+# same as /home.
+# ----------------------------------------------------------------------------
+
+def _sales_overview_rows(company_keys, today, horizon_days=4):
+    rows = []
+    for ck in company_keys:
+        if ck not in DB_CONFIG:
+            continue
+        conn = get_db_connection(ck)
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT sv.id, sv.follow_up_date, sv.property_id, sv.property_type, sv.visit_tag
+            FROM sales_visits sv
+            WHERE sv.deleted_at IS NULL AND sv.follow_up_needed = TRUE AND sv.follow_up_completed = FALSE
+              AND sv.follow_up_date <= %s
+            ORDER BY sv.follow_up_date ASC
+        """, (today + timedelta(days=horizon_days),))
+        branding = COMPANY_BRANDING.get(ck, {})
+        for r in cur.fetchall():
+            row = dict(r)
+            row['property_name']  = _sales_property_name(cur, row['property_type'], row['property_id'])
+            row['company_key']    = ck
+            row['company_name']   = branding.get('short_name', ck)
+            row['company_color']  = branding.get('color_primary', '#888')
+            rows.append(row)
+        cur.close(); conn.close()
+    return rows
+
+@app.route('/sales-overview')
+@login_required
+def sales_overview():
+    if session.get('user_role') not in SALES_ROLES:
+        abort(403)
+    today = date.today()
+    company_keys = [ck for ck in session.get('company_access', []) if ck in DB_CONFIG]
+    rows = _sales_overview_rows(company_keys, today, horizon_days=4)
+
+    overdue = sorted((r for r in rows if r['follow_up_date'] < today), key=lambda r: r['follow_up_date'])
+
+    days = []
+    for i in range(5):
+        d = today + timedelta(days=i)
+        days.append({
+            'date': d,
+            'label': 'Today' if i == 0 else ('Tomorrow' if i == 1 else d.strftime('%A')),
+            'visits': [r for r in rows if r['follow_up_date'] == d],
+        })
+
+    companies = [{'key': ck, **COMPANY_BRANDING.get(ck, {})} for ck in company_keys]
+    return render_template('sales_overview.html',
+        full_name=session.get('full_name'), companies=companies,
+        overdue=overdue, days=days, today=today,
+    )
+
+@app.route('/sales-overview/customer-check')
+@login_required
+def sales_customer_check():
+    """Read-only, cross-company 'is this property already a customer
+    anywhere?' lookup -- JSON endpoint for the search box on sales_overview.
+    Matches by name only (no shared customer id across the 4 DBs), so each
+    hit lists the matched name + city so the salesperson can eyeball whether
+    it's really the same property before assuming it is."""
+    if session.get('user_role') not in SALES_ROLES:
+        return jsonify({'error': 'Forbidden'}), 403
+    q = request.args.get('q', '').strip()
+    if len(q) < 2:
+        return jsonify({'results': []})
+    company_keys = [ck for ck in session.get('company_access', []) if ck in DB_CONFIG]
+    results = []
+    for ck in company_keys:
+        conn = get_db_connection(ck)
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT property_name, city, state FROM customers
+            WHERE deleted_at IS NULL AND property_name ILIKE %s
+            ORDER BY property_name LIMIT 5
+        """, (f'%{q}%',))
+        matches = cur.fetchall()
+        cur.close(); conn.close()
+        if matches:
+            branding = COMPANY_BRANDING.get(ck, {})
+            results.append({
+                'company_key': ck,
+                'company_name': branding.get('short_name', ck),
+                'color': branding.get('color_primary', '#888'),
+                'matches': [{'name': m['property_name'], 'city': m['city'], 'state': m['state']} for m in matches],
+            })
+    return jsonify({'results': results})
 
 # ============================================================================
 # Dashboard
@@ -10503,18 +10628,29 @@ def sales_dashboard(company_key, branding, all_companies, company_access):
     conn = get_db_connection(company_key)
     cur = conn.cursor()
     today = date.today()
-    cur.execute("""
+
+    window = request.args.get('window', '0')
+    if window not in ('0', '3', '7', 'all'):
+        window = '0'
+    if window == 'all':
+        followup_cond, followup_params = "TRUE", []
+    else:
+        followup_cond = "sv.follow_up_date <= %s"
+        followup_params = [today + timedelta(days=int(window))]
+
+    cur.execute(f"""
         SELECT sv.id, sv.visit_date, sv.follow_up_date, sv.property_id, sv.property_type, sv.visit_tag
         FROM sales_visits sv
         WHERE sv.deleted_at IS NULL AND sv.follow_up_needed = TRUE AND sv.follow_up_completed = FALSE
-          AND sv.follow_up_date <= %s
+          AND {followup_cond}
         ORDER BY sv.follow_up_date ASC
-    """, (today,))
+    """, followup_params)
     followups = []
     for r in cur.fetchall():
         row = dict(r)
         row['property_name'] = _sales_property_name(cur, row['property_type'], row['property_id'])
         row['is_overdue'] = row['follow_up_date'] < today
+        row['days_until'] = (row['follow_up_date'] - today).days
         followups.append(row)
 
     cur.execute("""
@@ -10539,7 +10675,7 @@ def sales_dashboard(company_key, branding, all_companies, company_access):
         branding=branding, company_key=company_key,
         company_access=company_access, all_companies=all_companies,
         followups=followups, recent_visits=recent_visits, dormant=dormant,
-        pending_approvals=pending_approvals, today=today,
+        pending_approvals=pending_approvals, today=today, window=window,
     )
 
 
@@ -10589,6 +10725,32 @@ def sales_search(company_key):
     cur.close(); conn.close()
     results.sort(key=lambda x: (x['name'] or '').lower())
     return jsonify({'results': results})
+
+
+# ----------------------------------------------------------------------------
+# Management companies (inline add from the prospect form -- JSON endpoint,
+# skips with_branding per CLAUDE.md convention, same as sales_search)
+# ----------------------------------------------------------------------------
+
+@app.route('/<company_key>/sales/management-companies/new', methods=['POST'])
+@login_required
+@company_access_required
+def sales_management_company_new(company_key):
+    if session.get('user_role') not in SALES_ROLES:
+        return jsonify({'error': 'Forbidden'}), 403
+    name = request.form.get('name', '').strip()
+    if not name:
+        return jsonify({'error': 'Name is required.'}), 400
+    username = session.get('username')
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO management_companies (name, created_by, updated_by)
+        VALUES (%s, %s, %s) RETURNING id
+    """, (name, username, username))
+    new_id = cur.fetchone()['id']
+    conn.commit(); cur.close(); conn.close()
+    return jsonify({'id': new_id, 'name': name})
 
 
 # ----------------------------------------------------------------------------
@@ -10845,6 +11007,30 @@ def _save_sales_contact(company_key, contact_id):
         new_id = contact_id
     conn.commit(); cur.close(); conn.close()
     return new_id, None
+
+
+@app.route('/<company_key>/sales/contacts/quick-add', methods=['POST'])
+@login_required
+@company_access_required
+def sales_contact_quick_add(company_key):
+    """Inline 'who did you meet?' add-on for the visit-log screen (same gap
+    as the management-company dropdown): the contact select there only ever
+    lists sales_contacts already tied to this property, so a brand-new
+    contact had no way in short of leaving the page for the full Contacts
+    form. Reuses _save_sales_contact's validation + contact_property_history
+    bookkeeping; only the response shape (JSON, not a redirect) differs."""
+    if session.get('user_role') not in SALES_ROLES:
+        return jsonify({'error': 'Forbidden'}), 403
+    new_id, error = _save_sales_contact(company_key, None)
+    if error:
+        return jsonify({'error': error}), 400
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("SELECT first_name, last_name, title FROM sales_contacts WHERE id = %s", (new_id,))
+    c = cur.fetchone()
+    cur.close(); conn.close()
+    name = f"{c['first_name']} {c['last_name']}" + (f" ({c['title']})" if c['title'] else '')
+    return jsonify({'id': new_id, 'name': name})
 
 
 @app.route('/<company_key>/sales/contacts')

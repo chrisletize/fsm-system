@@ -18,9 +18,30 @@
     .badge { display:inline-block; padding:.2rem .7rem; border-radius:10px; font-size:.76rem; font-weight:500; }
     .badge-overdue { background:#fcebeb; color:#a32d2d; }
     .badge-today { background:#fff3d6; color:#8a6100; }
+    .badge-upcoming { background:#eaf1fb; color:#2d5a92; }
     .badge-dormant { background:#f1efe8; color:#5f5e5a; }
     .empty { color:#aaa; padding:1rem 0; text-align:center; font-size:.9rem; }
     .quick-actions { display:flex; gap:.75rem; flex-wrap:wrap; margin-bottom:1.5rem; }
+    .window-tabs { display:flex; gap:.4rem; }
+    .window-tab {
+        padding:.3rem .7rem; border-radius:12px; font-size:.78rem; font-weight:500; text-decoration:none;
+        color:#777; background:#f2f2f2;
+    }
+    .window-tab.active { background:{{ branding.color_primary }}; color:white; }
+    .overview-link {
+        display:flex; align-items:center; gap:.9rem;
+        background:white; border:1px solid #eee; border-radius:8px;
+        padding:.9rem 1.1rem; margin-bottom:1.5rem; text-decoration:none; color:inherit;
+        box-shadow:0 1px 3px rgba(0,0,0,.06);
+        transition: box-shadow .15s, transform .15s;
+    }
+    .overview-link:hover { box-shadow:0 4px 14px rgba(0,0,0,.14); transform:translateY(-1px); }
+    .overview-dots { display:flex; gap:.25rem; flex-shrink:0; }
+    .overview-dot { width:11px; height:11px; border-radius:50%; }
+    .overview-text { flex:1; }
+    .overview-title { font-weight:600; color:#333; font-size:.95rem; }
+    .overview-sub { font-size:.8rem; color:#888; margin-top:.1rem; }
+    .overview-arrow { font-size:1.3rem; color:#bbb; flex-shrink:0; }
 </style>
 {% endblock %}
 
@@ -42,9 +63,30 @@
     <a href="/{{ company_key }}/sales/followups" class="btn btn-outline">Follow-Ups</a>
 </div>
 
+<a href="/sales-overview" class="overview-link">
+    <div class="overview-dots">
+        {% for ck, co in all_companies.items() %}
+        <span class="overview-dot" style="background:{{ co.color_primary }};"></span>
+        {% endfor %}
+    </div>
+    <div class="overview-text">
+        <div class="overview-title">Sales Overview — All Companies</div>
+        <div class="overview-sub">Overdue &amp; upcoming follow-ups and a customer check, across every company you have access to.</div>
+    </div>
+    <span class="overview-arrow">→</span>
+</a>
+
 <div class="sales-grid">
     <div class="card">
-        <h2>Follow-Ups Due Today / Overdue ({{ followups|length }})</h2>
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:.5rem; margin-bottom:.9rem;">
+            <h2 style="margin-bottom:0;">Follow-Ups ({{ followups|length }})</h2>
+            <div class="window-tabs">
+                <a href="?window=0" class="window-tab {% if window == '0' %}active{% endif %}">Today</a>
+                <a href="?window=3" class="window-tab {% if window == '3' %}active{% endif %}">3 days</a>
+                <a href="?window=7" class="window-tab {% if window == '7' %}active{% endif %}">7 days</a>
+                <a href="?window=all" class="window-tab {% if window == 'all' %}active{% endif %}">All</a>
+            </div>
+        </div>
         {% for f in followups %}
         <div class="row-item">
             <div>
@@ -52,8 +94,11 @@
                 <div class="row-sub">{{ f.visit_tag or '' }} — last visit {{ f.visit_date.strftime('%b %-d, %Y') if f.visit_date else '—' }}</div>
             </div>
             <div style="display:flex; align-items:center; gap:.5rem;">
-                <span class="badge {{ 'badge-overdue' if f.is_overdue else 'badge-today' }}">
-                    {{ 'Overdue' if f.is_overdue else 'Today' }}
+                <span class="badge {% if f.is_overdue %}badge-overdue{% elif f.days_until == 0 %}badge-today{% else %}badge-upcoming{% endif %}">
+                    {% if f.is_overdue %}Overdue
+                    {% elif f.days_until == 0 %}Today
+                    {% elif f.days_until == 1 %}Tomorrow
+                    {% else %}In {{ f.days_until }} days{% endif %}
                 </span>
                 <a href="/{{ company_key }}/sales/visits/log?property_type={{ f.property_type }}&property_id={{ f.property_id }}"
                    class="btn btn-outline" style="padding:.4rem .8rem; font-size:.82rem;">Log Visit</a>
@@ -93,6 +138,9 @@
                     <a href="/{{ company_key }}/sales/prospects/{{ v.property_id }}"
                        style="color:{{ branding.color_primary }}; text-decoration:none;">{{ v.property_name or 'Unknown property' }}</a>
                     <span class="row-sub">○ prospect</span>
+                    {% elif session.user_role == 'salesperson' %}
+                    {{ v.property_name or 'Unknown property' }}
+                    <span class="row-sub">✓ customer</span>
                     {% else %}
                     <a href="/{{ company_key }}/customers/{{ v.property_id }}"
                        style="color:{{ branding.color_primary }}; text-decoration:none;">{{ v.property_name or 'Unknown property' }}</a>
