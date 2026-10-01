@@ -184,9 +184,34 @@
             </div>
         </form>
 
+        {% if j.dry_confirmed_at %}
+        <div style="font-size:.82rem; color:#2d8a4e; margin:.5rem 0;">
+            Confirmed dry{% if j.dry_confirmed_by %} by {{ j.dry_confirmed_by }}{% endif %} —
+            the last equipment can come back.
+        </div>
+        {% else %}
+        <form method="POST" action="/{{ company_key }}/extraction/{{ j.id }}/confirm-dry">
+            <div class="section-label">Dry Check</div>
+            <div style="font-size:.78rem; color:#888; margin-bottom:.4rem;">
+                Confirm the area is dry before pulling the last equipment.
+            </div>
+            <input type="text" name="dry_confirmation_notes" placeholder="Note (optional)"
+                   style="width:100%; padding:.4rem; border:1px solid #ddd; border-radius:4px; margin-bottom:.4rem;">
+            <div class="job-actions">
+                <button type="submit" class="btn-start">Confirmed Dry</button>
+            </div>
+        </form>
+        {% endif %}
+
         {% if j.open_lines %}
-        <form method="POST" action="/{{ company_key }}/extraction/{{ j.id }}/retrieve">
+        <form method="POST" action="/{{ company_key }}/extraction/{{ j.id }}/retrieve" class="retrieve-form">
             <div class="section-label">Retrieve Equipment</div>
+            <div style="font-size:.78rem; color:#888; margin-bottom:.4rem;">
+                Date only the units you're taking. Leave the rest blank — they stay deployed.
+                {% if not j.dry_confirmed_at %}
+                <strong>Taking everything needs the dry check above first.</strong>
+                {% endif %}
+            </div>
             {% for line in j.open_lines %}
             <div class="retrieve-line">
                 <span>{{ line.description or 'Unit' }} (deployed {{ line.deployed_at }})</span>
@@ -194,6 +219,8 @@
             </div>
             {% endfor %}
             <div class="job-actions">
+                <button type="button" class="btn-start retrieve-all-btn"
+                        style="background:#6c757d;">Retrieved all</button>
                 <button type="submit" class="btn-start">Retrieve Checked Units</button>
             </div>
         </form>
@@ -203,4 +230,18 @@
 {% else %}
     <div class="job-card empty">No active extraction jobs assigned to you as follow-up tech.</div>
 {% endif %}
+
+<script>
+// "Retrieved all" just fills every date box in its own job's form with today --
+// the per-unit boxes stay the source of truth, so a tech can still clear one
+// back out before submitting if a unit ends up staying.
+document.querySelectorAll('.retrieve-all-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const today = new Date().toISOString().slice(0, 10);
+        btn.closest('.retrieve-form').querySelectorAll('input[type=date]').forEach(d => {
+            d.value = today;
+        });
+    });
+});
+</script>
 {% endblock %}

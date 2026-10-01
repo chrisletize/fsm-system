@@ -4844,6 +4844,7 @@ def extraction_queue(company_key, branding, all_companies, company_access):
     cur.execute("""
         SELECT wo.id, wo.work_order_number, wo.extraction_status, wo.extraction_started_at,
                wo.followup_tech_username, wo.equipment_incomplete, wo.priority,
+               wo.dry_confirmed_at, wo.dry_confirmed_by, wo.dry_confirmation_notes,
                c.property_name AS customer_name
         FROM work_orders wo
         LEFT JOIN customers c ON c.id = wo.customer_id
@@ -4881,6 +4882,9 @@ def extraction_queue(company_key, branding, all_companies, company_access):
             'equipment_incomplete': w['equipment_incomplete'],
             'open_lines': open_lines_by_wo.get(w['id'], []),
             'priority': w['priority'],
+            'dry_confirmed_at': w['dry_confirmed_at'],
+            'dry_confirmed_by': w['dry_confirmed_by'],
+            'dry_confirmation_notes': w['dry_confirmation_notes'],
         })
 
     summary = {
@@ -4979,15 +4983,89 @@ def extraction_log_all(company_key):
     return redirect(f'/{company_key}/extraction')
 
 
+@app.route('/<company_key>/extraction/<int:wo_id>/confirm-dry', methods=['POST'])
+@login_required
+@company_access_required
+def extraction_confirm_dry(company_key, wo_id):
+    """Chris, 2026-10-01: a job isn't done when the gear comes back, it's done
+    when the area is validated dry -- and dry gets confirmed BEFORE the last
+    equipment is pulled (that's why you're pulling it). A plain confirmation
+    with an optional note, no moisture numbers. Normally the follow-up tech
+    from My Day; _can_touch_extraction also lets office act as the backstop."""
+    if company_key in COMPANIES_WITHOUT_EXTRACTION:
+        abort(404)
+    if not _can_touch_extraction(company_key, wo_id):
+        abort(403)
+    username = session.get('username')
+    notes = request.form.get('dry_confirmation_notes', '').strip() or None
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT id, dry_confirmed_at FROM work_orders
+        WHERE id = %s AND deleted_at IS NULL AND is_extraction = TRUE
+    """, (wo_id,))
+    wo = cur.fetchone()
+    if not wo:
+        cur.close(); conn.close(); abort(404)
+    if wo['dry_confirmed_at']:
+        cur.close(); conn.close()
+        flash('This job was already confirmed dry.', 'info')
+    else:
+        cur.execute("""
+            UPDATE work_orders
+            SET dry_confirmed_at = CURRENT_TIMESTAMP, dry_confirmed_by = %s,
+                dry_confirmation_notes = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+            WHERE id = %s
+        """, (username, notes, username, wo_id))
+        cur.execute("""
+            INSERT INTO extraction_daily_log (work_order_id, log_date, extraction_status, tech_username, notes, created_by)
+            VALUES (%s, CURRENT_DATE, 'Ready for Pickup', %s, %s, %s)
+            ON CONFLICT (work_order_id, log_date) DO UPDATE
+            SET extraction_status = EXCLUDED.extraction_status, tech_username = EXCLUDED.tech_username,
+                notes = EXCLUDED.notes
+        """, (wo_id, username, f'Confirmed dry.{" " + notes if notes else ""}', username))
+        conn.commit(); cur.close(); conn.close()
+        flash('Confirmed dry — the last equipment can now be retrieved.', 'success')
+    dest = 'extraction' if session.get('user_role') in ('admin', 'manager', 'office') else 'myday'
+    return redirect(f'/{company_key}/{dest}')
+
+
+@app.route('/<company_key>/extraction/<int:wo_id>/clear-dry', methods=['POST'])
+@login_required
+@company_access_required
+def extraction_clear_dry(company_key, wo_id):
+    """Undo a mistaken dry confirmation. Manager/admin only -- it re-locks the
+    final retrieval, so it isn't something to hand to everyone."""
+    if company_key in COMPANIES_WITHOUT_EXTRACTION:
+        abort(404)
+    if session.get('user_role') not in ('admin', 'manager'):
+        abort(403)
+    username = session.get('username')
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        UPDATE work_orders
+        SET dry_confirmed_at = NULL, dry_confirmed_by = NULL, dry_confirmation_notes = NULL,
+            updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s AND deleted_at IS NULL
+    """, (username, wo_id))
+    conn.commit(); cur.close(); conn.close()
+    flash('Dry confirmation cleared.', 'success')
+    return redirect(f'/{company_key}/extraction')
+
+
 @app.route('/<company_key>/extraction/<int:wo_id>/retrieve', methods=['POST'])
 @login_required
 @company_access_required
 def extraction_retrieve(company_key, wo_id):
     """Sets retrieved_at on the submitted open per-day lines (per-line date,
-    blank = still open -- a partial retrieval keeps the WO active). When no
-    open lines remain: extraction_status='Equipment Retrieved',
-    extraction_closed_at, status='Completed' (the invoice-prompt banner
-    picks this up on its own, same as any other Completed WO)."""
+    blank = still open -- a partial retrieval keeps the WO active, and each
+    unit bills its own deploy-to-pickup span, so equipment left behind in a
+    still-wet area keeps accruing). When no open lines remain:
+    extraction_status='Equipment Retrieved', extraction_closed_at,
+    status='Completed' (the invoice-prompt banner picks this up on its own,
+    same as any other Completed WO) -- but that final retrieval is gated on
+    the job having been confirmed dry first."""
     if company_key in COMPANIES_WITHOUT_EXTRACTION:
         abort(404)
     if not _can_touch_extraction(company_key, wo_id):
@@ -5001,16 +5079,31 @@ def extraction_retrieve(company_key, wo_id):
           AND equipment_unit_id IS NOT NULL AND retrieved_at IS NULL
     """, (wo_id,))
     open_line_ids = [r['id'] for r in cur.fetchall()]
-    for lid in open_line_ids:
+    submitted = [lid for lid in open_line_ids
+                 if request.form.get(f'retrieved_{lid}', '').strip()]
+
+    # Dry has to be confirmed before the LAST equipment leaves (Chris,
+    # 2026-10-01). Partial pickups are never blocked -- only the submission
+    # that would empty the site, since that's the one that closes the job.
+    cur.execute("SELECT dry_confirmed_at FROM work_orders WHERE id = %s", (wo_id,))
+    dry_row = cur.fetchone()
+    would_close = len(submitted) == len(open_line_ids)
+    if would_close and not (dry_row and dry_row['dry_confirmed_at']):
+        cur.close(); conn.close()
+        flash('Confirm the area is dry before pulling the last equipment. '
+              'Leave at least one unit deployed, or hit "Confirmed Dry" first.', 'error')
+        dest = 'extraction' if session.get('user_role') in ('admin', 'manager', 'office') else 'myday'
+        return redirect(f'/{company_key}/{dest}')
+
+    for lid in submitted:
         retrieved_date = request.form.get(f'retrieved_{lid}', '').strip()
-        if retrieved_date:
-            cur.execute("""
-                UPDATE work_order_line_items
-                SET retrieved_at = %s, quantity = GREATEST((%s::date - deployed_at), 1),
-                    total = GREATEST((%s::date - deployed_at), 1) * unit_price,
-                    updated_at = CURRENT_TIMESTAMP, updated_by = %s
-                WHERE id = %s
-            """, (retrieved_date, retrieved_date, retrieved_date, username, lid))
+        cur.execute("""
+            UPDATE work_order_line_items
+            SET retrieved_at = %s, quantity = GREATEST((%s::date - deployed_at), 1),
+                total = GREATEST((%s::date - deployed_at), 1) * unit_price,
+                updated_at = CURRENT_TIMESTAMP, updated_by = %s
+            WHERE id = %s
+        """, (retrieved_date, retrieved_date, retrieved_date, username, lid))
 
     cur.execute("""
         SELECT count(*) AS n FROM work_order_line_items
@@ -5244,7 +5337,8 @@ def myday(company_key, branding, all_companies, company_access):
     if company_key not in COMPANIES_WITHOUT_EXTRACTION:
         cur.execute("""
             SELECT wo.id, wo.work_order_number, wo.work_site_label, wo.extraction_status,
-                   wo.extraction_started_at, c.property_name AS customer_name
+                   wo.extraction_started_at, wo.dry_confirmed_at, wo.dry_confirmed_by,
+                   c.property_name AS customer_name
             FROM work_orders wo
             LEFT JOIN customers c ON c.id = wo.customer_id
             WHERE wo.deleted_at IS NULL AND wo.status = 'Extraction Active'

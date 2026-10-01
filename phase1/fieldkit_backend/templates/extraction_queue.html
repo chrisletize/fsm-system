@@ -34,9 +34,13 @@
 <p><strong>One work order, one lifecycle</strong> — an extraction job is never cloned into a
    new WO each day. The same WO stays "Extraction Active" from day one through pickup; the
    daily log and per-day equipment billing all accrue onto that single WO.</p>
-<p><strong>Retrieved</strong> marks every still-deployed equipment line as picked up on
-   today's date and recomputes that line's billed days accordingly — it's the only place
-   per-day equipment billing gets finalized, so it can't be re-triggered after the fact.</p>
+<p><strong>Retrieved is per piece of equipment.</strong> Tick only the units actually coming
+   back — if some areas are still wet, leave that equipment unticked and it stays deployed and
+   keeps accruing days. Each unit's billed days are computed from its own deploy-to-pickup
+   span, so a fan left behind three extra days bills three extra days. Use
+   <strong>Retrieved all equipment</strong> when the whole job comes back at once.</p>
+<p>The job only flips to <strong>Completed</strong> once the last unit is picked up — a
+   partial retrieval keeps it active in this queue.</p>
 <p><strong>Escalated</strong> (the highlighted row) just means the job has been active longer
    than the configured warning threshold — it doesn't block anything, it's a flag to go
    check on it.</p>
@@ -63,7 +67,7 @@
     </div>
     <table>
         <thead>
-            <tr><th></th><th>Unit / Customer</th><th>Days Active</th><th>Last Status</th><th>Follow-up Tech</th><th>Actions</th></tr>
+            <tr><th></th><th>Unit / Customer</th><th>Days Active</th><th>Last Status</th><th>Dry</th><th>Follow-up Tech</th><th>Actions</th></tr>
         </thead>
         <tbody>
             {% for r in rows %}
@@ -75,6 +79,15 @@
                 </td>
                 <td>{{ r.day_count }}{% if r.escalated %} <span style="color:#c0392b;">⚠</span>{% endif %}</td>
                 <td>{{ r.extraction_status or '—' }}</td>
+                <td>
+                    {% if r.dry_confirmed_at %}
+                    <span style="color:#2d8a4e;" title="{{ r.dry_confirmation_notes or '' }}">
+                        Dry — {{ r.dry_confirmed_by or '' }}
+                    </span>
+                    {% else %}
+                    <span style="color:#b08900;">Not confirmed</span>
+                    {% endif %}
+                </td>
                 <td>{{ r.followup_tech_name }}</td>
                 <td class="action-btns">
                     <form method="POST" action="/{{ company_key }}/extraction/{{ r.id }}/log">
@@ -89,7 +102,18 @@
                         <input type="hidden" name="extraction_status" value="Missed Today">
                         <button type="submit">Missed Today</button>
                     </form>
-                    <button type="button" onclick="openRetrieve({{ r.id }}, {{ r.open_lines|tojson }})">Retrieved</button>
+                    {% if not r.dry_confirmed_at %}
+                    <form method="POST" action="/{{ company_key }}/extraction/{{ r.id }}/confirm-dry">
+                        <button type="submit">Confirmed Dry</button>
+                    </form>
+                    {% elif session.user_role in ('admin', 'manager') %}
+                    <form method="POST" action="/{{ company_key }}/extraction/{{ r.id }}/clear-dry"
+                          onsubmit="return confirm('Clear the dry confirmation? This re-locks the final equipment pickup.');">
+                        <button type="submit">Undo Dry</button>
+                    </form>
+                    {% endif %}
+                    <button type="button"
+                            onclick="openRetrieve({{ r.id }}, {{ r.open_lines|tojson }}, {{ 'true' if r.dry_confirmed_at else 'false' }})">Retrieved</button>
                 </td>
             </tr>
             {% else %}
@@ -103,6 +127,22 @@
 <div class="modal-overlay" id="retrieveModal">
     <div class="modal-box">
         <h3>Retrieve Equipment</h3>
+        <p style="font-size:.85rem; color:#777; margin-bottom:.75rem;">
+            Tick only the units actually coming back. Anything left unticked stays deployed and
+            keeps billing — the job stays open until every unit is picked up.
+        </p>
+        <div id="retrieveDryWarning"
+             style="display:none; background:#fff8e1; border:1px solid #ffe082; color:#6d5300;
+                    padding:.6rem .8rem; border-radius:4px; font-size:.85rem; margin-bottom:.75rem;">
+            This job hasn't been confirmed dry yet, so the last equipment can't come back.
+            Retrieve only the units that are done, or hit <strong>Confirmed Dry</strong> on the row first.
+        </div>
+        <div style="margin-bottom:.75rem;">
+            <button type="button" class="btn btn-outline" id="retrieveAllBtn"
+                    style="padding:.4rem .9rem; font-size:.85rem;">Retrieved all equipment</button>
+            <button type="button" class="btn btn-outline" id="retrieveNoneBtn"
+                    style="padding:.4rem .9rem; font-size:.85rem;">Clear</button>
+        </div>
         <form method="POST" id="retrieveForm">
             <div id="retrieveLines"></div>
             <div class="form-actions" style="margin-top:1rem;">
@@ -114,20 +154,55 @@
 </div>
 
 <script>
-function openRetrieve(woId, openLines) {
+// Each equipment unit is its own line with its own retrieved date (the backend
+// has always worked per piece), so partial pickup is the normal case: only the
+// ticked units get a date, the rest stay out and keep accruing. Nothing is
+// pre-ticked -- leaving a unit behind shouldn't require un-doing a default.
+function openRetrieve(woId, openLines, dryConfirmed) {
     const form = document.getElementById('retrieveForm');
     form.action = `/{{ company_key }}/extraction/${woId}/retrieve`;
     const container = document.getElementById('retrieveLines');
     const today = new Date().toISOString().slice(0, 10);
+    // Taking everything closes the job, which the server refuses until the
+    // area has been confirmed dry -- say so here rather than letting them fill
+    // it all in and bounce off the gate.
+    const warn = document.getElementById('retrieveDryWarning');
+    warn.style.display = dryConfirmed ? 'none' : 'block';
+    document.getElementById('retrieveAllBtn').disabled = !dryConfirmed;
     if (openLines.length === 0) {
         container.innerHTML = '<p>No open equipment lines — this will close the job.</p>';
     } else {
         container.innerHTML = openLines.map(l =>
-            `<div class="line-row"><span>${l.description || 'Unit'} (deployed ${l.deployed_at})</span>
-             <input type="date" name="retrieved_${l.id}" value="${today}"></div>`
+            `<div class="line-row" style="display:flex; align-items:center; gap:.6rem;">
+                 <input type="checkbox" class="retrieve-check" data-line="${l.id}"
+                        id="retchk_${l.id}" style="width:20px; height:20px;">
+                 <label for="retchk_${l.id}" style="flex:1;">${l.description || 'Unit'}
+                     <span style="color:#888; font-size:.82rem;">(deployed ${l.deployed_at})</span></label>
+                 <input type="date" name="retrieved_${l.id}" data-line="${l.id}"
+                        class="retrieve-date" value="" disabled>
+             </div>`
         ).join('');
+        container.querySelectorAll('.retrieve-check').forEach(chk => {
+            chk.addEventListener('change', () => {
+                const dateInput = container.querySelector(`.retrieve-date[data-line="${chk.dataset.line}"]`);
+                dateInput.disabled = !chk.checked;
+                dateInput.value = chk.checked ? today : '';
+            });
+        });
     }
     openModal('retrieveModal');
 }
+
+function setAllRetrieved(checked) {
+    const today = new Date().toISOString().slice(0, 10);
+    document.querySelectorAll('#retrieveLines .retrieve-check').forEach(chk => {
+        chk.checked = checked;
+        const dateInput = document.querySelector(`#retrieveLines .retrieve-date[data-line="${chk.dataset.line}"]`);
+        dateInput.disabled = !checked;
+        dateInput.value = checked ? today : '';
+    });
+}
+document.getElementById('retrieveAllBtn').addEventListener('click', () => setAllRetrieved(true));
+document.getElementById('retrieveNoneBtn').addEventListener('click', () => setAllRetrieved(false));
 </script>
 {% endblock %}
