@@ -74,6 +74,15 @@
     {{ inv.invoice_number }}
 </div>
 
+{% if has_occupied_release(company_key) and inv.description_occ_vac == 'OCC' and not release_forms %}
+<div class="card" style="background:#fdecea; border:1px solid #f3b8b3; color:#a32d2d; margin-bottom:1.25rem;">
+    <strong>Occupied job with no signed release form.</strong>
+    Attach the signed PDF to
+    <a href="/{{ company_key }}/workorders/{{ inv.work_order_id }}" style="color:#a32d2d; text-decoration:underline;">{{ inv.work_order_number }}</a>
+    before sending this invoice.
+</div>
+{% endif %}
+
 <div class="page-header">
     <div>
         <h1>{{ inv.invoice_number }}
@@ -220,6 +229,17 @@
             <div class="side-field"><div class="label">Customer</div><a href="/{{ company_key }}/customers/{{ inv.customer_id }}">{{ inv.customer_name }}</a></div>
             {% if inv.work_order_number %}
             <div class="side-field"><div class="label">Work Order</div><a href="/{{ company_key }}/workorders/{{ inv.work_order_id }}">{{ inv.work_order_number }}</a></div>
+            {% endif %}
+            {% if release_forms %}
+            <div class="side-field">
+                <div class="label">Occupied Release</div>
+                {% for rf in release_forms %}
+                <div style="margin-bottom:.2rem;">
+                    <a href="/{{ company_key }}/workorders/{{ inv.work_order_id }}/release-forms/{{ rf.id }}"
+                       target="_blank" rel="noopener">View signed form</a>
+                </div>
+                {% endfor %}
+            </div>
             {% endif %}
             {% if inv.location_name %}
             <div class="side-field"><div class="label">Location</div>{{ inv.location_name }}</div>

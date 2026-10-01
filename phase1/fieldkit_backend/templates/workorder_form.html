@@ -128,7 +128,7 @@
 <div class="flash error">{{ error }}</div>
 {% endif %}
 
-<form method="POST" id="woForm"
+<form method="POST" id="woForm" enctype="multipart/form-data"
       action="/{{ company_key }}/workorders{% if wo %}/{{ wo.id }}/edit{% else %}/new{% endif %}">
 
 <input type="hidden" name="line_items_json" id="lineItemsJson">
@@ -262,6 +262,29 @@
                 </div>
             </div>
         </div>
+        {% if has_occupied_release(company_key) %}
+        <div class="form-group full" id="releaseFormGroup" style="display:none;">
+            <label>Signed release form
+                <span class="hint">(required to schedule an occupied job — PDF)</span>
+            </label>
+            {% if has_release %}
+            <div style="color:#2d8a4e; font-size:.9rem;">
+                Signed release already on file for this job — attach another below only to add a second form.
+            </div>
+            {% endif %}
+            <input type="file" name="release_form" accept="application/pdf,.pdf" style="font-size:.9rem;">
+            {% if session.user_role in ('admin', 'manager') %}
+            <div class="hint" style="margin-top:.3rem;">
+                As a manager you can schedule without one, but the job and its invoice will show a
+                missing-release warning until it's attached.
+            </div>
+            {% else %}
+            <div class="hint" style="margin-top:.3rem;">
+                Occupied jobs can't be scheduled without it — ask a manager if you don't have the form yet.
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
         <div class="form-group">
             <label>Time of Day</label>
             <div class="check-pair">
@@ -459,6 +482,7 @@
     const companyKey  = "{{ company_key }}";
     const WO_ID       = {{ wo.id if wo else 'null' }};
     const IS_EDIT     = WO_ID !== null;
+    const HAS_RELEASE = {{ 'true' if has_release else 'false' }};
     // A follow-up WO offer (directive §3.2, "Create follow-up cleaning work
     // order") pre-fills the customer/location even on a NEW WO — reuse the
     // exact same customer-context load edit mode already does.
@@ -936,6 +960,19 @@
     wirePair('occvac', 'occVacHidden');
     wirePair('ampm', 'amPmHidden');
 
+    // The release-form upload only applies to occupied jobs, so it follows the
+    // OCC checkbox rather than sitting on the form permanently.
+    const releaseFormGroup = document.getElementById('releaseFormGroup');
+    function syncReleaseFormVisibility() {
+        if (!releaseFormGroup) return;
+        releaseFormGroup.style.display =
+            document.getElementById('occVacHidden').value === 'OCC' ? 'flex' : 'none';
+    }
+    document.querySelectorAll('input[data-pair="occvac"]').forEach(box => {
+        box.addEventListener('change', syncReleaseFormVisibility);
+    });
+    syncReleaseFormVisibility();
+
     // ========================================================================
     // Auto-generated job description (editable; auto-updates until hand-edited).
     // ========================================================================
@@ -951,6 +988,9 @@
         if (document.getElementById('amPmHidden').value) parts1.push(document.getElementById('amPmHidden').value);
         if (document.getElementById('chkGated').checked) parts1.push('GATED');
         if (document.getElementById('chkFollowup').checked) parts1.push('FOLLOW-UP');
+        // Driven by the attachment itself (uploaded on the WO detail page), not
+        // a checkbox here -- so "regenerate" keeps the token instead of wiping it.
+        if (HAS_RELEASE) parts1.push('{{ release_token }}');
         const lines = [];
         if (parts1.length) lines.push(parts1.join(' '));
         liRows.querySelectorAll('.li-row').forEach(row => {

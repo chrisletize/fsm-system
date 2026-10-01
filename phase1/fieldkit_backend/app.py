@@ -78,6 +78,24 @@ COMPANIES_WITHOUT_EXTRACTION = {'getagrip'}
 # call -- this is the one place that mapping needs to reach the template layer.
 app.jinja_env.globals['has_extraction'] = lambda company_key: company_key not in COMPANIES_WITHOUT_EXTRACTION
 
+# Occupied-release forms (migration 030). Michele, 2026-10-01: only Get a Grip
+# and CTS have one of these forms, so the upload card / invoice note stay
+# hidden for the two Kleanit companies -- same company-feature-gate shape as
+# has_extraction above, and widening it later is a one-line change here.
+COMPANIES_WITH_OCCUPIED_RELEASE = {'getagrip', 'cts'}
+app.jinja_env.globals['has_occupied_release'] = lambda company_key: company_key in COMPANIES_WITH_OCCUPIED_RELEASE
+
+# Where uploaded documents land. The container gets ./uploads mounted here
+# (docker-compose.yml); per-company subfolders mirror the one-DB-per-company
+# split so no company's documents sit in another's folder.
+UPLOAD_DIR            = os.environ.get('UPLOAD_DIR', '/data/uploads')
+MAX_UPLOAD_BYTES      = 20 * 1024 * 1024
+RELEASE_DESC_TOKEN    = 'RELEASE ON FILE'
+app.jinja_env.globals['release_token'] = RELEASE_DESC_TOKEN
+# Global ceiling so a giant body is rejected by Flask before it's buffered;
+# the per-file check below is what produces the friendly message.
+app.config['MAX_CONTENT_LENGTH'] = 25 * 1024 * 1024
+
 # ============================================================================
 # Return-to-origin navigation (Chris, 2026-09-23: "after a separate page task
 # has been completed... return to the origin page" -- promoted from a single
@@ -3251,6 +3269,44 @@ def _save_work_order(company_key, wo_id):
     if time_err:
         return None, time_err
 
+    # ---- Occupied-release gate (Chris, 2026-10-01: "we do not even schedule
+    # occupied jobs without the form") -------------------------------------
+    # Every WO requires a start date, so there's no "save it undated and
+    # attach the form later" path -- the signed PDF therefore has to be
+    # attachable in this same submission, which is why the form posts
+    # multipart. Office staff are hard-blocked; managers/admins are the
+    # documented override and get warned instead (flash here, plus a standing
+    # banner on the WO and its invoice for as long as the form is missing).
+    release_upload, release_error = _read_release_upload()
+    if release_error:
+        return None, release_error
+    if company_key in COMPANIES_WITH_OCCUPIED_RELEASE and occ_vac == 'OCC' and status == 'Scheduled':
+        conn_chk = get_db_connection(company_key)
+        cur_chk  = conn_chk.cursor()
+        prior = None
+        if wo_id:
+            cur_chk.execute("""
+                SELECT start_date::text AS start_date, description_occ_vac
+                FROM work_orders WHERE id = %s
+            """, (wo_id,))
+            prior = cur_chk.fetchone()
+        has_form = bool(release_upload) or (bool(wo_id) and _wo_has_release(cur_chk, wo_id))
+        cur_chk.close(); conn_chk.close()
+        # Only a NEW scheduling action is gated. Editing an already-scheduled
+        # occupied job for some unrelated reason (a note, a line item) must not
+        # be held hostage to a form that predates this rule.
+        newly_scheduling = (prior is None
+                            or prior['start_date'] != start_date
+                            or prior['description_occ_vac'] != 'OCC')
+        if newly_scheduling and not has_form:
+            if session.get('user_role') not in ('admin', 'manager'):
+                return None, ('This is an occupied job, so the signed release form has to be '
+                              'attached before it can be scheduled. Add the signed PDF in the '
+                              '"Signed release form" box below, or ask a manager to schedule it '
+                              'without one.')
+            flash('Scheduled an OCCUPIED job with NO signed release form on file. '
+                  'Attach the signed PDF to this work order as soon as you have it.', 'error')
+
     if is_internal_task:
         # Never billed, so never has line items -- whatever was submitted
         # (there shouldn't be any, the form hides the section) is ignored
@@ -3519,6 +3575,13 @@ def _save_work_order(company_key, wo_id):
             _record_audit(cur, 'work_orders', wo_id, 'create', after=after_wo, changed_by=username)
         else:
             _record_audit(cur, 'work_orders', wo_id, 'update', before=existing, after=after_wo, changed_by=username)
+
+        # Signed release attached in this same submission (the only way office
+        # staff can schedule an occupied job). Runs after the WO write so the
+        # row has an id, and after the description was saved so the token sync
+        # appends to the final text rather than being overwritten by it.
+        if release_upload and company_key in COMPANIES_WITH_OCCUPIED_RELEASE:
+            _store_release_form(cur, company_key, wo_id, release_upload, username)
 
         conn.commit()
         if duration_mismatch:
@@ -3945,6 +4008,7 @@ def workorder_detail(company_key, wo_id, branding, all_companies, company_access
     callbacks_against = cur.fetchall()
 
     audit_history = _audit_history(cur, 'work_orders', wo_id)
+    release_forms = _release_forms(cur, wo_id)
     cur.close(); conn.close()
     extraction_day_count = _extraction_day_count(wo['extraction_started_at'])
     return render_template('workorder_detail.html',
@@ -3954,8 +4018,192 @@ def workorder_detail(company_key, wo_id, branding, all_companies, company_access
         accruing=accruing, techs=techs, history=history, invoice_id=invoice_id,
         extraction_day_count=extraction_day_count, has_followup_child=has_followup_child,
         callback_source=callback_source, callbacks_against=callbacks_against,
-        audit_history=audit_history,
+        audit_history=audit_history, release_forms=release_forms,
     )
+
+# ============================================================================
+# Occupied-release form attachments  (migration 030; Michele, 2026-10-01)
+#
+# The app's only inbound upload path. Rules that matter here:
+#   * PDF only, and verified by sniffing the %PDF- magic bytes rather than
+#     trusting the extension or the browser's content-type, both of which the
+#     client controls.
+#   * The on-disk name is ours (wo<id>_<random>.pdf), never the uploaded one,
+#     so there is no user-controlled text anywhere in the path we open.
+#   * Reads are confined to the company's own folder, re-checked with
+#     realpath before the file is opened.
+# ============================================================================
+
+def _attachment_dir(company_key):
+    path = os.path.join(UPLOAD_DIR, company_key)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+def _release_forms(cur, wo_id):
+    cur.execute("""
+        SELECT id, original_filename, byte_size, created_at, created_by
+        FROM work_order_attachments
+        WHERE work_order_id = %s AND attachment_type = 'occupied_release' AND deleted_at IS NULL
+        ORDER BY created_at, id
+    """, (wo_id,))
+    return cur.fetchall()
+
+def _wo_has_release(cur, wo_id):
+    cur.execute("""
+        SELECT 1 FROM work_order_attachments
+        WHERE work_order_id = %s AND attachment_type = 'occupied_release' AND deleted_at IS NULL
+        LIMIT 1
+    """, (wo_id,))
+    return cur.fetchone() is not None
+
+def _read_release_upload(field='release_form'):
+    """Validate an uploaded release form without writing anything. Returns
+    ({'filename':..., 'data':...} or None, error). PDF-ness is decided by the
+    %PDF- magic bytes, not the extension or the browser's content-type --
+    both of those are client-supplied."""
+    upload = request.files.get(field)
+    if not upload or not upload.filename:
+        return None, None
+    if not upload.filename.lower().endswith('.pdf'):
+        return None, 'Release forms must be PDF files.'
+    data = upload.read()
+    if not data:
+        return None, 'That release form file was empty.'
+    if len(data) > MAX_UPLOAD_BYTES:
+        return None, (f'That release form is {len(data) // (1024 * 1024)}MB — the limit is '
+                      f'{MAX_UPLOAD_BYTES // (1024 * 1024)}MB. Try scanning it at a lower resolution.')
+    if not data.startswith(b'%PDF-'):
+        return None, 'That release form is not a real PDF, even though it is named .pdf.'
+    return {'filename': upload.filename[:255], 'data': data}, None
+
+def _store_release_form(cur, company_key, wo_id, upload, username):
+    """Write the validated PDF to the company's upload folder and record it.
+    Caller owns the transaction."""
+    stored_filename = f'wo{wo_id}_{secrets.token_hex(16)}.pdf'
+    with open(os.path.join(_attachment_dir(company_key), stored_filename), 'wb') as fh:
+        fh.write(upload['data'])
+    cur.execute("""
+        INSERT INTO work_order_attachments (work_order_id, attachment_type, original_filename,
+            stored_filename, content_type, byte_size, created_by, updated_by)
+        VALUES (%s, 'occupied_release', %s, %s, 'application/pdf', %s, %s, %s)
+        RETURNING *
+    """, (wo_id, upload['filename'], stored_filename, len(upload['data']), username, username))
+    row = cur.fetchone()
+    _record_audit(cur, 'work_order_attachments', row['id'], 'create', after=dict(row))
+    _sync_release_token(cur, wo_id, True, username)
+    return row['id']
+
+def _sync_release_token(cur, wo_id, present, username):
+    """Keep the RELEASE ON FILE token on the job description's first line in
+    step with whether a signed form is actually attached. The token sits with
+    OCC / AM / GATED / FOLLOW-UP because that's where the WO form's own
+    description builder puts its flags (and the builder knows about this one
+    too, so hitting 'regenerate' doesn't silently drop it)."""
+    cur.execute("SELECT auto_description FROM work_orders WHERE id = %s", (wo_id,))
+    row = cur.fetchone()
+    if not row:
+        return
+    lines = (row['auto_description'] or '').split('\n')
+    first = lines[0] if lines else ''
+    if present == (RELEASE_DESC_TOKEN in first):
+        return
+    if present:
+        first = (first.rstrip() + ' ' + RELEASE_DESC_TOKEN).strip()
+    else:
+        first = re.sub(r'\s{2,}', ' ', first.replace(RELEASE_DESC_TOKEN, '')).strip()
+    if lines:
+        lines[0] = first
+    else:
+        lines = [first]
+    cur.execute("""
+        UPDATE work_orders SET auto_description = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s
+    """, ('\n'.join(lines).strip() or None, username, wo_id))
+
+@app.route('/<company_key>/workorders/<int:wo_id>/release-forms', methods=['POST'])
+@login_required
+@company_access_required
+def workorder_release_form_upload(company_key, wo_id):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    if company_key not in COMPANIES_WITH_OCCUPIED_RELEASE:
+        abort(404)
+    back = f'/{company_key}/workorders/{wo_id}'
+    username = session.get('username')
+
+    upload, error = _read_release_upload()
+    if error or not upload:
+        flash(error or 'Pick a PDF to upload.', 'error')
+        return redirect(back)
+
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("SELECT id, work_order_number FROM work_orders WHERE id = %s AND deleted_at IS NULL", (wo_id,))
+    wo = cur.fetchone()
+    if not wo:
+        cur.close(); conn.close(); abort(404)
+
+    _store_release_form(cur, company_key, wo_id, upload, username)
+    conn.commit(); cur.close(); conn.close()
+
+    flash(f'Signed release attached to {wo["work_order_number"]}. '
+          f'"{RELEASE_DESC_TOKEN}" added to the job description.', 'success')
+    return redirect(back)
+
+@app.route('/<company_key>/workorders/<int:wo_id>/release-forms/<int:attachment_id>')
+@login_required
+@company_access_required
+def workorder_release_form_view(company_key, wo_id, attachment_id):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT original_filename, stored_filename FROM work_order_attachments
+        WHERE id = %s AND work_order_id = %s AND deleted_at IS NULL
+    """, (attachment_id, wo_id))
+    att = cur.fetchone()
+    cur.close(); conn.close()
+    if not att:
+        abort(404)
+
+    directory = _attachment_dir(company_key)
+    path = os.path.realpath(os.path.join(directory, att['stored_filename']))
+    if not path.startswith(os.path.realpath(directory) + os.sep) or not os.path.isfile(path):
+        abort(404)
+    with open(path, 'rb') as fh:
+        data = fh.read()
+    return Response(data, mimetype='application/pdf', headers={
+        'Content-Disposition': f'inline; filename="{_sanitize_filename(att["original_filename"])}"',
+    })
+
+@app.route('/<company_key>/workorders/<int:wo_id>/release-forms/<int:attachment_id>/delete', methods=['POST'])
+@login_required
+@company_access_required
+def workorder_release_form_delete(company_key, wo_id, attachment_id):
+    if session.get('user_role') not in ('admin', 'manager', 'office'):
+        abort(403)
+    username = session.get('username')
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT * FROM work_order_attachments
+        WHERE id = %s AND work_order_id = %s AND deleted_at IS NULL
+    """, (attachment_id, wo_id))
+    att = cur.fetchone()
+    if not att:
+        cur.close(); conn.close(); abort(404)
+    # Soft delete only -- the PDF stays on disk. A signed liability release is
+    # not something a mis-click should destroy.
+    cur.execute("""
+        UPDATE work_order_attachments SET deleted_at = CURRENT_TIMESTAMP, deleted_by = %s
+        WHERE id = %s
+    """, (username, attachment_id))
+    _record_audit(cur, 'work_order_attachments', attachment_id, 'delete', before=dict(att))
+    _sync_release_token(cur, wo_id, _wo_has_release(cur, wo_id), username)
+    conn.commit(); cur.close(); conn.close()
+    flash('Release form removed from this work order.', 'success')
+    return redirect(f'/{company_key}/workorders/{wo_id}')
 
 @app.route('/<company_key>/workorders/new', methods=['GET', 'POST'])
 @login_required
@@ -4026,6 +4274,7 @@ def workorder_new(company_key, branding, all_companies, company_access):
         prefill_time=request.args.get('time', '').strip(),
         prefill_customer_id=prefill_customer_id,
         prefill_customer_name=prefill_customer_name,
+        has_release=False,
         prefill_service_location_id=_opt_num(request.args.get('service_location_id')),
         prefill_work_site_label=request.args.get('work_site_label', '').strip(),
         prefill_parent_id=_opt_num(request.args.get('parent_id')),
@@ -4138,6 +4387,10 @@ def workorder_edit(company_key, wo_id, branding, all_companies, company_access):
         cur.close(); conn.close()
         if src:
             callback_source_label = _wo_callback_option_label(src)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    has_release = _wo_has_release(cur, wo_id)
+    cur.close(); conn.close()
     return render_template('workorder_form.html',
         branding=branding, company_key=company_key,
         company_access=company_access, all_companies=all_companies,
@@ -4148,6 +4401,7 @@ def workorder_edit(company_key, wo_id, branding, all_companies, company_access):
         arrival_suggestions=WO_ARRIVAL_SUGGESTIONS,
         site_labels=WORK_SITE_LABELS,
         callback_source_label=callback_source_label,
+        has_release=has_release,
         return_to=request.args.get('return_to', ''),
     )
 
@@ -5776,8 +6030,8 @@ def workorder_invoice_new(company_key, wo_id):
     conn = get_db_connection(company_key)
     cur  = conn.cursor()
     cur.execute("""
-        SELECT id, status, customer_id, service_location_id FROM work_orders
-        WHERE id = %s AND deleted_at IS NULL
+        SELECT id, status, customer_id, service_location_id, description_occ_vac
+        FROM work_orders WHERE id = %s AND deleted_at IS NULL
     """, (wo_id,))
     wo = cur.fetchone()
     if not wo:
@@ -5818,6 +6072,9 @@ def workorder_invoice_new(company_key, wo_id):
         return redirect(f'/{company_key}/workorders/{wo_id}')
 
     username = session.get('username')
+    missing_release = (company_key in COMPANIES_WITH_OCCUPIED_RELEASE
+                       and wo['description_occ_vac'] == 'OCC'
+                       and not _wo_has_release(cur, wo_id))
     invoice_id = _create_invoice_from_wo(cur, company_key, wo, username)
 
     cur.execute("""
@@ -5831,6 +6088,9 @@ def workorder_invoice_new(company_key, wo_id):
 
     conn.commit()
     cur.close(); conn.close()
+    if missing_release:
+        flash('This is an OCCUPIED job with NO signed release form attached. '
+              'Attach it to the work order before sending this invoice.', 'error')
     return redirect(f'/{company_key}/invoices/{invoice_id}')
 
 
@@ -5915,7 +6175,7 @@ def invoice_detail(company_key, invoice_id, branding, all_companies, company_acc
     cur  = conn.cursor()
     cur.execute("""
         SELECT i.*, c.property_name AS customer_name,
-               sl.location_name, wo.work_order_number
+               sl.location_name, wo.work_order_number, wo.description_occ_vac
         FROM invoices i
         JOIN customers c ON c.id = i.customer_id
         LEFT JOIN service_locations sl ON sl.id = i.service_location_id
@@ -6011,6 +6271,8 @@ def invoice_detail(company_key, invoice_id, branding, all_companies, company_acc
             inv['invoice_number'], ver['total'], balance)
 
     audit_history = _audit_history(cur, 'invoices', invoice_id)
+    release_forms = (_release_forms(cur, inv['work_order_id'])
+                     if company_key in COMPANIES_WITH_OCCUPIED_RELEASE and inv.get('work_order_id') else [])
     cur.close(); conn.close()
     return render_template('invoice_detail.html',
         branding=branding, company_key=company_key,
@@ -6022,7 +6284,7 @@ def invoice_detail(company_key, invoice_id, branding, all_companies, company_acc
         next_unpaid_id=next_unpaid_id, payment_methods=payment_methods,
         email_recipients=email_recipients, default_subject=default_subject,
         default_body=default_body, resend_configured=bool(RESEND_API_KEY),
-        audit_history=audit_history,
+        audit_history=audit_history, release_forms=release_forms,
     )
 
 
@@ -6290,7 +6552,7 @@ def generate_invoice_pdf(company_key, version_id):
     cur  = conn.cursor()
     cur.execute("""
         SELECT iv.*, i.invoice_number, i.invoice_date, i.work_site_label, i.wtn_po_number,
-               i.customer_id, i.service_location_id,
+               i.customer_id, i.service_location_id, i.work_order_id,
                c.property_name AS customer_name, c.address AS customer_address,
                c.address_2 AS customer_address_2, c.city AS customer_city,
                c.state AS customer_state, c.zip AS customer_zip, c.payment_terms,
@@ -6332,6 +6594,13 @@ def generate_invoice_pdf(company_key, version_id):
         applications = cur.fetchall()
 
     balance = invoice_balance(cur, data['invoice_id'])
+    # Michele, 2026-10-01: an occupied job with a signed release on file says
+    # so on the customer's own invoice, not just internally.
+    has_release = bool(
+        company_key in COMPANIES_WITH_OCCUPIED_RELEASE
+        and data.get('work_order_id')
+        and _wo_has_release(cur, data['work_order_id'])
+    )
     cur.close(); conn.close()
 
     branding = COMPANY_BRANDING.get(company_key, {})
@@ -6492,6 +6761,11 @@ def generate_invoice_pdf(company_key, version_id):
         elements.append(Paragraph('Drying &amp; Monitoring Process', h2))
         elements.append(Paragraph(settings['extraction_explainer_text'], small))
         elements.append(Spacer(1, 0.2*inch))
+
+    if has_release:
+        elements.append(Paragraph(
+            'Occupied unit — signed release form on file in our office.', small))
+        elements.append(Spacer(1, 0.15*inch))
 
     if data.get('notes_to_customer'):
         elements.append(Paragraph(data['notes_to_customer'], normal))

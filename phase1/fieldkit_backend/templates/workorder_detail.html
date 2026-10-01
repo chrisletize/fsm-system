@@ -90,6 +90,15 @@
 </div>
 {% endif %}
 
+{% if has_occupied_release(company_key) and wo.description_occ_vac == 'OCC'
+      and not release_forms and wo.status not in ('Cancelled', 'No Charge') %}
+<div class="card" style="background:#fdecea; border:1px solid #f3b8b3; color:#a32d2d; margin-bottom:1.25rem;">
+    <strong>No signed release form on file.</strong>
+    This is an occupied job — the signed release should be attached before the crew goes out.
+    <span style="font-weight:400;">Attach it in “Occupied Release Form” below.</span>
+</div>
+{% endif %}
+
 {% if callback_source %}
 <div class="card" style="background:#fdecea; border:1px solid #f3b8b3; color:#a32d2d; margin-bottom:1.25rem;">
     <strong>Callback</strong> for <a href="/{{ company_key }}/workorders/{{ callback_source.id }}" style="color:#a32d2d; text-decoration:underline;">{{ callback_source.work_order_number }}</a>
@@ -197,6 +206,74 @@
             <div class="empty-note">No description.</div>
             {% endif %}
         </div>
+
+        {% if has_occupied_release(company_key) %}
+        <div class="card">
+            <h2>Occupied Release Form
+                {% if release_forms %}
+                <span style="font-weight:400; font-size:.8rem; color:#2d8a4e; margin-left:.4rem;">
+                    signed form on file
+                </span>
+                {% endif %}
+            </h2>
+
+            {% if release_forms %}
+            <table class="li-table" style="margin-bottom:1rem;">
+                <thead>
+                    <tr><th>File</th><th>Size</th><th>Uploaded</th><th></th></tr>
+                </thead>
+                <tbody>
+                    {% for rf in release_forms %}
+                    <tr>
+                        <td>
+                            <a href="/{{ company_key }}/workorders/{{ wo.id }}/release-forms/{{ rf.id }}"
+                               target="_blank" rel="noopener"
+                               style="color:{{ branding.color_primary }}; font-weight:500;">
+                                {{ rf.original_filename }}
+                            </a>
+                        </td>
+                        <td>{{ (rf.byte_size / 1024) | round | int }} KB</td>
+                        <td style="color:#888; font-size:.85rem;">
+                            {{ rf.created_at.strftime('%b %-d, %Y') }} · {{ rf.created_by }}
+                        </td>
+                        <td style="text-align:right;">
+                            <a href="/{{ company_key }}/workorders/{{ wo.id }}/release-forms/{{ rf.id }}"
+                               target="_blank" rel="noopener" class="btn btn-secondary"
+                               style="padding:.35rem .8rem; font-size:.82rem;">View PDF</a>
+                            <form method="POST"
+                                  action="/{{ company_key }}/workorders/{{ wo.id }}/release-forms/{{ rf.id }}/delete"
+                                  style="display:inline;"
+                                  onsubmit="return confirm('Remove this signed release form from the work order? The file itself is kept.');">
+                                <button type="submit" class="btn btn-danger"
+                                        style="padding:.35rem .8rem; font-size:.82rem;">
+                                    Remove
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="empty-note" style="margin-bottom:1rem;">
+                No signed release attached{% if wo.description_occ_vac == 'OCC' %} — this job is marked occupied{% endif %}.
+            </div>
+            {% endif %}
+
+            <form method="POST" action="/{{ company_key }}/workorders/{{ wo.id }}/release-forms"
+                  enctype="multipart/form-data"
+                  style="display:flex; gap:.6rem; align-items:center; flex-wrap:wrap;">
+                <input type="file" name="release_form" accept="application/pdf,.pdf" required
+                       style="font-size:.9rem;">
+                <button type="submit" class="btn btn-primary"
+                        style="padding:.5rem 1.1rem; font-size:.88rem;">Attach Signed Form</button>
+                <span style="color:#999; font-size:.8rem;">
+                    PDF only, up to 20MB. Attaching adds “{{ release_token }}” to the job description
+                    and a note on the customer's invoice.
+                </span>
+            </form>
+        </div>
+        {% endif %}
 
         <div class="card">
             <h2>Line Items</h2>
