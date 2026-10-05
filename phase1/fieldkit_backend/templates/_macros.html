@@ -93,3 +93,160 @@
     </div>
 </details>
 {%- endmacro %}
+
+{# ---------------------------------------------------------------------------
+   Predictive address lookup (Chris, 2026-10-05: "so you don't have to type out
+   the entire address"). Backed by Photon, which is free and needs no API key --
+   consistent with the other address helpers in this app (Zippopotam for
+   ZIP->city/state, the Census geocoder for county) rather than introducing a
+   keyed paid service for ~900 lookups a year.
+
+   Photon is OpenStreetMap data: strong on established streets, patchier on new
+   developments. Swapping to Google Places or Mapbox later changes only the
+   fetch URL and the result mapping inside this one macro -- the field markup
+   and the hidden city/state/zip plumbing stay identical.
+
+   The picked result is split into parts, so city/state/zip get captured even
+   where the form only SHOWS one address box (the visit wizard does this): pass
+   city_id/state_id/zip_id pointing at visible inputs or hidden ones, either
+   works. lat/lon bias results toward the company's own metro.
+--------------------------------------------------------------------------- #}
+{% macro address_lookup(name, value='', input_id='addrInput', city_id='', state_id='', zip_id='',
+                        lat='', lon='', placeholder='Start typing the address…') -%}
+<div class="ac-wrap js-addr-wrap"
+     data-lat="{{ lat }}" data-lon="{{ lon }}"
+     data-city="{{ city_id }}" data-state="{{ state_id }}" data-zip="{{ zip_id }}">
+    <input type="text" name="{{ name }}" id="{{ input_id }}" class="js-addr-input"
+           value="{{ value or '' }}" placeholder="{{ placeholder }}" autocomplete="off">
+    <div class="ac-panel js-addr-panel" role="listbox"></div>
+    <div class="js-addr-hint" style="font-size:.78rem; color:#999; margin-top:.2rem;"></div>
+</div>
+{%- endmacro %}
+
+{# Drop once per page that uses address_lookup. Separate from the macro so a
+   page with several address fields only ships the script once. #}
+{% macro address_lookup_script() -%}
+<script>
+(function () {
+    // Debounced to 350ms and gated at 4 characters: Photon is a free public
+    // service and hammering it on every keystroke would be both rude and slow.
+    const MIN_CHARS = 4, DEBOUNCE_MS = 350;
+
+    // OpenStreetMap is inconsistent: the same query returns "NC" for one result
+    // and "North Carolina" for the next. The state column is 2 chars, so a raw
+    // truncate would quietly store "NO". Normalise at the point of capture.
+    const STATE_ABBR = {
+        'alabama':'AL','alaska':'AK','arizona':'AZ','arkansas':'AR','california':'CA',
+        'colorado':'CO','connecticut':'CT','delaware':'DE','district of columbia':'DC',
+        'florida':'FL','georgia':'GA','hawaii':'HI','idaho':'ID','illinois':'IL',
+        'indiana':'IN','iowa':'IA','kansas':'KS','kentucky':'KY','louisiana':'LA',
+        'maine':'ME','maryland':'MD','massachusetts':'MA','michigan':'MI','minnesota':'MN',
+        'mississippi':'MS','missouri':'MO','montana':'MT','nebraska':'NE','nevada':'NV',
+        'new hampshire':'NH','new jersey':'NJ','new mexico':'NM','new york':'NY',
+        'north carolina':'NC','north dakota':'ND','ohio':'OH','oklahoma':'OK','oregon':'OR',
+        'pennsylvania':'PA','rhode island':'RI','south carolina':'SC','south dakota':'SD',
+        'tennessee':'TN','texas':'TX','utah':'UT','vermont':'VT','virginia':'VA',
+        'washington':'WA','west virginia':'WV','wisconsin':'WI','wyoming':'WY'
+    };
+    function stateCode(v) {
+        if (!v) return '';
+        const t = String(v).trim();
+        if (/^[A-Za-z]{2}$/.test(t)) return t.toUpperCase();
+        return STATE_ABBR[t.toLowerCase()] || '';
+    }
+
+    function label(p) {
+        const line1 = [p.housenumber, p.street].filter(Boolean).join(' ')
+                      || p.name || '';
+        const line2 = [p.city, p.state, p.postcode].filter(Boolean).join(', ');
+        return {line1: line1, line2: line2};
+    }
+
+    document.querySelectorAll('.js-addr-wrap').forEach(function (wrap) {
+        const input = wrap.querySelector('.js-addr-input');
+        const panel = wrap.querySelector('.js-addr-panel');
+        const hint  = wrap.querySelector('.js-addr-hint');
+        let timer = null, lastQuery = '';
+
+        function setPart(idAttr, val) {
+            const id = wrap.dataset[idAttr];
+            if (!id || !val) return;
+            const el = document.getElementById(id);
+            if (el) el.value = val;
+        }
+        function close() { panel.classList.remove('open'); panel.innerHTML = ''; }
+
+        function pick(p) {
+            const l = label(p);
+            input.value = l.line1 || input.value;
+            setPart('city', p.city || p.district || '');
+            setPart('state', stateCode(p.state));
+            setPart('zip', p.postcode || '');
+            hint.textContent = l.line2 ? ('✓ ' + l.line2) : '';
+            close();
+        }
+
+        function search(q) {
+            let url = 'https://photon.komoot.io/api/?limit=6&q=' + encodeURIComponent(q);
+            if (wrap.dataset.lat && wrap.dataset.lon) {
+                url += '&lat=' + wrap.dataset.lat + '&lon=' + wrap.dataset.lon;
+            }
+            hint.textContent = 'Searching…';
+            fetch(url)
+                .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+                .then(function (data) {
+                    // US only, and only results that actually carry a street or
+                    // a place name — Photon will otherwise offer whole cities.
+                    // Photon happily returns the same street twice; dedupe on
+                    // the rendered label so the list isn't full of repeats.
+                    const seen = {};
+                    const hits = (data.features || []).filter(function (f) {
+                        const p = f.properties || {};
+                        if (p.countrycode !== 'US' || !(p.street || p.name)) return false;
+                        const l = label(p);
+                        const k = (l.line1 + '|' + l.line2).toLowerCase();
+                        if (seen[k]) return false;
+                        seen[k] = 1;
+                        return true;
+                    });
+                    if (!hits.length) {
+                        hint.textContent = 'No match — type it in full.';
+                        close();
+                        return;
+                    }
+                    hint.textContent = '';
+                    panel.innerHTML = hits.map(function (f, i) {
+                        const l = label(f.properties);
+                        return '<div class="ac-item" data-i="' + i + '">'
+                             + '<div>' + l.line1.replace(/[<>&]/g, '') + '</div>'
+                             + '<div style="font-size:.78rem;color:#888;">'
+                             + l.line2.replace(/[<>&]/g, '') + '</div></div>';
+                    }).join('');
+                    panel.classList.add('open');
+                    panel._hits = hits;
+                })
+                .catch(function () {
+                    // Never block typing because a lookup service is unreachable.
+                    hint.textContent = 'Address lookup unavailable — type it in full.';
+                    close();
+                });
+        }
+
+        input.addEventListener('input', function () {
+            const q = input.value.trim();
+            clearTimeout(timer);
+            if (q.length < MIN_CHARS) { close(); hint.textContent = ''; return; }
+            if (q === lastQuery) return;
+            timer = setTimeout(function () { lastQuery = q; search(q); }, DEBOUNCE_MS);
+        });
+        panel.addEventListener('mousedown', function (e) {
+            const item = e.target.closest('.ac-item');
+            if (!item || !panel._hits) return;
+            e.preventDefault();
+            pick(panel._hits[Number(item.dataset.i)].properties);
+        });
+        input.addEventListener('blur', function () { setTimeout(close, 180); });
+    });
+})();
+</script>
+{%- endmacro %}

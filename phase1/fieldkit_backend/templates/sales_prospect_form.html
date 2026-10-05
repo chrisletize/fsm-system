@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import address_lookup, address_lookup_script %}
 {% block title %}{% if prospect %}Edit{% else %}New{% endif %} Prospect — {{ branding.name }}{% endblock %}
 
 {% block extra_css %}
@@ -20,6 +21,13 @@
     .btn-secondary { background:#6c757d; color:white; }
     .flash.error { background:#fee; color:#c33; border:1px solid #fcc; padding:.8rem 1rem; border-radius:4px; margin-bottom:1.25rem; }
     .form-actions { margin-top:1.5rem; display:flex; gap:.75rem; align-items:center; }
+    .ac-wrap { position:relative; }
+    .ac-panel { display:none; position:absolute; top:100%; left:0; right:0; background:white;
+                border:1px solid #ddd; border-radius:4px; max-height:240px; overflow-y:auto;
+                z-index:30; box-shadow:0 4px 10px rgba(0,0,0,.08); }
+    .ac-panel.open { display:block; }
+    .ac-item { padding:.55rem .75rem; cursor:pointer; font-size:.9rem; }
+    .ac-item:hover { background:#f5f5f5; }
 </style>
 {% endblock %}
 
@@ -43,21 +51,24 @@
                 {% endfor %}
             </select>
         </div>
-        <div class="form-group">
-            <label>Address</label>
-            <input type="text" name="address" value="{{ prospect.address if prospect else '' }}">
+        <div class="form-group full">
+            <label>Address <span style="color:#999;font-weight:400;">(start typing — city, state and zip fill in)</span></label>
+            {{ address_lookup('address', prospect.address if prospect else '',
+                              input_id='addrInput', city_id='cityInput',
+                              state_id='stateInput', zip_id='zipInput',
+                              lat=metro_lat(company_key), lon=metro_lon(company_key)) }}
         </div>
         <div class="form-group">
             <label>City</label>
-            <input type="text" name="city" value="{{ prospect.city if prospect else '' }}">
+            <input type="text" name="city" id="cityInput" value="{{ prospect.city if prospect else '' }}">
         </div>
         <div class="form-group">
             <label>State</label>
-            <input type="text" name="state" maxlength="2" value="{{ prospect.state if prospect else '' }}">
+            <input type="text" name="state" id="stateInput" maxlength="2" value="{{ prospect.state if prospect else '' }}">
         </div>
         <div class="form-group">
             <label>Zip</label>
-            <input type="text" name="zip" value="{{ prospect.zip if prospect else '' }}">
+            <input type="text" name="zip" id="zipInput" value="{{ prospect.zip if prospect else '' }}">
         </div>
         <div class="form-group">
             <label>Management Company</label>
@@ -101,6 +112,8 @@
         <a href="{% if prospect %}/{{ company_key }}/sales/prospects/{{ prospect.id }}{% else %}/{{ company_key }}/sales/prospects{% endif %}" class="btn btn-secondary">Cancel</a>
     </div>
 </form>
+
+{{ address_lookup_script() }}
 
 <script>
 (function() {

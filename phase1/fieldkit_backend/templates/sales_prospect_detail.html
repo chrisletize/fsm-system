@@ -81,10 +81,20 @@
                 {% if v.visit_tag %} — {{ v.visit_tag }}{% endif %}
                 {% if v.is_dormant_investigation %}<span class="badge badge-dormant">Dormancy</span>{% endif %}
             </div>
-            {% if v.contact_first %}<div class="row-sub">Met: {{ v.contact_first }} {{ v.contact_last }}</div>{% endif %}
+            {% if v.contact_first %}<div class="row-sub">Met: {{ (v.contact_first ~ ' ' ~ (v.contact_last or ''))|trim }}</div>{% endif %}
             {% if v.notes %}<div class="row-sub">{{ v.notes }}</div>{% endif %}
             {% if v.follow_up_needed %}
             <div class="row-sub">Follow-up: {{ v.follow_up_date.strftime('%b %-d, %Y') if v.follow_up_date else '—' }}{% if v.follow_up_completed %} (done){% endif %}</div>
+            {% endif %}
+            {% if v.photos %}
+            <div class="row-sub">
+                Card photo{{ 's' if v.photos|length != 1 }}:
+                {% for ph in v.photos %}
+                <a href="/{{ company_key }}/sales/photos/{{ ph.id }}" target="_blank" rel="noopener"
+                   style="color:{{ branding.color_primary }};">#{{ loop.index }}</a>{% if not ph.transcribed_at %}
+                <span style="color:#8a6100;">(not entered yet)</span>{% endif %}{% if not loop.last %} · {% endif %}
+                {% endfor %}
+            </div>
             {% endif %}
         </div>
         {% else %}

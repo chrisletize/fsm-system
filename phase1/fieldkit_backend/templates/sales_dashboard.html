@@ -22,6 +22,16 @@
     .badge-dormant { background:#f1efe8; color:#5f5e5a; }
     .empty { color:#aaa; padding:1rem 0; text-align:center; font-size:.9rem; }
     .quick-actions { display:flex; gap:.75rem; flex-wrap:wrap; margin-bottom:1.5rem; }
+    /* The primary action, sized for a thumb on a tablet rather than a mouse. */
+    .log-visit-btn {
+        display:flex; flex-direction:column; align-items:center; justify-content:center;
+        background:{{ branding.color_primary }}; color:#fff; text-decoration:none;
+        border-radius:10px; padding:1.4rem 1rem; margin-bottom:1rem; min-height:92px;
+        box-shadow:0 2px 6px rgba(0,0,0,.12); transition:transform .12s, box-shadow .12s;
+    }
+    .log-visit-btn:hover { transform:translateY(-1px); box-shadow:0 5px 14px rgba(0,0,0,.18); }
+    .log-visit-btn .lv-main { font-size:1.45rem; font-weight:700; letter-spacing:.01em; }
+    .log-visit-btn .lv-sub { font-size:.86rem; opacity:.85; margin-top:.25rem; }
     .window-tabs { display:flex; gap:.4rem; }
     .window-tab {
         padding:.3rem .7rem; border-radius:12px; font-size:.78rem; font-weight:500; text-decoration:none;
@@ -55,13 +65,53 @@
     {% endif %}
 </div>
 
+{# Chris, 2026-10-05: the sales page is driven by logging visits — new prospects
+   and contacts are created from inside that flow, so Log Visit is the front
+   door and everything else is a side door. #}
+<a href="/{{ company_key }}/sales/visits/log" class="log-visit-btn">
+    <span class="lv-main">Log a Visit</span>
+    <span class="lv-sub">New prospects and contacts start here</span>
+</a>
+
 <div class="quick-actions">
-    <a href="/{{ company_key }}/sales/prospects/new" class="btn btn-primary">+ New Prospect</a>
-    <a href="/{{ company_key }}/sales/contacts/new" class="btn btn-outline">+ New Contact</a>
     <a href="/{{ company_key }}/sales/prospects" class="btn btn-outline">Prospects</a>
     <a href="/{{ company_key }}/sales/contacts" class="btn btn-outline">Contacts</a>
     <a href="/{{ company_key }}/sales/followups" class="btn btn-outline">Follow-Ups</a>
+    <a href="/{{ company_key }}/sales/prospects/new" class="btn btn-outline">+ Prospect (no visit)</a>
+    <a href="/{{ company_key }}/sales/contacts/new" class="btn btn-outline">+ Contact (no visit)</a>
 </div>
+
+{% if pending_cards %}
+<div class="card" style="background:#fffaf0; border:1px solid #f0dcb0; margin-bottom:1.5rem;">
+    <h2 style="color:#8a6100;">Business cards awaiting entry ({{ pending_cards|length }})</h2>
+    <div class="row-sub" style="margin-bottom:.75rem;">
+        Photographed in the field and not yet typed in. Creating a contact from a card clears it.
+    </div>
+    {% for p in pending_cards %}
+    <div class="row-item">
+        <div>
+            <div class="row-name">{{ p.property_name or 'Unknown property' }}</div>
+            <div class="row-sub">
+                photographed {{ p.created_at.strftime('%b %-d') }} by {{ p.created_by }}
+                {% if p.property_type == 'prospect' %} · ○ prospect{% else %} · ✓ customer{% endif %}
+            </div>
+        </div>
+        <div style="display:flex; align-items:center; gap:.4rem; flex-wrap:wrap;">
+            <a href="/{{ company_key }}/sales/photos/{{ p.id }}" target="_blank" rel="noopener"
+               class="btn btn-outline" style="padding:.4rem .8rem; font-size:.82rem;">View Card</a>
+            <a href="/{{ company_key }}/sales/contacts/new?property_type={{ p.property_type }}&property_id={{ p.property_id }}&from_photo={{ p.id }}&return_to=/{{ company_key }}/sales"
+               class="btn btn-primary" style="padding:.4rem .8rem; font-size:.82rem;">Enter Contact</a>
+            <form method="POST" action="/{{ company_key }}/sales/photos/{{ p.id }}/transcribed"
+                  style="display:inline;"
+                  onsubmit="return confirm('Clear this card from the queue without creating a contact?');">
+                <button type="submit" class="btn btn-outline"
+                        style="padding:.4rem .8rem; font-size:.82rem; color:#777;">Dismiss</button>
+            </form>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
 
 <a href="/sales-overview" class="overview-link">
     <div class="overview-dots">

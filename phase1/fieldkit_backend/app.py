@@ -92,9 +92,33 @@ UPLOAD_DIR            = os.environ.get('UPLOAD_DIR', '/data/uploads')
 MAX_UPLOAD_BYTES      = 20 * 1024 * 1024
 RELEASE_DESC_TOKEN    = 'RELEASE ON FILE'
 app.jinja_env.globals['release_token'] = RELEASE_DESC_TOKEN
-# Global ceiling so a giant body is rejected by Flask before it's buffered;
-# the per-file check below is what produces the friendly message.
-app.config['MAX_CONTENT_LENGTH'] = 25 * 1024 * 1024
+
+# Business-card photos off a phone or tablet (migration 032). Sniffed by magic
+# bytes, never by extension -- a phone will happily hand us "IMG_0042.HEIC"
+# that is actually a JPEG, and the extension is client-controlled either way.
+MAX_PHOTO_BYTES   = 15 * 1024 * 1024
+MAX_PHOTOS_PER_VISIT = 5
+app.jinja_env.globals['max_photos_per_visit'] = MAX_PHOTOS_PER_VISIT
+
+# Rough metro centres. Used only to bias predictive address lookups toward the
+# market each company actually works in, so "400 Main" offers Charlotte streets
+# to the Charlotte companies and Raleigh ones to CTS.
+COMPANY_METRO_LATLON = {
+    'getagrip':          (35.2271, -80.8431),   # Charlotte
+    'kleanit_charlotte': (35.2271, -80.8431),   # Charlotte
+    'cts':               (35.7796, -78.6382),   # Raleigh
+    'kleanit_sf':        (26.1224, -80.1373),   # Fort Lauderdale / South Florida
+}
+app.jinja_env.globals['metro_lat'] = lambda ck: COMPANY_METRO_LATLON.get(ck, ('', ''))[0]
+app.jinja_env.globals['metro_lon'] = lambda ck: COMPANY_METRO_LATLON.get(ck, ('', ''))[1]
+PHOTO_SIGNATURES = (
+    (b'\xff\xd8\xff',       'image/jpeg', 'jpg'),
+    (b'\x89PNG\r\n\x1a\n',  'image/png',  'png'),
+)
+# Global ceiling so a giant body is rejected by Flask before it's buffered; the
+# per-file checks produce the friendly messages. Sized for several phone photos
+# in one submission, since the visit form can carry up to MAX_PHOTOS_PER_VISIT.
+app.config['MAX_CONTENT_LENGTH'] = 90 * 1024 * 1024
 
 # ============================================================================
 # Return-to-origin navigation (Chris, 2026-09-23: "after a separate page task
@@ -11037,6 +11061,7 @@ def sales_dashboard(company_key, branding, all_companies, company_access):
     """)
     pending_approvals = cur.fetchone()['n']
 
+    pending_cards = _pending_cards(cur)
     dormant = _sales_dormant_customers(company_key)
     cur.close(); conn.close()
     return render_template('sales_dashboard.html',
@@ -11044,6 +11069,7 @@ def sales_dashboard(company_key, branding, all_companies, company_access):
         company_access=company_access, all_companies=all_companies,
         followups=followups, recent_visits=recent_visits, dormant=dormant,
         pending_approvals=pending_approvals, today=today, window=window,
+        pending_cards=pending_cards,
     )
 
 
@@ -11277,7 +11303,17 @@ def sales_prospect_detail(company_key, prospect_id, branding, all_companies, com
         WHERE sv.property_id = %s AND sv.property_type = 'prospect' AND sv.deleted_at IS NULL
         ORDER BY sv.visit_date DESC, sv.id DESC
     """, (prospect_id,))
-    visits = cur.fetchall()
+    visits = [dict(v) for v in cur.fetchall()]
+    if visits:
+        cur.execute("""
+            SELECT id, visit_id, transcribed_at FROM sales_visit_photos
+            WHERE visit_id = ANY(%s) AND deleted_at IS NULL ORDER BY id
+        """, ([v['id'] for v in visits],))
+        by_visit = {}
+        for ph in cur.fetchall():
+            by_visit.setdefault(ph['visit_id'], []).append(dict(ph))
+        for v in visits:
+            v['photos'] = by_visit.get(v['id'], [])
     cur.execute("""
         SELECT * FROM sales_contacts
         WHERE current_property_id = %s AND current_property_type = 'prospect' AND deleted_at IS NULL
@@ -11306,8 +11342,12 @@ def sales_prospect_detail(company_key, prospect_id, branding, all_companies, com
 def _save_sales_contact(company_key, contact_id):
     first_name = request.form.get('first_name', '').strip()
     last_name  = request.form.get('last_name', '').strip()
-    if not first_name or not last_name:
-        return None, 'First and last name are required.'
+    # Chris, 2026-10-05: a surname is no longer required. In the field you
+    # often only get "Mike at the leasing office", and refusing to record that
+    # loses the contact entirely. Either name alone is enough; the columns are
+    # NOT NULL but '' satisfies that, so no migration was needed.
+    if not first_name and not last_name:
+        return None, 'A contact needs at least a first or last name.'
     title                  = request.form.get('title', '').strip() or None
     personal_phone         = request.form.get('personal_phone', '').strip() or None
     personal_email         = request.form.get('personal_email', '').strip() or None
@@ -11377,30 +11417,6 @@ def _save_sales_contact(company_key, contact_id):
     return new_id, None
 
 
-@app.route('/<company_key>/sales/contacts/quick-add', methods=['POST'])
-@login_required
-@company_access_required
-def sales_contact_quick_add(company_key):
-    """Inline 'who did you meet?' add-on for the visit-log screen (same gap
-    as the management-company dropdown): the contact select there only ever
-    lists sales_contacts already tied to this property, so a brand-new
-    contact had no way in short of leaving the page for the full Contacts
-    form. Reuses _save_sales_contact's validation + contact_property_history
-    bookkeeping; only the response shape (JSON, not a redirect) differs."""
-    if session.get('user_role') not in SALES_ROLES:
-        return jsonify({'error': 'Forbidden'}), 403
-    new_id, error = _save_sales_contact(company_key, None)
-    if error:
-        return jsonify({'error': error}), 400
-    conn = get_db_connection(company_key)
-    cur = conn.cursor()
-    cur.execute("SELECT first_name, last_name, title FROM sales_contacts WHERE id = %s", (new_id,))
-    c = cur.fetchone()
-    cur.close(); conn.close()
-    name = f"{c['first_name']} {c['last_name']}" + (f" ({c['title']})" if c['title'] else '')
-    return jsonify({'id': new_id, 'name': name})
-
-
 @app.route('/<company_key>/sales/contacts')
 @login_required
 @company_access_required
@@ -11438,9 +11454,22 @@ def sales_contact_new(company_key, branding, all_companies, company_access):
     if session.get('user_role') not in SALES_ROLES:
         abort(403)
     error = None
+    # from_photo links this contact back to the business-card photo it was typed
+    # from, which is also what clears that card off the dashboard queue.
+    from_photo = _opt_num(request.values.get('from_photo'))
     if request.method == 'POST':
         new_id, error = _save_sales_contact(company_key, None)
         if not error:
+            if from_photo:
+                conn = get_db_connection(company_key)
+                cur = conn.cursor()
+                cur.execute("""
+                    UPDATE sales_visit_photos
+                    SET contact_id = %s, transcribed_at = CURRENT_TIMESTAMP,
+                        transcribed_by = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+                    WHERE id = %s AND deleted_at IS NULL AND transcribed_at IS NULL
+                """, (new_id, session.get('username'), session.get('username'), from_photo))
+                conn.commit(); cur.close(); conn.close()
             return redirect(return_to_from_request(f'/{company_key}/sales/contacts/{new_id}/edit'))
     prefill_property_type = request.args.get('property_type', '').strip() or None
     prefill_property_id   = _opt_num(request.args.get('property_id'))
@@ -11453,7 +11482,7 @@ def sales_contact_new(company_key, branding, all_companies, company_access):
         company_access=company_access, all_companies=all_companies,
         contact=None, error=error, history=[],
         prefill_property_type=prefill_property_type, prefill_property_id=prefill_property_id,
-        prefill_property_name=prefill_property_name,
+        prefill_property_name=prefill_property_name, from_photo=from_photo,
         return_to=request.args.get('return_to', ''),
     )
 
@@ -11494,6 +11523,163 @@ def sales_contact_edit(company_key, contact_id, branding, all_companies, company
 
 
 # ----------------------------------------------------------------------------
+# Business-card photos (migration 032)
+#
+# Chris, 2026-10-05: a salesperson in a leasing office photographs the card and
+# moves on; the details get typed in later. So the photo is the capture and
+# `transcribed_at IS NULL` is the queue of cards nobody has entered yet.
+# ----------------------------------------------------------------------------
+
+def _photo_dir(company_key):
+    path = os.path.join(UPLOAD_DIR, company_key, 'sales')
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _read_photo_uploads(field='card_photos'):
+    """Validate uploaded card photos. Returns (photos, error).
+
+    JPEG and PNG only, decided by magic bytes. HEIC is rejected with its own
+    message rather than a generic one: iPhones shoot HEIC by default, iOS
+    usually converts it on upload, and when it doesn't the file is useless here
+    because most browsers can't display it -- which would break the entire
+    point of photographing the card to read it later."""
+    files = [f for f in request.files.getlist(field) if f and f.filename]
+    if not files:
+        return [], None
+    if len(files) > MAX_PHOTOS_PER_VISIT:
+        return [], f'Up to {MAX_PHOTOS_PER_VISIT} photos per visit.'
+    photos = []
+    for up in files:
+        data = up.read()
+        if not data:
+            return [], f'"{up.filename}" was empty.'
+        if len(data) > MAX_PHOTO_BYTES:
+            return [], (f'"{up.filename}" is {len(data) // (1024 * 1024)}MB — the limit is '
+                        f'{MAX_PHOTO_BYTES // (1024 * 1024)}MB per photo.')
+        match = next((s for s in PHOTO_SIGNATURES if data.startswith(s[0])), None)
+        if not match:
+            if len(data) > 12 and data[4:8] == b'ftyp':
+                return [], (f'"{up.filename}" is an iPhone HEIC photo, which most browsers '
+                            f'cannot display. On the iPad: Settings > Camera > Formats > '
+                            f'"Most Compatible" will shoot JPEG instead.')
+            return [], f'"{up.filename}" is not a JPEG or PNG image.'
+        photos.append({'filename': up.filename[:255], 'data': data,
+                       'content_type': match[1], 'ext': match[2]})
+    return photos, None
+
+
+def _store_visit_photo(cur, company_key, visit_id, photo, username):
+    stored = f'visit{visit_id}_{secrets.token_hex(12)}.{photo["ext"]}'
+    with open(os.path.join(_photo_dir(company_key), stored), 'wb') as fh:
+        fh.write(photo['data'])
+    cur.execute("""
+        INSERT INTO sales_visit_photos (visit_id, photo_kind, original_filename,
+            stored_filename, content_type, byte_size, created_by, updated_by)
+        VALUES (%s, 'business_card', %s, %s, %s, %s, %s, %s) RETURNING id
+    """, (visit_id, photo['filename'], stored, photo['content_type'],
+          len(photo['data']), username, username))
+    return cur.fetchone()['id']
+
+
+def _pending_cards(cur, limit=25):
+    """Cards photographed but never typed in — the dashboard queue."""
+    cur.execute("""
+        SELECT p.id, p.created_at, p.created_by, p.original_filename,
+               sv.id AS visit_id, sv.visit_date, sv.property_id, sv.property_type
+        FROM sales_visit_photos p
+        JOIN sales_visits sv ON sv.id = p.visit_id
+        WHERE p.transcribed_at IS NULL AND p.deleted_at IS NULL AND sv.deleted_at IS NULL
+        ORDER BY p.created_at DESC LIMIT %s
+    """, (limit,))
+    rows = []
+    for r in cur.fetchall():
+        row = dict(r)
+        row['property_name'] = _sales_property_name(cur, row['property_type'], row['property_id'])
+        rows.append(row)
+    return rows
+
+
+@app.route('/<company_key>/sales/contacts-for')
+@login_required
+@company_access_required
+def sales_contacts_for(company_key):
+    """Contacts at one property, for step 2 of the visit wizard once step 1 has
+    picked an existing property. JSON endpoint, skips with_branding per
+    CLAUDE.md convention."""
+    if session.get('user_role') not in SALES_ROLES:
+        abort(403)
+    property_type = request.args.get('property_type', '').strip()
+    property_id   = _opt_num(request.args.get('property_id'))
+    if property_type not in ('prospect', 'customer') or not property_id:
+        return jsonify({'contacts': []})
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, first_name, last_name, title FROM sales_contacts
+        WHERE current_property_id = %s AND current_property_type = %s AND deleted_at IS NULL
+        ORDER BY last_name, first_name
+    """, (property_id, property_type))
+    out = []
+    for r in cur.fetchall():
+        name = f"{r['first_name']} {r['last_name']}".strip()
+        out.append({'id': r['id'],
+                    'name': name + (f" ({r['title']})" if r['title'] else '')})
+    cur.close(); conn.close()
+    return jsonify({'contacts': out})
+
+
+@app.route('/<company_key>/sales/photos/<int:photo_id>')
+@login_required
+@company_access_required
+def sales_photo_view(company_key, photo_id):
+    if session.get('user_role') not in SALES_ROLES:
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT stored_filename, content_type, original_filename
+        FROM sales_visit_photos WHERE id = %s AND deleted_at IS NULL
+    """, (photo_id,))
+    photo = cur.fetchone()
+    cur.close(); conn.close()
+    if not photo:
+        abort(404)
+    directory = _photo_dir(company_key)
+    path = os.path.realpath(os.path.join(directory, photo['stored_filename']))
+    if not path.startswith(os.path.realpath(directory) + os.sep) or not os.path.isfile(path):
+        abort(404)
+    with open(path, 'rb') as fh:
+        data = fh.read()
+    return Response(data, mimetype=photo['content_type'] or 'image/jpeg',
+                    headers={'Content-Disposition':
+                             f'inline; filename="{_sanitize_filename(photo["original_filename"])}"'})
+
+
+@app.route('/<company_key>/sales/photos/<int:photo_id>/transcribed', methods=['POST'])
+@login_required
+@company_access_required
+def sales_photo_transcribed(company_key, photo_id):
+    """Clear a card off the queue without creating a contact from it — a
+    duplicate, an unreadable shot, or someone already in the system."""
+    if session.get('user_role') not in SALES_ROLES:
+        abort(403)
+    username = session.get('username')
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE sales_visit_photos
+        SET transcribed_at = CURRENT_TIMESTAMP, transcribed_by = %s,
+            notes = COALESCE(NULLIF(%s, ''), notes),
+            updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s AND deleted_at IS NULL
+    """, (username, request.form.get('notes', '').strip(), username, photo_id))
+    conn.commit(); cur.close(); conn.close()
+    flash('Card cleared from the queue.', 'success')
+    return redirect(request.referrer or f'/{company_key}/sales')
+
+
+# ----------------------------------------------------------------------------
 # Visit logging
 # ----------------------------------------------------------------------------
 
@@ -11502,10 +11688,16 @@ def sales_contact_edit(company_key, contact_id, branding, all_companies, company
 @company_access_required
 @with_branding
 def sales_visit_log(company_key, branding, all_companies, company_access):
-    """Mobile-friendly single-screen quick-tap form (directive §4.5 / spec's
-    'Visit Logging Screen'): tag buttons, contact picker with last-contacted
-    preselected, notes, auto follow-up date from the tag's default_followup_days,
-    dormant-investigation checkbox + reason + 'send to management'."""
+    """The front door of the sales workflow (Chris, 2026-10-05: "the sales page
+    is driven by logging visits"). A stepped wizard on a tablet -- property,
+    who you met, what happened, photos -- that can CREATE the prospect and the
+    contact on its way through, because a new prospect always begins with a
+    visit.
+
+    Everything lands in one transaction on the final submit rather than being
+    created step by step. Abandoning the wizard halfway therefore leaves no
+    orphan prospect and no nameless contact behind, and a dropped tablet
+    connection mid-flow loses the visit rather than corrupting the pipeline."""
     if session.get('user_role') not in SALES_ROLES:
         abort(403)
     username = session.get('username')
@@ -11522,30 +11714,98 @@ def sales_visit_log(company_key, branding, all_companies, company_access):
         dormancy_reason                 = request.form.get('dormancy_reason', '').strip() or None
         dormancy_reported_to_management = request.form.get('dormancy_reported_to_management') == 'on'
 
-        if property_type not in ('prospect', 'customer') or not property_id:
-            error = 'Pick a property to log this visit against.'
+        # Step 1 may have created the property instead of finding one
+        new_prospect_name    = request.form.get('new_prospect_name', '').strip()
+        new_prospect_address = request.form.get('new_prospect_address', '').strip() or None
+        # Captured from the predictive address pick, not typed by hand
+        new_prospect_city    = request.form.get('new_prospect_city', '').strip() or None
+        _state_raw = request.form.get('new_prospect_state', '').strip().upper()
+        # Only a real 2-letter code; anything else is dropped rather than
+        # truncated ("NORTH CAROLINA"[:2] would have stored "NO").
+        new_prospect_state = _state_raw if re.fullmatch(r'[A-Z]{2}', _state_raw) else None
+        new_prospect_zip     = request.form.get('new_prospect_zip', '').strip()[:10] or None
+        # Step 2 may have created the contact
+        new_contact_first = request.form.get('new_contact_first', '').strip()
+        new_contact_last  = request.form.get('new_contact_last', '').strip()
+        new_contact_title = request.form.get('new_contact_title', '').strip() or None
+        new_contact_phone = request.form.get('new_contact_phone', '').strip() or None
+
+        photos, photo_error = _read_photo_uploads()
+
+        if photo_error:
+            error = photo_error
+        elif not new_prospect_name and (property_type not in ('prospect', 'customer')
+                                        or not property_id):
+            error = 'Pick a property, or add it as a new prospect.'
         elif is_dormant_investigation and dormancy_reported_to_management and not dormancy_reason:
             error = 'A reason is required to send a dormancy investigation to management.'
         else:
             conn = get_db_connection(company_key)
             cur = conn.cursor()
-            follow_up_date = follow_up_date_raw or None
-            if follow_up_needed and not follow_up_date and visit_tag:
-                cur.execute("SELECT default_followup_days FROM visit_tags_config WHERE tag_name = %s", (visit_tag,))
-                tagrow = cur.fetchone()
-                if tagrow and tagrow['default_followup_days']:
-                    follow_up_date = (date.today() + timedelta(days=tagrow['default_followup_days'])).isoformat()
-            cur.execute("""
-                INSERT INTO sales_visits (property_id, property_type, visit_date, visit_tag, contact_id, notes,
-                    follow_up_needed, follow_up_date, is_dormant_investigation, dormancy_reason,
-                    dormancy_reported_to_management, created_by, updated_by)
-                VALUES (%s,%s,CURRENT_DATE,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id
-            """, (property_id, property_type, visit_tag, contact_id, notes, follow_up_needed, follow_up_date,
-                  is_dormant_investigation, dormancy_reason, dormancy_reported_to_management, username, username))
-            cur.fetchone()
-            conn.commit(); cur.close(); conn.close()
-            flash('Visit logged and flagged for the Monday management report.' if
-                  (is_dormant_investigation and dormancy_reported_to_management) else 'Visit logged.', 'success')
+            try:
+                if new_prospect_name:
+                    # Minimal capture by design: name + address only, so this is
+                    # typeable standing outside a building. The rest of the
+                    # prospect record gets filled in later from a desk.
+                    cur.execute("""
+                        INSERT INTO sales_prospects (property_name, address, city, state, zip,
+                            created_by, updated_by)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id
+                    """, (new_prospect_name, new_prospect_address, new_prospect_city,
+                          new_prospect_state, new_prospect_zip, username, username))
+                    property_id, property_type = cur.fetchone()['id'], 'prospect'
+
+                if new_contact_first or new_contact_last:
+                    cur.execute("""
+                        INSERT INTO sales_contacts (first_name, last_name, title, personal_phone,
+                            current_property_id, current_property_type, created_by, updated_by)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id
+                    """, (new_contact_first, new_contact_last, new_contact_title,
+                          new_contact_phone, property_id, property_type, username, username))
+                    contact_id = cur.fetchone()['id']
+                    cur.execute("""
+                        INSERT INTO contact_property_history
+                            (contact_id, property_id, property_type, property_name, started_date, created_by)
+                        VALUES (%s,%s,%s,%s,%s,%s)
+                    """, (contact_id, property_id, property_type,
+                          _sales_property_name(cur, property_type, property_id),
+                          date.today(), username))
+
+                follow_up_date = follow_up_date_raw or None
+                if follow_up_needed and not follow_up_date and visit_tag:
+                    cur.execute("SELECT default_followup_days FROM visit_tags_config WHERE tag_name = %s", (visit_tag,))
+                    tagrow = cur.fetchone()
+                    if tagrow and tagrow['default_followup_days']:
+                        follow_up_date = (date.today() + timedelta(days=tagrow['default_followup_days'])).isoformat()
+                cur.execute("""
+                    INSERT INTO sales_visits (property_id, property_type, visit_date, visit_tag, contact_id, notes,
+                        follow_up_needed, follow_up_date, is_dormant_investigation, dormancy_reason,
+                        dormancy_reported_to_management, created_by, updated_by)
+                    VALUES (%s,%s,CURRENT_DATE,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id
+                """, (property_id, property_type, visit_tag, contact_id, notes, follow_up_needed, follow_up_date,
+                      is_dormant_investigation, dormancy_reason, dormancy_reported_to_management, username, username))
+                visit_id = cur.fetchone()['id']
+
+                for photo in photos:
+                    _store_visit_photo(cur, company_key, visit_id, photo, username)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                cur.close(); conn.close()
+
+            bits = ['Visit logged.']
+            if new_prospect_name:
+                bits.append(f'Added prospect "{new_prospect_name}".')
+            if new_contact_first or new_contact_last:
+                bits.append(f'Added contact {(new_contact_first + " " + new_contact_last).strip()}.')
+            if photos:
+                bits.append(f'{len(photos)} card photo{"s" if len(photos) != 1 else ""} '
+                            f'queued for entry.')
+            if is_dormant_investigation and dormancy_reported_to_management:
+                bits.append('Flagged for the Monday management report.')
+            flash(' '.join(bits), 'success')
             dest = (f'/{company_key}/sales/prospects/{property_id}' if property_type == 'prospect'
                     else f'/{company_key}/customers/{property_id}')
             return redirect(dest)
