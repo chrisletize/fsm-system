@@ -11848,6 +11848,129 @@ def sales_visit_log(company_key, branding, all_companies, company_access):
     )
 
 
+@app.route('/<company_key>/sales/visits')
+@login_required
+@company_access_required
+@with_branding
+def sales_visits_list(company_key, branding, all_companies, company_access):
+    """Searchable visit log (Chris, 2026-10-06). Managers and the salesperson
+    both need to go back and read what was actually said on a visit -- the
+    dashboard's Recent Visits card only holds 15 rows and truncates notes to 80
+    characters, and per-prospect history only answers "this property".
+
+    Notes are shown in FULL here, because reading them is the entire point of
+    the page.
+
+    The property name comes from a LEFT JOIN against both sales_prospects and
+    customers, discriminated by property_type, rather than resolving each row
+    with _sales_property_name() -- that keeps it one query instead of N+1 and,
+    more importantly, makes the name searchable and sortable in SQL."""
+    if session.get('user_role') not in SALES_ROLES:
+        abort(403)
+
+    today = date.today()
+    q        = request.args.get('q', '').strip()
+    tag      = request.args.get('tag', '').strip()
+    logged_by = request.args.get('by', '').strip()
+    date_from = request.args.get('from', '').strip()
+    date_to   = request.args.get('to', '').strip()
+    only_dormancy = request.args.get('dormancy') == '1'
+    only_photos   = request.args.get('photos') == '1'
+    # A default window rather than everything: the common question is "what
+    # happened lately", and an unbounded scan gets slower every month.
+    if not date_from and not date_to and not q:
+        date_from = (today - timedelta(days=30)).isoformat()
+
+    conditions = ['sv.deleted_at IS NULL']
+    params = []
+    if date_from:
+        conditions.append('sv.visit_date >= %s')
+        params.append(date_from)
+    if date_to:
+        conditions.append('sv.visit_date <= %s')
+        params.append(date_to)
+    if tag:
+        conditions.append('sv.visit_tag = %s')
+        params.append(tag)
+    if logged_by:
+        conditions.append('sv.created_by = %s')
+        params.append(logged_by)
+    if only_dormancy:
+        conditions.append('sv.is_dormant_investigation = TRUE')
+    if only_photos:
+        conditions.append("""EXISTS (SELECT 1 FROM sales_visit_photos ph
+                                    WHERE ph.visit_id = sv.id AND ph.deleted_at IS NULL)""")
+    if q:
+        like = f'%{q}%'
+        conditions.append("""(COALESCE(p.property_name, c.property_name) ILIKE %s
+                              OR sv.notes ILIKE %s
+                              OR sv.dormancy_reason ILIKE %s
+                              OR sv.visit_tag ILIKE %s
+                              OR sc.first_name ILIKE %s
+                              OR sc.last_name ILIKE %s)""")
+        params.extend([like] * 6)
+    where = ' AND '.join(conditions)
+
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT sv.*, sv.visit_date::text AS visit_date_s,
+               to_char(sv.visit_time, 'HH12:MI AM') AS visit_time_s,
+               sv.follow_up_date::text AS follow_up_date_s,
+               COALESCE(p.property_name, c.property_name) AS property_name,
+               sc.first_name AS contact_first, sc.last_name AS contact_last, sc.title AS contact_title,
+               (SELECT COUNT(*) FROM sales_visit_photos ph
+                WHERE ph.visit_id = sv.id AND ph.deleted_at IS NULL) AS photo_count
+        FROM sales_visits sv
+        LEFT JOIN sales_prospects p ON sv.property_type = 'prospect' AND p.id = sv.property_id
+        LEFT JOIN customers c       ON sv.property_type = 'customer' AND c.id = sv.property_id
+        LEFT JOIN sales_contacts sc ON sc.id = sv.contact_id
+        WHERE {where}
+        ORDER BY sv.visit_date DESC, sv.id DESC
+        LIMIT 500
+    """, params)
+    visits = [dict(v) for v in cur.fetchall()]
+
+    if visits:
+        cur.execute("""
+            SELECT id, visit_id, transcribed_at FROM sales_visit_photos
+            WHERE visit_id = ANY(%s) AND deleted_at IS NULL ORDER BY id
+        """, ([v['id'] for v in visits],))
+        by_visit = {}
+        for ph in cur.fetchall():
+            by_visit.setdefault(ph['visit_id'], []).append(dict(ph))
+        for v in visits:
+            v['photos'] = by_visit.get(v['id'], [])
+
+    cur.execute("""
+        SELECT tag_name FROM visit_tags_config
+        WHERE deleted_at IS NULL ORDER BY display_order
+    """)
+    tags = [r['tag_name'] for r in cur.fetchall()]
+    cur.execute("""
+        SELECT DISTINCT created_by FROM sales_visits
+        WHERE deleted_at IS NULL AND created_by IS NOT NULL ORDER BY created_by
+    """)
+    loggers = [r['created_by'] for r in cur.fetchall()]
+    cur.close(); conn.close()
+
+    quick_ranges = [
+        ('Today',        today.isoformat()),
+        ('Last 7 days',  (today - timedelta(days=7)).isoformat()),
+        ('Last 30 days', (today - timedelta(days=30)).isoformat()),
+        ('Last 90 days', (today - timedelta(days=90)).isoformat()),
+        ('This year',    date(today.year, 1, 1).isoformat()),
+    ]
+    return render_template('sales_visits_list.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        visits=visits, tags=tags, loggers=loggers, today=today,
+        quick_ranges=quick_ranges,
+        filters={'q': q, 'tag': tag, 'by': logged_by, 'from': date_from, 'to': date_to,
+                 'dormancy': only_dormancy, 'photos': only_photos},
+    )
+
+
 @app.route('/<company_key>/sales/followups')
 @login_required
 @company_access_required

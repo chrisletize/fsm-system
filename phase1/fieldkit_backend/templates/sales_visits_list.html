@@ -1,0 +1,205 @@
+{% extends "base.html" %}
+{% block title %}Visit Log — {{ branding.name }}{% endblock %}
+
+{#
+  The visit log, for reading what was actually said (Chris, 2026-10-06).
+  Notes are shown in FULL rather than truncated -- that is the whole reason this
+  page exists, so it's a reading list, not a dense table.
+#}
+
+{% block extra_css %}
+<style>
+    .page-header { display:flex; justify-content:space-between; align-items:center;
+                   margin-bottom:1rem; flex-wrap:wrap; gap:.75rem; }
+    .page-header h1 { font-size:1.6rem; color:{{ branding.color_primary }}; }
+    .btn { display:inline-block; padding:.6rem 1.2rem; border-radius:4px; text-decoration:none;
+           font-weight:500; border:none; font-size:.92rem; cursor:pointer; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-outline { background:white; color:{{ branding.color_primary }};
+                   border:1px solid {{ branding.color_primary }}; }
+
+    .filters { background:#f8fafc; border:1px solid #e3e8ef; border-radius:8px;
+               padding:1rem; margin-bottom:1.25rem; }
+    .filter-row { display:flex; gap:.75rem; flex-wrap:wrap; align-items:flex-end; }
+    .filter-group { display:flex; flex-direction:column; gap:.3rem; }
+    .filter-group label { font-size:.78rem; font-weight:600; color:#666; text-transform:uppercase;
+                          letter-spacing:.03em; }
+    .filters input[type=text], .filters input[type=date], .filters select {
+        padding:.5rem .65rem; border:1px solid #ddd; border-radius:4px; font-size:.92rem;
+        font-family:inherit;
+    }
+    .filters input[type=text].wide { min-width:260px; }
+    .chk-row { display:flex; align-items:center; gap:.4rem; font-size:.88rem; color:#555; }
+    .quick-ranges { margin-top:.6rem; display:flex; gap:.5rem; flex-wrap:wrap; font-size:.82rem; }
+    .quick-ranges a { color:{{ branding.color_primary }}; text-decoration:none;
+                      border:1px solid #dde3ea; border-radius:12px; padding:.2rem .7rem; background:#fff; }
+    .quick-ranges a:hover { background:#f1f5f9; }
+
+    .count { color:#888; font-size:.88rem; margin-bottom:.75rem; }
+
+    .visit { background:#fff; border:1px solid #e8e8e8; border-radius:8px; padding:1rem 1.1rem;
+             margin-bottom:.85rem; }
+    .visit-top { display:flex; justify-content:space-between; align-items:flex-start;
+                 gap:.75rem; flex-wrap:wrap; }
+    .visit-when { font-weight:700; color:#333; font-size:1rem; }
+    .visit-prop { font-weight:600; }
+    .visit-meta { color:#888; font-size:.82rem; margin-top:.15rem; }
+    .visit-notes { margin-top:.65rem; white-space:pre-wrap; color:#2f3640; font-size:.94rem;
+                   line-height:1.5; }
+    .visit-notes.empty { color:#bbb; font-style:italic; }
+    .dormancy { margin-top:.6rem; background:#fff6f6; border:1px solid #f0c5c5; border-radius:6px;
+                padding:.6rem .8rem; font-size:.9rem; color:#7d2b2b; }
+    .badge { display:inline-block; padding:.18rem .6rem; border-radius:10px; font-size:.74rem;
+             font-weight:600; }
+    .badge-tag { background:#eef2ff; color:#39477a; }
+    .badge-dorm { background:#fcebeb; color:#a32d2d; }
+    .badge-photo { background:#fff3d6; color:#8a6100; }
+    .badge-done { background:#eaf3de; color:#3b6d11; }
+    .badge-open { background:#e6f1fb; color:#185fa5; }
+    .empty-state { text-align:center; color:#aaa; padding:3rem 1rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Visit Log</h1>
+    <div style="display:flex; gap:.5rem;">
+        <a href="/{{ company_key }}/sales" class="btn btn-outline">Sales</a>
+        <a href="/{{ company_key }}/sales/visits/log" class="btn btn-primary">Log a Visit</a>
+    </div>
+</div>
+
+<form method="GET" class="filters">
+    <div class="filter-row">
+        <div class="filter-group">
+            <label for="q">Search</label>
+            <input type="text" id="q" name="q" class="wide" value="{{ filters.q }}"
+                   placeholder="Property, notes, person, tag…">
+        </div>
+        <div class="filter-group">
+            <label for="from">From</label>
+            <input type="date" id="from" name="from" value="{{ filters['from'] }}">
+        </div>
+        <div class="filter-group">
+            <label for="to">To</label>
+            <input type="date" id="to" name="to" value="{{ filters.to }}">
+        </div>
+        <div class="filter-group">
+            <label for="tag">Visit type</label>
+            <select id="tag" name="tag">
+                <option value="">All</option>
+                {% for t in tags %}
+                <option value="{{ t }}" {% if filters.tag == t %}selected{% endif %}>{{ t }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="filter-group">
+            <label for="by">Logged by</label>
+            <select id="by" name="by">
+                <option value="">Anyone</option>
+                {% for u in loggers %}
+                <option value="{{ u }}" {% if filters.by == u %}selected{% endif %}>{{ u }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="filter-group">
+            <label>&nbsp;</label>
+            <button type="submit" class="btn btn-primary">Search</button>
+        </div>
+        <div class="filter-group">
+            <label>&nbsp;</label>
+            <a href="/{{ company_key }}/sales/visits" class="btn btn-outline">Clear</a>
+        </div>
+    </div>
+    <div class="filter-row" style="margin-top:.75rem;">
+        <label class="chk-row">
+            <input type="checkbox" name="dormancy" value="1" {% if filters.dormancy %}checked{% endif %}>
+            Dormancy investigations only
+        </label>
+        <label class="chk-row">
+            <input type="checkbox" name="photos" value="1" {% if filters.photos %}checked{% endif %}>
+            Has card photos
+        </label>
+    </div>
+    <div class="quick-ranges">
+        {% for label, since in quick_ranges %}
+        <a href="?from={{ since }}">{{ label }}</a>
+        {% endfor %}
+    </div>
+</form>
+
+<div class="count">
+    {{ visits|length }} visit{{ 's' if visits|length != 1 }}
+    {%- if visits|length == 500 %} (showing the most recent 500 — narrow the dates to see more){% endif %}
+</div>
+
+{% for v in visits %}
+<div class="visit">
+    <div class="visit-top">
+        <div>
+            <div class="visit-when">
+                {{ v.visit_date.strftime('%a %b %-d, %Y') if v.visit_date else v.visit_date_s }}
+                {% if v.visit_time_s %}<span class="visit-meta">· {{ v.visit_time_s }}</span>{% endif %}
+            </div>
+            <div class="visit-prop" style="margin-top:.2rem;">
+                {% if v.property_type == 'prospect' and v.property_id %}
+                <a href="/{{ company_key }}/sales/prospects/{{ v.property_id }}"
+                   style="color:{{ branding.color_primary }}; text-decoration:none;">{{ v.property_name or 'Unknown property' }}</a>
+                <span class="visit-meta">○ prospect</span>
+                {% elif session.user_role == 'salesperson' %}
+                {# Chris O has no access to customer pages, so this stays plain text for him #}
+                {{ v.property_name or 'Unknown property' }} <span class="visit-meta">✓ customer</span>
+                {% else %}
+                <a href="/{{ company_key }}/customers/{{ v.property_id }}"
+                   style="color:{{ branding.color_primary }}; text-decoration:none;">{{ v.property_name or 'Unknown property' }}</a>
+                <span class="visit-meta">✓ customer</span>
+                {% endif %}
+            </div>
+            <div class="visit-meta">
+                {% if v.contact_first or v.contact_last %}
+                Met {{ (v.contact_first ~ ' ' ~ (v.contact_last or ''))|trim }}{% if v.contact_title %}, {{ v.contact_title }}{% endif %}
+                {% else %}No contact recorded{% endif %}
+                · logged by {{ v.created_by or '—' }}
+            </div>
+        </div>
+        <div style="display:flex; gap:.35rem; flex-wrap:wrap; align-items:flex-start;">
+            {% if v.visit_tag %}<span class="badge badge-tag">{{ v.visit_tag }}</span>{% endif %}
+            {% if v.is_dormant_investigation %}<span class="badge badge-dorm">Dormancy</span>{% endif %}
+            {% if v.photo_count %}<span class="badge badge-photo">{{ v.photo_count }} card{{ 's' if v.photo_count != 1 }}</span>{% endif %}
+            {% if v.follow_up_needed %}
+                {% if v.follow_up_completed %}
+                <span class="badge badge-done">Follow-up done</span>
+                {% else %}
+                <span class="badge badge-open">Follow-up {{ v.follow_up_date.strftime('%b %-d') if v.follow_up_date else 'open' }}</span>
+                {% endif %}
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="visit-notes {% if not v.notes %}empty{% endif %}">{{ v.notes or 'No notes recorded for this visit.' }}</div>
+
+    {% if v.is_dormant_investigation %}
+    <div class="dormancy">
+        <strong>Why they went quiet:</strong> {{ v.dormancy_reason or 'no reason recorded' }}
+        {% if v.dormancy_reported_to_management %}<br><em>Sent to management.</em>{% endif %}
+    </div>
+    {% endif %}
+
+    {% if v.photos %}
+    <div class="visit-meta" style="margin-top:.6rem;">
+        Card photo{{ 's' if v.photos|length != 1 }}:
+        {% for ph in v.photos %}
+        <a href="/{{ company_key }}/sales/photos/{{ ph.id }}" target="_blank" rel="noopener"
+           style="color:{{ branding.color_primary }};">#{{ loop.index }}</a>{% if not ph.transcribed_at %}
+        <span style="color:#8a6100;">(not entered yet)</span>{% endif %}{% if not loop.last %} · {% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+{% else %}
+<div class="empty-state">
+    No visits match these filters.<br>
+    <span style="font-size:.9rem;">Try widening the date range or clearing the search.</span>
+</div>
+{% endfor %}
+{% endblock %}

@@ -76,6 +76,7 @@
 <div class="quick-actions">
     <a href="/{{ company_key }}/sales/prospects" class="btn btn-outline">Prospects</a>
     <a href="/{{ company_key }}/sales/contacts" class="btn btn-outline">Contacts</a>
+    <a href="/{{ company_key }}/sales/visits" class="btn btn-outline">Visit Log</a>
     <a href="/{{ company_key }}/sales/followups" class="btn btn-outline">Follow-Ups</a>
     <a href="/{{ company_key }}/sales/prospects/new" class="btn btn-outline">+ Prospect (no visit)</a>
     <a href="/{{ company_key }}/sales/contacts/new" class="btn btn-outline">+ Contact (no visit)</a>
@@ -179,7 +180,11 @@
     </div>
 
     <div class="card" style="grid-column:1 / -1;">
-        <h2>Recent Visits</h2>
+        <h2>Recent Visits
+            <a href="/{{ company_key }}/sales/visits"
+               style="font-weight:400; font-size:.8rem; margin-left:.4rem;
+                      color:{{ branding.color_primary }};">see the full visit log →</a>
+        </h2>
         {% for v in recent_visits %}
         <div class="row-item">
             <div>
