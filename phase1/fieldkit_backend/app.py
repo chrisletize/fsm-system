@@ -11010,6 +11010,55 @@ def _sales_dormant_customers(company_key):
     return dormant
 
 
+def _rehab_contact_days(cur):
+    cur.execute("""
+        SELECT rehab_contact_days FROM dormancy_alerts_config
+        WHERE is_active = TRUE AND deleted_at IS NULL LIMIT 1
+    """)
+    row = cur.fetchone()
+    return (row['rehab_contact_days'] if row else 21) or 21
+
+
+def _rehab_prospects(company_key, needing_contact_only=True):
+    """Prospects flagged as planning a rehab, longest-since-contact first.
+
+    Deliberately COMPUTED the same way dormancy is, rather than hung off a
+    follow-up: a follow-up is created by a visit and dies when it's completed,
+    so the prospect would go quiet until somebody remembered it. This asks
+    "flagged, and not visited in N days" on every page load, so the ones you
+    can least afford to forget keep coming back on their own.
+
+    Never-visited flagged prospects sort to the very top -- a rehab nobody has
+    been to yet is the most urgent case, not the least."""
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    days = _rehab_contact_days(cur)
+    cur.execute("""
+        SELECT p.id, p.property_name, p.city, p.state, p.rehab_expected_date,
+               p.rehab_notes,
+               (SELECT MAX(sv.visit_date) FROM sales_visits sv
+                WHERE sv.property_id = p.id AND sv.property_type = 'prospect'
+                  AND sv.deleted_at IS NULL) AS last_visit
+        FROM sales_prospects p
+        WHERE p.deleted_at IS NULL AND p.rehab_planned = TRUE
+          AND p.converted_to_customer = FALSE
+    """)
+    today = date.today()
+    rows = []
+    for r in cur.fetchall():
+        row = dict(r)
+        lv = row['last_visit']
+        row['days_since'] = (today - lv).days if lv else None
+        row['overdue'] = (row['days_since'] is None) or (row['days_since'] >= days)
+        rows.append(row)
+    cur.close(); conn.close()
+    if needing_contact_only:
+        rows = [r for r in rows if r['overdue']]
+    # never-visited first, then longest since contact
+    rows.sort(key=lambda r: (r['days_since'] is not None, -(r['days_since'] or 0)))
+    return rows, days
+
+
 @app.route('/<company_key>/sales')
 @login_required
 @company_access_required
@@ -11062,14 +11111,15 @@ def sales_dashboard(company_key, branding, all_companies, company_access):
     pending_approvals = cur.fetchone()['n']
 
     pending_cards = _pending_cards(cur)
-    dormant = _sales_dormant_customers(company_key)
     cur.close(); conn.close()
+    dormant = _sales_dormant_customers(company_key)
+    rehab_due, rehab_days = _rehab_prospects(company_key)
     return render_template('sales_dashboard.html',
         branding=branding, company_key=company_key,
         company_access=company_access, all_companies=all_companies,
         followups=followups, recent_visits=recent_visits, dormant=dormant,
         pending_approvals=pending_approvals, today=today, window=window,
-        pending_cards=pending_cards,
+        pending_cards=pending_cards, rehab_due=rehab_due, rehab_days=rehab_days,
     )
 
 
@@ -11164,6 +11214,9 @@ def _save_sales_prospect(company_key, prospect_id):
     contractor_company_name  = request.form.get('contractor_company_name', '').strip() or None
     active_projects          = _opt_num(request.form.get('active_projects')) or 0
     is_former_customer       = request.form.get('is_former_customer') == 'on'
+    rehab_planned            = request.form.get('rehab_planned') == 'on'
+    rehab_expected_date      = request.form.get('rehab_expected_date', '').strip() or None
+    rehab_notes              = request.form.get('rehab_notes', '').strip() or None
     former_customer_last_job = request.form.get('former_customer_last_job', '').strip() or None
     username = session.get('username')
 
@@ -11173,11 +11226,12 @@ def _save_sales_prospect(company_key, prospect_id):
         cur.execute("""
             INSERT INTO sales_prospects (property_name, address, city, state, zip, management_company_id,
                 customer_type, contractor_company_name, active_projects, is_former_customer,
-                former_customer_last_job, created_by, updated_by)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id
+                former_customer_last_job, rehab_planned, rehab_expected_date, rehab_notes,
+                created_by, updated_by)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id
         """, (property_name, address, city, state, zip_, management_company_id, customer_type,
               contractor_company_name, active_projects, is_former_customer, former_customer_last_job,
-              username, username))
+              rehab_planned, rehab_expected_date, rehab_notes, username, username))
         new_id = cur.fetchone()['id']
     else:
         cur.execute("SELECT id FROM sales_prospects WHERE id = %s AND deleted_at IS NULL", (prospect_id,))
@@ -11187,11 +11241,13 @@ def _save_sales_prospect(company_key, prospect_id):
         cur.execute("""
             UPDATE sales_prospects SET property_name=%s, address=%s, city=%s, state=%s, zip=%s,
                 management_company_id=%s, customer_type=%s, contractor_company_name=%s, active_projects=%s,
-                is_former_customer=%s, former_customer_last_job=%s, updated_at=CURRENT_TIMESTAMP, updated_by=%s
+                is_former_customer=%s, former_customer_last_job=%s, rehab_planned=%s,
+                rehab_expected_date=%s, rehab_notes=%s,
+                updated_at=CURRENT_TIMESTAMP, updated_by=%s
             WHERE id=%s
         """, (property_name, address, city, state, zip_, management_company_id, customer_type,
               contractor_company_name, active_projects, is_former_customer, former_customer_last_job,
-              username, prospect_id))
+              rehab_planned, rehab_expected_date, rehab_notes, username, prospect_id))
         new_id = prospect_id
     conn.commit(); cur.close(); conn.close()
     return new_id, None
@@ -11205,16 +11261,20 @@ def sales_prospects_list(company_key, branding, all_companies, company_access):
     if session.get('user_role') not in SALES_ROLES:
         abort(403)
     search = request.args.get('search', '').strip()
+    rehab_only = request.args.get('rehab') == '1'
     conditions, params = ['p.deleted_at IS NULL'], []
     if search:
         conditions.append('p.property_name ILIKE %s')
         params.append(f'%{search}%')
+    if rehab_only:
+        conditions.append('p.rehab_planned = TRUE')
     where = ' AND '.join(conditions)
     conn = get_db_connection(company_key)
     cur = conn.cursor()
     cur.execute(f"""
         SELECT p.id, p.property_name, p.customer_type, p.city, p.state, p.is_former_customer,
-               p.converted_to_customer, mc.name AS management_company_name,
+               p.converted_to_customer, p.rehab_planned, p.rehab_expected_date,
+               mc.name AS management_company_name,
                (SELECT MAX(sv.visit_date) FROM sales_visits sv
                 WHERE sv.property_id = p.id AND sv.property_type = 'prospect' AND sv.deleted_at IS NULL) AS last_visit
         FROM sales_prospects p
@@ -11227,7 +11287,7 @@ def sales_prospects_list(company_key, branding, all_companies, company_access):
     return render_template('sales_prospects_list.html',
         branding=branding, company_key=company_key,
         company_access=company_access, all_companies=all_companies,
-        prospects=prospects, search=search,
+        prospects=prospects, search=search, rehab_only=rehab_only,
     )
 
 

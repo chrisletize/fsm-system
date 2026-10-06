@@ -16,6 +16,12 @@
     .badge { display:inline-block; padding:.2rem .7rem; border-radius:10px; font-size:.78rem; font-weight:500; }
     .badge-former { background:#fff3d6; color:#8a6100; }
     .badge-converted { background:#eaf3de; color:#3b6d11; }
+    .badge-rehab { display:inline-block; margin-left:.4rem; padding:.1rem .5rem; border-radius:9px;
+                   background:#fff3d6; color:#8a6100; font-size:.68rem; font-weight:700;
+                   letter-spacing:.04em; vertical-align:middle; }
+    .rehab-toggle { display:inline-block; padding:.35rem .8rem; border-radius:14px; font-size:.82rem;
+                    text-decoration:none; border:1px solid #f0dcb0; background:#fff8ef; color:#8a6100; }
+    .rehab-toggle.on { background:#8a6100; color:#fff; border-color:#8a6100; }
 </style>
 {% endblock %}
 
@@ -27,7 +33,12 @@
 
 <form method="GET" class="toolbar">
     <input type="text" name="search" value="{{ search }}" placeholder="Search property name…">
+    {% if rehab_only %}<input type="hidden" name="rehab" value="1">{% endif %}
     <button type="submit" class="btn btn-outline">Filter</button>
+    <a class="rehab-toggle {% if rehab_only %}on{% endif %}"
+       href="?{% if search %}search={{ search|urlencode }}&{% endif %}{% if not rehab_only %}rehab=1{% endif %}">
+        {% if rehab_only %}✓ Rehab prospects only{% else %}Rehab prospects only{% endif %}
+    </a>
 </form>
 
 <div class="card">
@@ -38,6 +49,7 @@
             <tr>
                 <td>
                     <a href="/{{ company_key }}/sales/prospects/{{ p.id }}" style="color:{{ branding.color_primary }}; text-decoration:none; font-weight:500;">{{ p.property_name }}</a>
+                    {% if p.rehab_planned %}<span class="badge-rehab">REHAB</span>{% endif %}
                     {% if p.is_former_customer %}<span class="badge badge-former">Former Customer</span>{% endif %}
                     {% if p.converted_to_customer %}<span class="badge badge-converted">Converted</span>{% endif %}
                 </td>

@@ -82,6 +82,40 @@
     <a href="/{{ company_key }}/sales/contacts/new" class="btn btn-outline">+ Contact (no visit)</a>
 </div>
 
+{% if rehab_due %}
+<div class="card" style="background:#fff8ef; border:1px solid #f0dcb0; margin-bottom:1.5rem;">
+    <h2 style="color:#8a6100;">Rehab prospects needing contact ({{ rehab_due|length }})</h2>
+    <div class="row-sub" style="margin-bottom:.75rem;">
+        Planning a full renovation and not visited in {{ rehab_days }}+ days. These come back
+        every time they go quiet — log a visit to clear one.
+    </div>
+    {% for r in rehab_due %}
+    <div class="row-item">
+        <div>
+            <div class="row-name">
+                <a href="/{{ company_key }}/sales/prospects/{{ r.id }}"
+                   style="color:{{ branding.color_primary }}; text-decoration:none;">{{ r.property_name }}</a>
+                {% if r.rehab_expected_date %}
+                <span class="row-sub">· rehab expected {{ r.rehab_expected_date.strftime('%b %Y') }}</span>
+                {% endif %}
+            </div>
+            <div class="row-sub">
+                {% if r.days_since is none %}
+                <strong style="color:#a32d2d;">never visited</strong>
+                {% else %}
+                last visit {{ r.days_since }} days ago
+                {% endif %}
+                {% if r.city %} · {{ r.city }}{% if r.state %}, {{ r.state }}{% endif %}{% endif %}
+                {% if r.rehab_notes %} · {{ r.rehab_notes }}{% endif %}
+            </div>
+        </div>
+        <a href="/{{ company_key }}/sales/visits/log?property_type=prospect&property_id={{ r.id }}"
+           class="btn btn-primary" style="padding:.4rem .8rem; font-size:.82rem;">Log Visit</a>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
 {% if pending_cards %}
 <div class="card" style="background:#fffaf0; border:1px solid #f0dcb0; margin-bottom:1.5rem;">
     <h2 style="color:#8a6100;">Business cards awaiting entry ({{ pending_cards|length }})</h2>

@@ -11,7 +11,7 @@
     .form-group { display:flex; flex-direction:column; gap:.35rem; }
     .form-group.full { grid-column:1 / -1; }
     .form-group label { font-size:.85rem; font-weight:600; color:#555; }
-    input[type=text], select, textarea {
+    input[type=text], input[type=date], select, textarea {
         padding:.6rem .75rem; border:1px solid #ddd; border-radius:4px; font-size:.92rem; font-family:inherit;
     }
     .checkbox-row { display:flex; align-items:center; gap:.5rem; }
@@ -98,6 +98,32 @@
             <div class="checkbox-row">
                 <input type="checkbox" id="isFormer" name="is_former_customer" {% if prospect and prospect.is_former_customer %}checked{% endif %}>
                 <label for="isFormer" style="font-weight:400;">Former customer</label>
+            </div>
+        </div>
+        <div class="form-group full" style="background:#fff8ef; border:1px solid #f0dcb0;
+                    border-radius:8px; padding:1rem; grid-column:1 / -1;">
+            <div class="checkbox-row">
+                <input type="checkbox" id="rehabPlanned" name="rehab_planned"
+                       {% if prospect and prospect.rehab_planned %}checked{% endif %}>
+                <label for="rehabPlanned" style="font-weight:600; color:#8a6100;">
+                    Planning a rehab — full renovation across units
+                </label>
+            </div>
+            <div style="font-size:.8rem; color:#8a6100; margin:.3rem 0 .75rem 1.9rem;">
+                Flagged prospects resurface on the sales dashboard whenever they go quiet,
+                so they never drop off the radar.
+            </div>
+            <div style="display:flex; gap:1rem; flex-wrap:wrap; margin-left:1.9rem;">
+                <div class="form-group" style="flex:0 0 190px;">
+                    <label>Expected start <span style="color:#999;font-weight:400;">(if known)</span></label>
+                    <input type="date" name="rehab_expected_date"
+                           value="{{ prospect.rehab_expected_date if prospect and prospect.rehab_expected_date else '' }}">
+                </div>
+                <div class="form-group" style="flex:1; min-width:240px;">
+                    <label>Rehab notes</label>
+                    <input type="text" name="rehab_notes" placeholder="Scope, who's deciding, timing…"
+                           value="{{ prospect.rehab_notes if prospect and prospect.rehab_notes else '' }}">
+                </div>
             </div>
         </div>
         <div class="form-group">

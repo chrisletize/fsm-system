@@ -26,6 +26,17 @@
 {% endblock %}
 
 {% block content %}
+{% if prospect.rehab_planned %}
+<div class="card" style="background:#fff8ef; border:1px solid #f0dcb0; color:#8a6100; margin-bottom:1.25rem;">
+    <strong>Planning a rehab</strong> — full renovation across units.
+    {% if prospect.rehab_expected_date %} Expected {{ prospect.rehab_expected_date.strftime('%B %Y') }}.{% endif %}
+    {% if prospect.rehab_notes %}<br><span style="font-weight:400;">{{ prospect.rehab_notes }}</span>{% endif %}
+    <div style="font-weight:400; font-size:.85rem; margin-top:.4rem;">
+        This prospect resurfaces on the sales dashboard whenever it goes quiet.
+    </div>
+</div>
+{% endif %}
+
 <div class="page-header">
     <div>
         <h1>{{ prospect.property_name }}</h1>
