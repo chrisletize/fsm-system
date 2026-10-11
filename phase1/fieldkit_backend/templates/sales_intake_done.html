@@ -1,0 +1,51 @@
+{#
+  Thank-you screen the customer sees after submitting. Still chrome-less: the
+  only way onward is a button the salesperson taps to get back into FieldKit,
+  so handing the tablet back doesn't drop a customer into the internal system.
+#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Thank you — {{ branding.name }}</title>
+<style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+           background:#f4f6f8; color:#23272b; min-height:100vh;
+           display:flex; flex-direction:column; }
+    header { background:{{ branding.color_primary }}; color:#fff; padding:1.25rem 1.5rem;
+             text-align:center; }
+    header .co { font-size:1.15rem; font-weight:700; }
+    main { flex:1; display:flex; align-items:center; justify-content:center; padding:2rem 1.5rem; }
+    .card { background:#fff; border-radius:14px; padding:2.5rem 2rem; text-align:center;
+            max-width:480px; width:100%; box-shadow:0 2px 14px rgba(0,0,0,.07); }
+    .mark { width:66px; height:66px; border-radius:50%; background:#eaf3de; color:#3b6d11;
+            display:flex; align-items:center; justify-content:center; font-size:2rem;
+            margin:0 auto 1.25rem; }
+    h1 { font-size:1.5rem; margin-bottom:.6rem; }
+    p { color:#6b7280; line-height:1.55; }
+    .prop { font-weight:600; color:#23272b; }
+    .hand-back { margin-top:2rem; padding-top:1.5rem; border-top:1px solid #eef1f4; }
+    .hand-back a { display:inline-block; background:{{ branding.color_primary }}; color:#fff;
+                   text-decoration:none; padding:.85rem 1.6rem; border-radius:9px;
+                   font-weight:600; font-size:.95rem; }
+    .hand-back .note { font-size:.78rem; color:#9aa3ad; margin-bottom:.75rem; }
+</style>
+</head>
+<body>
+<header><div class="co">{{ branding.name }}</div></header>
+<main>
+  <div class="card">
+    <div class="mark">✓</div>
+    <h1>Thank you</h1>
+    <p>We've got everything we need for <span class="prop">{{ property_name }}</span>.
+       Our office will be in touch shortly to get you set up.</p>
+    <div class="hand-back">
+      <div class="note">Please hand the tablet back</div>
+      <a href="/{{ company_key }}/sales/prospects/{{ prospect_id }}">Done</a>
+    </div>
+  </div>
+</main>
+</body>
+</html>

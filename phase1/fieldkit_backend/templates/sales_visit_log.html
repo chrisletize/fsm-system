@@ -263,6 +263,16 @@
         <div class="photo-list" id="photoList"></div>
     </div>
 
+    {% if held_block %}
+    <div style="background:#fdecea; border:1px solid #f3b8b3; border-radius:8px;
+                padding:.9rem 1rem; margin-bottom:1rem;">
+        <label class="checkbox-row" style="color:#a32d2d;">
+            <input type="checkbox" name="delay_override" value="yes">
+            <span style="font-weight:600;">Log it anyway — sales are paused on this property</span>
+        </label>
+    </div>
+    {% endif %}
+
     <div class="nav-row">
         <button type="button" class="btn btn-secondary" data-prev="3">Back</button>
         <button type="submit" class="btn btn-primary" id="submitBtn">Log Visit</button>

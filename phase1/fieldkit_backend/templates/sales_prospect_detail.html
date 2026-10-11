@@ -1,5 +1,40 @@
 {% extends "base.html" %}
 {% block title %}{{ prospect.property_name }} — {{ branding.name }}
+<div id="delayModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45);
+     z-index:1000; align-items:center; justify-content:center;">
+  <div style="background:#fff; border-radius:8px; padding:1.5rem; width:100%; max-width:440px;
+              box-shadow:0 4px 24px rgba(0,0,0,.2);">
+    <h3 style="font-size:1.1rem; color:#a32d2d; margin-bottom:.4rem;">Pause sales on this property</h3>
+    <p style="font-size:.86rem; color:#777; margin-bottom:1rem;">
+        Stops it appearing in follow-ups, the rehab list and the overview.
+        {% if session.user_role in ('admin','manager') %}You can apply this yourself.
+        {% else %}A manager has to approve it before it takes effect.{% endif %}
+    </p>
+    <form method="POST" action="/{{ company_key }}/sales/delay-request">
+      <input type="hidden" name="property_type" value="prospect">
+      <input type="hidden" name="property_id" value="{{ prospect.id }}">
+      <div style="font-size:.82rem; font-weight:600; color:#555; margin-bottom:.4rem;">For how long?</div>
+      {% for m in delay_months %}
+      <label style="display:flex; gap:.5rem; align-items:center; padding:.5rem; border:1px solid #eee;
+                    border-radius:6px; margin-bottom:.4rem; cursor:pointer;">
+        <input type="radio" name="months" value="{{ m }}" {% if loop.first %}checked{% endif %}>
+        <span>{{ m }} months</span>
+      </label>
+      {% endfor %}
+      <div style="font-size:.82rem; font-weight:600; color:#555; margin:.7rem 0 .3rem;">
+          Reason <span style="font-weight:400; color:#999;">(required)</span></div>
+      <textarea name="reason" rows="3" required placeholder="e.g. non-payment, in litigation…"
+                style="width:100%; padding:.6rem .75rem; border:1px solid #ddd; border-radius:4px;
+                       font-size:.95rem; font-family:inherit;"></textarea>
+      <div style="display:flex; gap:.6rem; margin-top:1.1rem;">
+        <button type="submit" class="btn btn-primary" style="flex:1;">
+            {% if session.user_role in ('admin','manager') %}Request Pause{% else %}Request Pause{% endif %}</button>
+        <button type="button" class="btn btn-outline" onclick="closeDelay()">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <div id="priceListModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45);
      z-index:1000; align-items:center; justify-content:center;">
   <div style="background:#fff; border-radius:8px; padding:1.5rem; width:100%; max-width:460px;
@@ -42,6 +77,8 @@
   </div>
 </div>
 <script>
+function openDelay() { document.getElementById('delayModal').style.display = 'flex'; }
+function closeDelay() { document.getElementById('delayModal').style.display = 'none'; }
 function openPriceList() { document.getElementById('priceListModal').style.display = 'flex'; }
 function closePriceList() { document.getElementById('priceListModal').style.display = 'none'; }
 </script>
@@ -72,6 +109,28 @@ function closePriceList() { document.getElementById('priceListModal').style.disp
 {% endblock %}
 
 {% block content %}
+{% if held_until %}
+<div class="card" style="background:#fdecea; border:1px solid #f3b8b3; color:#a32d2d; margin-bottom:1.25rem;">
+    <strong>Sales paused on this property</strong> until {{ held_until.strftime('%B %-d, %Y') }}.
+    {% if held_reason %}<br><span style="font-weight:400;">{{ held_reason }}</span>{% endif %}
+    <div style="font-weight:400; font-size:.85rem; margin-top:.4rem;">
+        It won't appear in follow-ups, the rehab list or the cross-company overview.
+    </div>
+    {% if session.user_role in ('admin','manager') %}
+    <form method="POST" action="/{{ company_key }}/sales/delay-lift" style="margin-top:.6rem;"
+          onsubmit="return confirm('Lift the sales hold on {{ prospect.property_name }}?');">
+        <input type="hidden" name="property_type" value="prospect">
+        <input type="hidden" name="property_id" value="{{ prospect.id }}">
+        <button type="submit" class="btn btn-outline" style="padding:.35rem .8rem; font-size:.82rem;">Lift hold</button>
+    </form>
+    {% endif %}
+</div>
+{% elif delay_pending %}
+<div class="card" style="background:#fff8ef; border:1px solid #f0dcb0; color:#8a6100; margin-bottom:1.25rem;">
+    A request to pause sales on this property is waiting on a manager.
+</div>
+{% endif %}
+
 {% if prospect.rehab_planned %}
 <div class="card" style="background:#fff8ef; border:1px solid #f0dcb0; color:#8a6100; margin-bottom:1.25rem;">
     <strong>Planning a rehab</strong> — full renovation across units.
@@ -91,6 +150,13 @@ function closePriceList() { document.getElementById('priceListModal').style.disp
             {% if prospect.management_company_name %} · {{ prospect.management_company_name }}{% endif %}
             {% if prospect.is_former_customer %} · Former customer{% endif %}
         </div>
+        {% if prospect.intake_completed_at %}
+        <div class="sub" style="color:#3b6d11;">
+            New-customer form completed {{ prospect.intake_completed_at.strftime('%b %-d, %Y') }}
+            {% if prospect.intake_completed_by_name %}by {{ prospect.intake_completed_by_name }}
+            {%- if prospect.intake_completed_by_title %}, {{ prospect.intake_completed_by_title }}{% endif %}{% endif %}
+        </div>
+        {% endif %}
         {% if prospect.price_list_requested_at %}
         <div class="sub" style="color:#3b6d11;">
             Price list requested {{ prospect.price_list_requested_at.strftime('%b %-d, %Y') }}
@@ -105,6 +171,14 @@ function closePriceList() { document.getElementById('priceListModal').style.disp
     <div class="quick-actions">
         <a href="/{{ company_key }}/sales/visits/log?property_type=prospect&property_id={{ prospect.id }}" class="btn btn-primary">Log Visit</a>
         <a href="/{{ company_key }}/sales/prospects/{{ prospect.id }}/edit" class="btn btn-outline">Edit</a>
+        {% if not prospect.converted_to_customer %}
+        <a href="/{{ company_key }}/sales/prospects/{{ prospect.id }}/intake" class="btn btn-primary">
+            {% if prospect.intake_completed_at %}Re-open New Customer Form{% else %}New Customer Form{% endif %}
+        </a>
+        {% endif %}
+        {% if not held_until and not delay_pending %}
+        <button type="button" class="btn btn-outline" onclick="openDelay()">Pause Sales…</button>
+        {% endif %}
         {% if price_candidates|length == 1 %}
         <form method="POST" action="/{{ company_key }}/sales/prospects/{{ prospect.id }}/request-price-list"
               style="display:inline;"

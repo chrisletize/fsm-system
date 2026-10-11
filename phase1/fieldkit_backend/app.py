@@ -471,6 +471,12 @@ def _sales_overview_rows(company_keys, today, horizon_days=4):
             FROM sales_visits sv
             WHERE sv.deleted_at IS NULL AND sv.follow_up_needed = TRUE AND sv.follow_up_completed = FALSE
               AND sv.follow_up_date <= %s
+              -- Chris, 2026-10-11: a property on a sales hold must not show up in
+              -- anything that sends the salesperson out to it.
+              AND NOT EXISTS (SELECT 1 FROM sales_prospects dp WHERE sv.property_type='prospect'
+                                    AND dp.id = sv.property_id AND dp.sales_delayed_until >= CURRENT_DATE)
+              AND NOT EXISTS (SELECT 1 FROM customers dc WHERE sv.property_type='customer'
+                                    AND dc.id = sv.property_id AND dc.sales_delayed_until >= CURRENT_DATE)
             ORDER BY sv.follow_up_date ASC
         """, (today + timedelta(days=horizon_days),))
         branding = COMPANY_BRANDING.get(ck, {})
@@ -10995,6 +11001,7 @@ def _sales_dormant_customers(company_key):
                ) AS last_service_date
         FROM customers c
         WHERE c.deleted_at IS NULL AND c.status = 'Active'
+          AND (c.sales_delayed_until IS NULL OR c.sales_delayed_until < CURRENT_DATE)
     """)
     rows = cur.fetchall()
     cur.close(); conn.close()
@@ -11008,6 +11015,353 @@ def _sales_dormant_customers(company_key):
                              'last_service_date': r['last_service_date'], 'days': days})
     dormant.sort(key=lambda x: (x['days'] is None, x['days'] or 0), reverse=True)
     return dormant
+
+
+SALES_DELAY_MONTHS = (6, 12)
+
+
+@app.route('/<company_key>/sales/prospects/<int:prospect_id>/intake', methods=['GET', 'POST'])
+@login_required
+@company_access_required
+@with_branding
+def sales_intake(company_key, prospect_id, branding, all_companies, company_access):
+    """The paper "New Customer Information" sheet, as a wizard the property
+    manager fills in themselves on the salesperson's tablet (Chris,
+    2026-10-11).
+
+    Runs chrome-less on purpose: the template does NOT extend base.html, so
+    while a customer is holding a logged-in tablet there is no nav bar, no
+    company switcher and no link into the rest of FieldKit. They see a form,
+    not somebody else's internal system.
+
+    Submitting does three things in one transaction: writes everything onto the
+    prospect, creates/updates the manager and maintenance contacts, and queues
+    a conversion request for a manager -- the same approval_queue path the
+    salesperson's own Convert button uses, so a customer can never create a
+    customer record directly. The office then gets an emailed copy, which is
+    what used to happen when the paper sheet was handed in."""
+    if session.get('user_role') not in SALES_ROLES:
+        abort(403)
+    username = session.get('username')
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM sales_prospects WHERE id = %s AND deleted_at IS NULL", (prospect_id,))
+    prospect = cur.fetchone()
+    if not prospect:
+        cur.close(); conn.close(); abort(404)
+    prospect = dict(prospect)
+
+    if request.method == 'POST':
+        f = request.form
+        property_name = f.get('property_name', '').strip() or prospect['property_name']
+        mgmt_name = f.get('management_company', '').strip()
+
+        mgmt_id = prospect.get('management_company_id')
+        if mgmt_name:
+            cur.execute("""
+                SELECT id FROM management_companies
+                WHERE deleted_at IS NULL AND LOWER(name) = LOWER(%s) LIMIT 1
+            """, (mgmt_name,))
+            row = cur.fetchone()
+            if row:
+                mgmt_id = row['id']
+            else:
+                cur.execute("""
+                    INSERT INTO management_companies (name, created_by, updated_by)
+                    VALUES (%s, %s, %s) RETURNING id
+                """, (mgmt_name, username, username))
+                mgmt_id = cur.fetchone()['id']
+
+        cur.execute("""
+            UPDATE sales_prospects SET
+                property_name=%s, address=%s, city=%s, state=%s, zip=%s,
+                general_phone=%s, general_email=%s, billing_email=%s,
+                management_company_id=%s, management_software=%s,
+                portal_ops=%s, portal_vendorcafe=%s, portal_paymode=%s,
+                intake_completed_at=CURRENT_TIMESTAMP, intake_completed_by_name=%s,
+                intake_completed_by_title=%s, updated_at=CURRENT_TIMESTAMP, updated_by=%s
+            WHERE id=%s
+        """, (property_name, f.get('address', '').strip() or None,
+              f.get('city', '').strip() or None,
+              (f.get('state', '').strip().upper()[:2] or None),
+              f.get('zip', '').strip()[:10] or None,
+              f.get('general_phone', '').strip() or None,
+              f.get('general_email', '').strip() or None,
+              f.get('billing_email', '').strip() or None,
+              mgmt_id, f.get('management_software', '').strip() or None,
+              f.get('portal_ops') == 'on', f.get('portal_vendorcafe') == 'on',
+              f.get('portal_paymode') == 'on',
+              f.get('completed_by_name', '').strip() or None,
+              f.get('completed_by_title', '').strip() or None,
+              username, prospect_id))
+
+        # Manager + maintenance contacts. Matched on name so re-running the
+        # intake updates the same person instead of duplicating them.
+        for prefix, default_title in (('manager', 'Property Manager'),
+                                      ('maintenance', 'Maintenance Supervisor')):
+            name = f.get(f'{prefix}_name', '').strip()
+            if not name:
+                continue
+            first, _, last = name.partition(' ')
+            phone = f.get(f'{prefix}_phone', '').strip() or None
+            email = f.get(f'{prefix}_email', '').strip() or None
+            cur.execute("""
+                SELECT id FROM sales_contacts
+                WHERE current_property_id = %s AND current_property_type = 'prospect'
+                  AND deleted_at IS NULL AND LOWER(first_name) = LOWER(%s)
+                  AND LOWER(last_name) = LOWER(%s) LIMIT 1
+            """, (prospect_id, first, last))
+            existing = cur.fetchone()
+            if existing:
+                cur.execute("""
+                    UPDATE sales_contacts SET title=%s,
+                        office_phone=COALESCE(%s, office_phone),
+                        office_email=COALESCE(%s, office_email),
+                        updated_at=CURRENT_TIMESTAMP, updated_by=%s
+                    WHERE id=%s
+                """, (default_title, phone, email, username, existing['id']))
+            else:
+                cur.execute("""
+                    INSERT INTO sales_contacts (first_name, last_name, title, office_phone,
+                        office_email, current_property_id, current_property_type,
+                        created_by, updated_by)
+                    VALUES (%s,%s,%s,%s,%s,%s,'prospect',%s,%s) RETURNING id
+                """, (first, last, default_title, phone, email, prospect_id, username, username))
+                new_contact = cur.fetchone()['id']
+                cur.execute("""
+                    INSERT INTO contact_property_history
+                        (contact_id, property_id, property_type, property_name, started_date, created_by)
+                    VALUES (%s,%s,'prospect',%s,%s,%s)
+                """, (new_contact, prospect_id, property_name, date.today(), username))
+
+        # Queue it for a manager, unless one is already waiting.
+        cur.execute("""
+            SELECT id FROM approval_queue WHERE request_type = 'convert_prospect'
+              AND target_type = 'prospect' AND target_id = %s AND status = 'pending'
+              AND deleted_at IS NULL
+        """, (prospect_id,))
+        already_queued = cur.fetchone() is not None
+        if not already_queued and not prospect.get('converted_to_customer'):
+            cur.execute("""
+                SELECT id, first_name, last_name, title, office_phone, office_email
+                FROM sales_contacts WHERE current_property_id = %s
+                  AND current_property_type = 'prospect' AND deleted_at IS NULL
+            """, (prospect_id,))
+            contacts = [dict(c) for c in cur.fetchall()]
+            details = {
+                'action': 'convert_prospect', 'prospect_id': prospect_id,
+                'prospect_name': property_name,
+                'customer_type': prospect.get('customer_type'),
+                'address': f.get('address', '').strip() or prospect.get('address'),
+                'city': f.get('city', '').strip() or prospect.get('city'),
+                'state': (f.get('state', '').strip().upper()[:2] or prospect.get('state')),
+                'zip': f.get('zip', '').strip() or prospect.get('zip'),
+                'management_company_id': mgmt_id, 'contacts': contacts,
+                'primary_contact_id': contacts[0]['id'] if contacts else None,
+                'submitted_reason': (f"Completed on site by "
+                                     f"{f.get('completed_by_name', '').strip() or 'the property'}"
+                                     f"{', ' + f.get('completed_by_title').strip() if f.get('completed_by_title', '').strip() else ''}."),
+            }
+            cur.execute("""
+                INSERT INTO approval_queue (request_type, target_type, target_id, target_name,
+                    contact_name, contact_phone, contact_email, request_details,
+                    submitted_by, created_by, updated_by)
+                VALUES ('convert_prospect','prospect',%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """, (prospect_id, property_name,
+                  f.get('manager_name', '').strip() or None,
+                  f.get('manager_phone', '').strip() or None,
+                  f.get('billing_email', '').strip() or f.get('general_email', '').strip() or None,
+                  json.dumps(details), username, username, username))
+        conn.commit(); cur.close(); conn.close()
+
+        site = ', '.join(x for x in [f.get('address', '').strip(), f.get('city', '').strip(),
+                                     f.get('state', '').strip()] if x)
+        portals = [n for n, k in (('OPS', 'portal_ops'), ('VendorCafé', 'portal_vendorcafe'),
+                                  ('Paymode-X', 'portal_paymode')) if f.get(k) == 'on']
+        recipients = []
+        conn2 = get_db_connection(company_key)
+        cur2 = conn2.cursor()
+        recipients = _office_recipients(company_key, cur2)
+        cur2.close(); conn2.close()
+        if recipients:
+            _send_email_via_resend(recipients,
+                f"New customer information — {property_name}",
+                f"<p><strong>{property_name}</strong> completed the new-customer form on site"
+                f"{' with ' + username if username else ''}.</p>"
+                f"<p><strong>Address:</strong> {site or '—'}<br>"
+                f"<strong>Phone:</strong> {f.get('general_phone', '').strip() or '—'}<br>"
+                f"<strong>Email:</strong> {f.get('general_email', '').strip() or '—'}<br>"
+                f"<strong>Billing email:</strong> {f.get('billing_email', '').strip() or '—'}<br>"
+                f"<strong>Management company:</strong> {mgmt_name or '—'}<br>"
+                f"<strong>Management software:</strong> {f.get('management_software', '').strip() or '—'}<br>"
+                f"<strong>Portals:</strong> {', '.join(portals) if portals else 'none ticked'}</p>"
+                f"<p><strong>Manager:</strong> {f.get('manager_name', '').strip() or '—'} "
+                f"{f.get('manager_phone', '').strip() or ''}<br>"
+                f"<strong>Maintenance:</strong> {f.get('maintenance_name', '').strip() or '—'} "
+                f"{f.get('maintenance_phone', '').strip() or ''}</p>"
+                f"<p>Filled in by {f.get('completed_by_name', '').strip() or 'unknown'}"
+                f"{', ' + f.get('completed_by_title').strip() if f.get('completed_by_title', '').strip() else ''}."
+                + ('</p>' if already_queued else
+                   ' A conversion request is waiting in Sales Approvals.</p>'),
+                from_name=branding.get('name'))
+        return redirect(f'/{company_key}/sales/prospects/{prospect_id}/intake/done')
+
+    cur.execute("SELECT name FROM management_companies WHERE deleted_at IS NULL ORDER BY name")
+    mgmt_names = [r['name'] for r in cur.fetchall()]
+    cur.execute("""
+        SELECT first_name, last_name, title, office_phone, office_email
+        FROM sales_contacts WHERE current_property_id = %s AND current_property_type = 'prospect'
+          AND deleted_at IS NULL ORDER BY id
+    """, (prospect_id,))
+    contacts = [dict(c) for c in cur.fetchall()]
+    mgmt_current = ''
+    if prospect.get('management_company_id'):
+        cur.execute("SELECT name FROM management_companies WHERE id = %s",
+                    (prospect['management_company_id'],))
+        row = cur.fetchone()
+        mgmt_current = row['name'] if row else ''
+    cur.close(); conn.close()
+
+    def contact_like(title_fragment):
+        for c in contacts:
+            if title_fragment in (c['title'] or '').lower():
+                return c
+        return None
+
+    return render_template('sales_intake_wizard.html',
+        branding=branding, company_key=company_key, prospect=prospect,
+        mgmt_names=mgmt_names, mgmt_current=mgmt_current,
+        manager=contact_like('manager'), maintenance=contact_like('maintenance'),
+    )
+
+
+@app.route('/<company_key>/sales/prospects/<int:prospect_id>/intake/done')
+@login_required
+@company_access_required
+@with_branding
+def sales_intake_done(company_key, prospect_id, branding, all_companies, company_access):
+    """Thank-you screen the customer sees, with the only way onward being a
+    button the salesperson taps to get back into FieldKit."""
+    if session.get('user_role') not in SALES_ROLES:
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("SELECT property_name FROM sales_prospects WHERE id = %s", (prospect_id,))
+    row = cur.fetchone()
+    cur.close(); conn.close()
+    return render_template('sales_intake_done.html',
+        branding=branding, company_key=company_key, prospect_id=prospect_id,
+        property_name=row['property_name'] if row else '')
+
+
+def _sales_delay_state(cur, property_type, property_id):
+    """Is this property currently on a sales hold, and until when? Returns
+    (until_date, reason) or (None, None). Expiry is implicit -- a past date
+    simply stops matching, so nothing has to run to lift a hold."""
+    table = 'sales_prospects' if property_type == 'prospect' else 'customers'
+    cur.execute(f"""
+        SELECT sales_delayed_until, sales_delay_reason FROM {table}
+        WHERE id = %s AND sales_delayed_until IS NOT NULL
+          AND sales_delayed_until >= CURRENT_DATE
+    """, (property_id,))
+    row = cur.fetchone()
+    return (row['sales_delayed_until'], row['sales_delay_reason']) if row else (None, None)
+
+
+@app.route('/<company_key>/sales/delay-request', methods=['POST'])
+@login_required
+@company_access_required
+def sales_delay_request(company_key):
+    """Raise a request to stop visiting a property for 6 or 12 months. A
+    salesperson can only ask; a manager approving it in the normal sales
+    approvals queue is what actually applies the hold."""
+    if session.get('user_role') not in SALES_ROLES:
+        abort(403)
+    username = session.get('username')
+    property_type = request.form.get('property_type', '').strip()
+    property_id   = _opt_num(request.form.get('property_id'))
+    # _opt_num returns a STRING (it just strips and lets psycopg2 cast), so the
+    # month choice has to be parsed properly before it's compared to a number.
+    try:
+        months = int(request.form.get('months', ''))
+    except (TypeError, ValueError):
+        months = None
+    reason        = request.form.get('reason', '').strip()
+    back = request.referrer or f'/{company_key}/sales'
+
+    if property_type not in ('prospect', 'customer') or not property_id:
+        flash('Could not tell which property that was for.', 'error')
+        return redirect(back)
+    if months not in SALES_DELAY_MONTHS:
+        flash('Pick either 6 or 12 months.', 'error')
+        return redirect(back)
+    if not reason:
+        # The reason is the whole value of the record later -- "why did we stop
+        # calling on these people" is exactly the question asked a year on.
+        flash('A reason is required to pause sales on a property.', 'error')
+        return redirect(back)
+
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    name = _sales_property_name(cur, property_type, property_id)
+    cur.execute("""
+        SELECT id FROM approval_queue
+        WHERE request_type = 'delay_sales' AND target_type = %s AND target_id = %s
+          AND status = 'pending' AND deleted_at IS NULL
+    """, (property_type, property_id))
+    if cur.fetchone():
+        cur.close(); conn.close()
+        flash(f'A pause request for {name} is already waiting on a manager.', 'info')
+        return redirect(back)
+
+    cur.execute("""
+        INSERT INTO approval_queue (request_type, target_type, target_id, target_name,
+            request_details, submitted_by, created_by, updated_by)
+        VALUES ('delay_sales', %s, %s, %s, %s, %s, %s, %s)
+    """, (property_type, property_id, name,
+          json.dumps({'months': months, 'reason': reason, 'property_type': property_type}),
+          username, username, username))
+    conn.commit(); cur.close(); conn.close()
+
+    branding_local = COMPANY_BRANDING.get(company_key, {})
+    for mgr in _sales_company_managers(company_key):
+        if mgr['email']:
+            _send_email_via_resend([mgr['email']],
+                f"[{branding_local.get('name', company_key)}] Approval needed: pause sales on {name}",
+                f"<p>{session.get('full_name') or username} asked to stop sales visits to "
+                f"<strong>{name}</strong> for {months} months.</p>"
+                f"<p><strong>Reason:</strong> {reason}</p>"
+                f"<p>Approve or reject it in the Sales Approvals queue.</p>",
+                from_name=branding_local.get('name'))
+    flash(f'Requested a {months}-month sales pause on {name}. A manager has to approve it.',
+          'success')
+    return redirect(back)
+
+
+@app.route('/<company_key>/sales/delay-lift', methods=['POST'])
+@login_required
+@company_access_required
+def sales_delay_lift(company_key):
+    """Clear a hold early. Manager/admin only, same as applying one."""
+    if session.get('user_role') not in SALES_APPROVAL_ROLES:
+        abort(403)
+    property_type = request.form.get('property_type', '').strip()
+    property_id   = _opt_num(request.form.get('property_id'))
+    if property_type not in ('prospect', 'customer') or not property_id:
+        abort(400)
+    table = 'sales_prospects' if property_type == 'prospect' else 'customers'
+    username = session.get('username')
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute(f"""
+        UPDATE {table} SET sales_delayed_until = NULL, sales_delay_reason = NULL,
+            sales_delay_set_by = NULL, sales_delay_set_at = NULL,
+            updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s
+    """, (username, property_id))
+    conn.commit(); cur.close(); conn.close()
+    flash('Sales hold lifted.', 'success')
+    return redirect(request.referrer or f'/{company_key}/sales')
 
 
 PRICE_LIST_DUPLICATE_DAYS = 7
@@ -11196,6 +11550,7 @@ def _rehab_prospects(company_key, needing_contact_only=True):
         FROM sales_prospects p
         WHERE p.deleted_at IS NULL AND p.rehab_planned = TRUE
           AND p.converted_to_customer = FALSE
+          AND (p.sales_delayed_until IS NULL OR p.sales_delayed_until < CURRENT_DATE)
     """)
     today = date.today()
     rows = []
@@ -11238,6 +11593,12 @@ def sales_dashboard(company_key, branding, all_companies, company_access):
         FROM sales_visits sv
         WHERE sv.deleted_at IS NULL AND sv.follow_up_needed = TRUE AND sv.follow_up_completed = FALSE
           AND {followup_cond}
+          -- Chris, 2026-10-11: a property on a sales hold must not show up in
+          -- anything that sends the salesperson out to it.
+          AND NOT EXISTS (SELECT 1 FROM sales_prospects dp WHERE sv.property_type='prospect'
+                            AND dp.id = sv.property_id AND dp.sales_delayed_until >= CURRENT_DATE)
+          AND NOT EXISTS (SELECT 1 FROM customers dc WHERE sv.property_type='customer'
+                            AND dc.id = sv.property_id AND dc.sales_delayed_until >= CURRENT_DATE)
         ORDER BY sv.follow_up_date ASC
     """, followup_params)
     followups = []
@@ -11549,12 +11910,24 @@ def sales_prospect_detail(company_key, prospect_id, branding, all_companies, com
     cur2 = conn2.cursor()
     price_candidates = _price_list_candidates(cur2, dict(prospect))
     cur2.close(); conn2.close()
+    conn3 = get_db_connection(company_key)
+    cur3 = conn3.cursor()
+    held_until, held_reason = _sales_delay_state(cur3, 'prospect', prospect_id)
+    cur3.execute("""
+        SELECT id FROM approval_queue WHERE request_type = 'delay_sales'
+          AND target_type = 'prospect' AND target_id = %s AND status = 'pending'
+          AND deleted_at IS NULL
+    """, (prospect_id,))
+    delay_pending = cur3.fetchone() is not None
+    cur3.close(); conn3.close()
     recent_request = bool(
         prospect['price_list_requested_at']
         and (datetime.now() - prospect['price_list_requested_at']).days < PRICE_LIST_DUPLICATE_DAYS)
     return render_template('sales_prospect_detail.html',
         price_candidates=price_candidates, recent_request=recent_request,
-        duplicate_days=PRICE_LIST_DUPLICATE_DAYS,
+        duplicate_days=PRICE_LIST_DUPLICATE_DAYS, held_until=held_until,
+        held_reason=held_reason, delay_pending=delay_pending,
+        delay_months=SALES_DELAY_MONTHS,
         branding=branding, company_key=company_key,
         company_access=company_access, all_companies=all_companies,
         prospect=prospect, visits=visits, contacts=contacts, map_query=map_query,
@@ -11929,6 +12302,7 @@ def sales_visit_log(company_key, branding, all_companies, company_access):
         abort(403)
     username = session.get('username')
     error = None
+    held_block = False
     if request.method == 'POST':
         property_type = request.form.get('property_type', '').strip()
         property_id   = _opt_num(request.form.get('property_id'))
@@ -11959,8 +12333,23 @@ def sales_visit_log(company_key, branding, all_companies, company_access):
 
         photos, photo_error = _read_photo_uploads()
 
+        held_until, held_reason = (None, None)
+        if property_id and property_type in ('prospect', 'customer'):
+            conn_h = get_db_connection(company_key)
+            cur_h = conn_h.cursor()
+            held_until, held_reason = _sales_delay_state(cur_h, property_type, property_id)
+            cur_h.close(); conn_h.close()
+
         if photo_error:
             error = photo_error
+        elif held_until and request.form.get('delay_override') != 'yes':
+            # Not a hard block -- the salesperson may be standing there -- but it
+            # must never happen without them seeing why.
+            error = (f'Sales are paused on this property until '
+                     f'{held_until.strftime("%b %-d, %Y")}'
+                     + (f' — {held_reason}' if held_reason else '')
+                     + '. Tick "log it anyway" below if you still need to record this visit.')
+            held_block = True
         elif not new_prospect_name and (property_type not in ('prospect', 'customer')
                                         or not property_id):
             error = 'Pick a property, or add it as a new prospect.'
@@ -12072,6 +12461,7 @@ def sales_visit_log(company_key, branding, all_companies, company_access):
         company_access=company_access, all_companies=all_companies,
         error=error, property_type=property_type, property_id=property_id, property_name=property_name,
         tags=tags, contacts=contacts, last_contact_id=last_contact_id, investigate=investigate,
+        held_block=held_block,
     )
 
 
@@ -12211,6 +12601,12 @@ def sales_followups(company_key, branding, all_companies, company_access):
         SELECT sv.*, sc.first_name AS contact_first, sc.last_name AS contact_last
         FROM sales_visits sv LEFT JOIN sales_contacts sc ON sc.id = sv.contact_id
         WHERE sv.deleted_at IS NULL AND sv.follow_up_needed = TRUE AND sv.follow_up_completed = FALSE
+          -- Chris, 2026-10-11: a property on a sales hold must not show up in
+          -- anything that sends the salesperson out to it.
+          AND NOT EXISTS (SELECT 1 FROM sales_prospects dp WHERE sv.property_type='prospect'
+                            AND dp.id = sv.property_id AND dp.sales_delayed_until >= CURRENT_DATE)
+          AND NOT EXISTS (SELECT 1 FROM customers dc WHERE sv.property_type='customer'
+                            AND dc.id = sv.property_id AND dc.sales_delayed_until >= CURRENT_DATE)
         ORDER BY sv.follow_up_date ASC NULLS LAST
     """)
     today = date.today()
@@ -12380,6 +12776,33 @@ def sales_approval_approve(company_key, approval_id):
         cur.close(); conn.close()
         flash('This request has already been reviewed.', 'error')
         return redirect(f'/{company_key}/sales/approvals')
+    # A delay request is the other thing a salesperson can raise. Chris,
+    # 2026-10-11: the salesperson may REQUEST that a property be left alone,
+    # but only a manager may actually apply it -- "stop selling to this
+    # property" should always have a name against it.
+    if approval['request_type'] == 'delay_sales':
+        details = approval['request_details'] or {}
+        months = int(details.get('months') or 6)
+        target_table = 'sales_prospects' if approval['target_type'] == 'prospect' else 'customers'
+        until = date.today() + timedelta(days=round(months * 30.44))
+        cur.execute(f"""
+            UPDATE {target_table}
+            SET sales_delayed_until = %s, sales_delay_reason = %s,
+                sales_delay_set_by = %s, sales_delay_set_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP, updated_by = %s
+            WHERE id = %s
+        """, (until, details.get('reason'), username, username, approval['target_id']))
+        cur.execute("""
+            UPDATE approval_queue SET status = 'approved', reviewed_by = %s,
+                reviewed_at = CURRENT_TIMESTAMP, review_notes = %s,
+                updated_at = CURRENT_TIMESTAMP, updated_by = %s
+            WHERE id = %s
+        """, (username, request.form.get('review_notes', '').strip() or None, username, approval_id))
+        conn.commit(); cur.close(); conn.close()
+        flash(f'Sales paused on {approval["target_name"]} until '
+              f'{until.strftime("%b %-d, %Y")}.', 'success')
+        return redirect(f'/{company_key}/sales/approvals')
+
     if approval['request_type'] != 'convert_prospect':
         cur.close(); conn.close()
         flash('Unknown request type.', 'error')

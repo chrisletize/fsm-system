@@ -33,14 +33,36 @@
 {% for a in approvals %}
 <div class="approval-card">
     <div class="approval-head">
-        <h3>Convert prospect "{{ a.target_name }}" to customer</h3>
+        <h3>{% if a.request_type == 'delay_sales' %}Pause sales on "{{ a.target_name }}"{% else %}Convert prospect "{{ a.target_name }}" to customer{% endif %}</h3>
         <span class="badge badge-{{ a.status }}">{{ a.status|capitalize }}</span>
     </div>
     <div class="meta">
         Submitted by {{ a.submitted_by }} on {{ a.submitted_at.strftime('%b %-d, %Y') if a.submitted_at else '—' }}
         {% if a.status != 'pending' %} · reviewed by {{ a.reviewed_by }} on {{ a.reviewed_at.strftime('%b %-d, %Y') if a.reviewed_at else '—' }}{% endif %}
     </div>
-    {% if a.request_details.submitted_reason %}<div class="meta">Note: {{ a.request_details.submitted_reason }}</div>{% endif %}
+    {% if a.request_type == 'delay_sales' %}
+    <div class="meta" style="margin-top:.5rem;">
+        Asking to stop sales visits for <strong>{{ a.request_details.months }} months</strong>
+        ({{ a.request_details.property_type }}).
+    </div>
+    <div style="background:#fff8ef; border:1px solid #f0dcb0; border-radius:6px;
+                padding:.7rem .9rem; margin:.6rem 0; color:#7a5600;">
+        <strong>Reason given:</strong> {{ a.request_details.reason }}
+    </div>
+    {% if a.status == 'pending' and session.user_role in ('admin','manager') %}
+    <form method="POST" action="/{{ company_key }}/sales/approvals/{{ a.id }}/approve"
+          style="display:inline;"
+          onsubmit="return confirm('Pause sales on {{ a.target_name }} for {{ a.request_details.months }} months?');">
+        <input type="text" name="review_notes" placeholder="Note (optional)"
+               style="padding:.45rem .6rem; border:1px solid #ddd; border-radius:4px; font-size:.86rem;">
+        <button type="submit" class="btn btn-primary">Approve pause</button>
+    </form>
+    <form method="POST" action="/{{ company_key }}/sales/approvals/{{ a.id }}/reject" style="display:inline;">
+        <input type="hidden" name="review_notes" value="Pause not applied.">
+        <button type="submit" class="btn btn-outline">Reject</button>
+    </form>
+    {% endif %}
+    {% elif a.request_details.submitted_reason %}<div class="meta">Note: {{ a.request_details.submitted_reason }}</div>{% endif %}
     <div class="contacts-list">
         {% for c in a.request_details.contacts %}
         {{ c.first_name }} {{ c.last_name }}{% if c.title %} ({{ c.title }}){% endif %}
@@ -51,6 +73,7 @@
     </div>
 
     {% if a.status == 'pending' %}
+    {% if a.request_type != 'delay_sales' %}
     <form method="POST" action="/{{ company_key }}/sales/approvals/{{ a.id }}/approve">
         <div class="form-grid">
             <div class="form-group"><label>Property Name</label><input type="text" name="property_name" value="{{ a.request_details.prospect_name }}"></div>
@@ -86,6 +109,7 @@
         <div class="form-group" style="margin-bottom:.5rem;"><label>Rejection note (required)</label><textarea name="review_notes" rows="2" required></textarea></div>
         <button type="submit" class="btn btn-danger">Reject</button>
     </form>
+    {% endif %}
     {% elif a.review_notes %}
     <div class="meta">Review notes: {{ a.review_notes }}</div>
     {% endif %}

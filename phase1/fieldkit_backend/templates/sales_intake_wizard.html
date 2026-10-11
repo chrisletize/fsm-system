@@ -1,0 +1,361 @@
+{#
+  New Customer Information — the paper form, as a wizard the property manager
+  fills in themselves on the salesperson's tablet (Chris, 2026-10-11).
+
+  Deliberately does NOT extend base.html. While a customer is holding a
+  logged-in tablet there must be no nav bar, no company switcher and no link
+  into the rest of FieldKit — they should see a form, not somebody else's
+  internal system. That's also why it's styled generously rather than reusing
+  the dense internal CSS: this one is customer-facing.
+
+  One question per screen, client-side, submitted once at the end.
+#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>New Customer Information — {{ branding.name }}</title>
+<style>
+    * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+    body {
+        font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        background:#f4f6f8; color:#23272b; min-height:100vh;
+        display:flex; flex-direction:column;
+    }
+    header {
+        background:{{ branding.color_primary }}; color:#fff; padding:1.25rem 1.5rem;
+        text-align:center;
+    }
+    header .co { font-size:1.15rem; font-weight:700; letter-spacing:.01em; }
+    header .sub { font-size:.85rem; opacity:.85; margin-top:.15rem; }
+
+    .progress { height:5px; background:rgba(0,0,0,.08); }
+    .progress .bar { height:100%; background:{{ branding.color_primary }}; width:0;
+                     transition:width .25s ease; }
+
+    main { flex:1; display:flex; align-items:flex-start; justify-content:center;
+           padding:2rem 1.25rem 7rem; }
+    .wrap { width:100%; max-width:560px; }
+
+    .step { display:none; }
+    .step.active { display:block; animation:in .22s ease; }
+    @keyframes in { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+
+    .count { font-size:.78rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase;
+             color:{{ branding.color_primary }}; margin-bottom:.5rem; }
+    h2 { font-size:1.5rem; line-height:1.3; font-weight:700; margin-bottom:.4rem; }
+    .help { color:#6b7280; font-size:.95rem; margin-bottom:1.5rem; }
+
+    input[type=text], input[type=tel], input[type=email], select {
+        width:100%; padding:1rem; border:2px solid #dfe3e8; border-radius:10px;
+        font-size:1.05rem; font-family:inherit; background:#fff; color:#23272b;
+    }
+    input:focus, select:focus { outline:none; border-color:{{ branding.color_primary }}; }
+    .pair { display:flex; gap:.75rem; }
+    .pair > * { flex:1; }
+    .field + .field { margin-top:.9rem; }
+    .field label { display:block; font-size:.82rem; font-weight:600; color:#6b7280;
+                   margin-bottom:.35rem; }
+
+    .tick { display:flex; align-items:center; gap:.9rem; padding:1rem; border:2px solid #dfe3e8;
+            border-radius:10px; background:#fff; margin-bottom:.7rem; cursor:pointer;
+            font-size:1.02rem; }
+    .tick input { width:26px; height:26px; accent-color:{{ branding.color_primary }}; }
+    .tick.on { border-color:{{ branding.color_primary }}; background:#f7fbfd; }
+
+    .review { background:#fff; border:1px solid #e3e8ef; border-radius:10px; padding:1rem 1.2rem; }
+    .review .row { display:flex; justify-content:space-between; gap:1rem; padding:.55rem 0;
+                   border-bottom:1px solid #f1f3f5; font-size:.95rem; }
+    .review .row:last-child { border-bottom:none; }
+    .review .k { color:#6b7280; }
+    .review .v { font-weight:600; text-align:right; word-break:break-word; }
+
+    .nav { position:fixed; bottom:0; left:0; right:0; background:#fff;
+           border-top:1px solid #e3e8ef; padding:.9rem 1.25rem;
+           display:flex; gap:.75rem; justify-content:center; }
+    .nav .inner { width:100%; max-width:560px; display:flex; gap:.75rem; }
+    button { font-family:inherit; font-size:1.05rem; font-weight:600; border:none;
+             border-radius:10px; padding:1rem 1.4rem; cursor:pointer; min-height:56px; }
+    .next { background:{{ branding.color_primary }}; color:#fff; flex:2; }
+    .back { background:#eef1f4; color:#4b5563; flex:1; }
+    .next:disabled { opacity:.45; }
+    .err { color:#c0392b; font-size:.88rem; margin-top:.5rem; display:none; }
+</style>
+</head>
+<body>
+
+<header>
+    <div class="co">{{ branding.name }}</div>
+    <div class="sub">New Customer Information</div>
+</header>
+<div class="progress"><div class="bar" id="bar"></div></div>
+
+<main>
+<div class="wrap">
+<form method="POST" id="intakeForm">
+
+    <div class="step active" data-step="1">
+        <div class="count">Question 1</div>
+        <h2>What's the property name?</h2>
+        <p class="help">The name as you'd like it to appear on invoices.</p>
+        <input type="text" name="property_name" id="q_property_name"
+               value="{{ prospect.property_name or '' }}" autocomplete="off" required>
+        <div class="err" id="e1">Please enter the property name.</div>
+    </div>
+
+    <div class="step" data-step="2">
+        <div class="count">Question 2</div>
+        <h2>Where is it?</h2>
+        <p class="help">Street address of the property.</p>
+        <div class="field">
+            <label>Street address</label>
+            <input type="text" name="address" value="{{ prospect.address or '' }}" autocomplete="off">
+        </div>
+        <div class="field">
+            <label>City</label>
+            <input type="text" name="city" value="{{ prospect.city or '' }}" autocomplete="off">
+        </div>
+        <div class="field pair">
+            <div><label>State</label>
+                <input type="text" name="state" maxlength="2" value="{{ prospect.state or '' }}"
+                       autocomplete="off"></div>
+            <div><label>ZIP</label>
+                <input type="text" name="zip" value="{{ prospect.zip or '' }}" autocomplete="off"></div>
+        </div>
+    </div>
+
+    <div class="step" data-step="3">
+        <div class="count">Question 3</div>
+        <h2>Best phone number?</h2>
+        <p class="help">The main number for the leasing office.</p>
+        <input type="tel" name="general_phone" value="{{ prospect.general_phone or '' }}"
+               autocomplete="off" placeholder="(336) 555-0100">
+    </div>
+
+    <div class="step" data-step="4">
+        <div class="count">Question 4</div>
+        <h2>Email address</h2>
+        <p class="help">Where we should send general correspondence.</p>
+        <input type="email" name="general_email" value="{{ prospect.general_email or '' }}"
+               autocomplete="off" placeholder="leasing@property.com">
+    </div>
+
+    <div class="step" data-step="5">
+        <div class="count">Question 5</div>
+        <h2>Who manages the property?</h2>
+        <p class="help">Your property manager's name and direct number.</p>
+        <div class="field">
+            <label>Name</label>
+            <input type="text" name="manager_name" autocomplete="off"
+                   value="{{ ((manager.first_name ~ ' ' ~ (manager.last_name or ''))|trim) if manager else '' }}">
+        </div>
+        <div class="field">
+            <label>Phone</label>
+            <input type="tel" name="manager_phone" autocomplete="off"
+                   value="{{ manager.office_phone if manager and manager.office_phone else '' }}">
+        </div>
+        <div class="field">
+            <label>Email <span style="font-weight:400;">(optional)</span></label>
+            <input type="email" name="manager_email" autocomplete="off"
+                   value="{{ manager.office_email if manager and manager.office_email else '' }}">
+        </div>
+    </div>
+
+    <div class="step" data-step="6">
+        <div class="count">Question 6</div>
+        <h2>Who handles maintenance?</h2>
+        <p class="help">Your maintenance supervisor's name and direct number.</p>
+        <div class="field">
+            <label>Name</label>
+            <input type="text" name="maintenance_name" autocomplete="off"
+                   value="{{ ((maintenance.first_name ~ ' ' ~ (maintenance.last_name or ''))|trim) if maintenance else '' }}">
+        </div>
+        <div class="field">
+            <label>Phone</label>
+            <input type="tel" name="maintenance_phone" autocomplete="off"
+                   value="{{ maintenance.office_phone if maintenance and maintenance.office_phone else '' }}">
+        </div>
+        <div class="field">
+            <label>Email <span style="font-weight:400;">(optional)</span></label>
+            <input type="email" name="maintenance_email" autocomplete="off"
+                   value="{{ maintenance.office_email if maintenance and maintenance.office_email else '' }}">
+        </div>
+    </div>
+
+    <div class="step" data-step="7">
+        <div class="count">Question 7</div>
+        <h2>Management company</h2>
+        <p class="help">The company that owns or operates this property.</p>
+        <input type="text" name="management_company" list="mgmtList" autocomplete="off"
+               value="{{ mgmt_current }}" placeholder="e.g. Willowbridge Property Co.">
+        <datalist id="mgmtList">
+            {% for n in mgmt_names %}<option value="{{ n }}">{% endfor %}
+        </datalist>
+    </div>
+
+    <div class="step" data-step="8">
+        <div class="count">Question 8</div>
+        <h2>Where should invoices go?</h2>
+        <p class="help">The billing email — often different from the one above.</p>
+        <input type="email" name="billing_email" value="{{ prospect.billing_email or '' }}"
+               autocomplete="off" placeholder="ap@managementco.com">
+    </div>
+
+    <div class="step" data-step="9">
+        <div class="count">Question 9</div>
+        <h2>How do you pay vendors?</h2>
+        <p class="help">Tick any portal we'll need to submit invoices through.</p>
+        <label class="tick"><input type="checkbox" name="portal_ops"
+            {% if prospect.portal_ops %}checked{% endif %}> <span>OPS</span></label>
+        <label class="tick"><input type="checkbox" name="portal_vendorcafe"
+            {% if prospect.portal_vendorcafe %}checked{% endif %}> <span>VendorCafé</span></label>
+        <label class="tick"><input type="checkbox" name="portal_paymode"
+            {% if prospect.portal_paymode %}checked{% endif %}> <span>Paymode-X</span></label>
+        <div class="field" style="margin-top:1.2rem;">
+            <label>Management software you use <span style="font-weight:400;">(optional)</span></label>
+            <input type="text" name="management_software" autocomplete="off"
+                   value="{{ prospect.management_software or '' }}" placeholder="e.g. Yardi, RealPage">
+        </div>
+    </div>
+
+    <div class="step" data-step="10">
+        <div class="count">Question 10</div>
+        <h2>And your name?</h2>
+        <p class="help">So we know who to thank — and who to ask if anything needs checking.</p>
+        <div class="field">
+            <label>Your name</label>
+            <input type="text" name="completed_by_name" id="q_completed_by" autocomplete="off" required>
+            <div class="err" id="e10">Please enter your name.</div>
+        </div>
+        <div class="field">
+            <label>Your role <span style="font-weight:400;">(optional)</span></label>
+            <input type="text" name="completed_by_title" autocomplete="off"
+                   placeholder="e.g. Property Manager">
+        </div>
+    </div>
+
+    <div class="step" data-step="11">
+        <div class="count">Last step</div>
+        <h2>Does this look right?</h2>
+        <p class="help">Tap any line to go back and change it.</p>
+        <div class="review" id="review"></div>
+    </div>
+
+</form>
+</div>
+</main>
+
+<div class="nav">
+  <div class="inner">
+    <button type="button" class="back" id="backBtn" style="display:none;">Back</button>
+    <button type="button" class="next" id="nextBtn">Continue</button>
+  </div>
+</div>
+
+<script>
+(function () {
+    const form   = document.getElementById('intakeForm');
+    const steps  = Array.from(document.querySelectorAll('.step'));
+    const bar    = document.getElementById('bar');
+    const nextBtn= document.getElementById('nextBtn');
+    const backBtn= document.getElementById('backBtn');
+    const LAST   = steps.length;
+    let current  = 1;
+
+    // Only two answers are genuinely required: what the property is called, and
+    // who filled this in. Everything else can legitimately be unknown on the
+    // day, and blocking on it would make a customer-facing form feel hostile.
+    const REQUIRED = {1: ['q_property_name', 'e1'], 10: ['q_completed_by', 'e10']};
+
+    function show(n) {
+        current = n;
+        steps.forEach(s => s.classList.toggle('active', Number(s.dataset.step) === n));
+        bar.style.width = ((n - 1) / (LAST - 1) * 100) + '%';
+        backBtn.style.display = n === 1 ? 'none' : 'block';
+        nextBtn.textContent = n === LAST ? 'Submit' : 'Continue';
+        if (n === LAST) buildReview();
+        window.scrollTo(0, 0);
+        const first = steps[n - 1].querySelector('input:not([type=checkbox]), select');
+        if (first && n !== LAST) setTimeout(() => first.focus({preventScroll: true}), 60);
+    }
+
+    function valid(n) {
+        const rule = REQUIRED[n];
+        if (!rule) return true;
+        const el = document.getElementById(rule[0]);
+        const err = document.getElementById(rule[1]);
+        const ok = el.value.trim().length > 0;
+        err.style.display = ok ? 'none' : 'block';
+        if (!ok) el.focus();
+        return ok;
+    }
+
+    const LABELS = [
+        ['Property',          'property_name', 1],
+        ['Address',           'address',       2],
+        ['City',              'city',          2],
+        ['State',             'state',         2],
+        ['ZIP',               'zip',           2],
+        ['Phone',             'general_phone', 3],
+        ['Email',             'general_email', 4],
+        ['Manager',           'manager_name',  5],
+        ['Manager phone',     'manager_phone', 5],
+        ['Maintenance',       'maintenance_name',  6],
+        ['Maintenance phone', 'maintenance_phone', 6],
+        ['Management company','management_company', 7],
+        ['Billing email',     'billing_email', 8],
+        ['Software',          'management_software', 9],
+        ['Completed by',      'completed_by_name', 10],
+        ['Role',              'completed_by_title', 10],
+    ];
+
+    function buildReview() {
+        const box = document.getElementById('review');
+        const portals = ['portal_ops', 'portal_vendorcafe', 'portal_paymode']
+            .filter(n => form.elements[n] && form.elements[n].checked)
+            .map(n => ({portal_ops: 'OPS', portal_vendorcafe: 'VendorCafé',
+                        portal_paymode: 'Paymode-X'}[n]));
+        let html = '';
+        LABELS.forEach(([label, name, step]) => {
+            const el = form.elements[name];
+            const v = el ? el.value.trim() : '';
+            if (!v) return;
+            html += `<div class="row" data-goto="${step}"><span class="k">${label}</span>`
+                 +  `<span class="v">${v.replace(/[<>&]/g, '')}</span></div>`;
+        });
+        html += `<div class="row" data-goto="9"><span class="k">Vendor portals</span>`
+             +  `<span class="v">${portals.length ? portals.join(', ') : 'None'}</span></div>`;
+        box.innerHTML = html;
+        box.querySelectorAll('.row').forEach(r => {
+            r.style.cursor = 'pointer';
+            r.addEventListener('click', () => show(Number(r.dataset.goto)));
+        });
+    }
+
+    nextBtn.addEventListener('click', () => {
+        if (!valid(current)) return;
+        if (current === LAST) {
+            nextBtn.disabled = true;
+            nextBtn.textContent = 'Sending…';
+            form.submit();
+            return;
+        }
+        show(current + 1);
+    });
+    backBtn.addEventListener('click', () => show(Math.max(1, current - 1)));
+
+    // Enter advances rather than submitting the whole form early.
+    form.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); nextBtn.click(); }
+    });
+    document.querySelectorAll('.tick input').forEach(cb => {
+        const sync = () => cb.closest('.tick').classList.toggle('on', cb.checked);
+        cb.addEventListener('change', sync); sync();
+    });
+
+    show(1);
+})();
+</script>
+</body>
+</html>
