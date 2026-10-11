@@ -11010,6 +11010,160 @@ def _sales_dormant_customers(company_key):
     return dormant
 
 
+PRICE_LIST_DUPLICATE_DAYS = 7
+
+# Where price-list requests land (Chris, 2026-10-11). Deliberately NOT reusing
+# company_settings.alert_email: that address also feeds the scheduled job
+# alerts and the weekly sales report, and pointing those at the office inbox
+# isn't something that was asked for. Both Kleanits share one inbox, same as
+# their accountsreceivable address.
+COMPANY_OFFICE_EMAIL = {
+    'getagrip':          'office@getagripofcharlotte.com',
+    'kleanit_charlotte': 'office@kleanit.com',
+    'kleanit_sf':        'office@kleanit.com',
+    'cts':               'office@ctsofraleigh.com',
+}
+
+
+def _price_list_candidates(cur, prospect):
+    """Every address a price list could sensibly be aimed at, labelled so the
+    salesperson can tell them apart: the property's own general inbox plus each
+    named contact's work and personal addresses.
+
+    Returned in preference order -- the property's general inbox first, since a
+    leasing office outlives whoever currently works there."""
+    out = []
+    seen = set()
+
+    def add(email, label):
+        e = (email or '').strip()
+        if e and e.lower() not in seen:
+            seen.add(e.lower())
+            out.append({'email': e, 'label': label})
+
+    add(prospect.get('general_email'), f"{prospect['property_name']} (property)")
+    cur.execute("""
+        SELECT first_name, last_name, title, office_email, personal_email
+        FROM sales_contacts
+        WHERE current_property_id = %s AND current_property_type = 'prospect'
+          AND deleted_at IS NULL
+        ORDER BY last_name, first_name
+    """, (prospect['id'],))
+    for c in cur.fetchall():
+        who = f"{c['first_name']} {c['last_name']}".strip() or 'contact'
+        if c['title']:
+            who += f", {c['title']}"
+        add(c['office_email'], f'{who} (work)')
+        add(c['personal_email'], f'{who} (personal)')
+    return out
+
+
+def _office_recipients(company_key, cur):
+    """Where a price-list request lands: the company's office inbox, falling
+    back to company_settings.alert_email and then to the company's own
+    admins/managers so the button can never silently go nowhere."""
+    office = COMPANY_OFFICE_EMAIL.get(company_key)
+    if office:
+        return [office]
+    cur.execute("SELECT alert_email FROM company_settings WHERE deleted_at IS NULL LIMIT 1")
+    row = cur.fetchone()
+    if row and (row['alert_email'] or '').strip():
+        return [row['alert_email'].strip()]
+    return [m['email'] for m in _sales_company_managers(company_key) if m['email']]
+
+
+@app.route('/<company_key>/sales/prospects/<int:prospect_id>/request-price-list', methods=['POST'])
+@login_required
+@company_access_required
+def sales_request_price_list(company_key, prospect_id):
+    """One tap for the salesperson: email the OFFICE that this prospect wants a
+    price list. Never emails the prospect -- the office sends current pricing
+    out by hand (Chris, 2026-10-11), which is the whole point: pricing changes,
+    and a stale list sent automatically would be worse than none."""
+    if session.get('user_role') not in SALES_ROLES:
+        abort(403)
+    username = session.get('username')
+    back = f'/{company_key}/sales/prospects/{prospect_id}'
+
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT * FROM sales_prospects WHERE id = %s AND deleted_at IS NULL
+    """, (prospect_id,))
+    prospect = cur.fetchone()
+    if not prospect:
+        cur.close(); conn.close(); abort(404)
+    prospect = dict(prospect)
+
+    chosen = request.form.get('send_to', '').strip()
+    typed  = request.form.get('new_email', '').strip()
+    candidates = _price_list_candidates(cur, prospect)
+
+    # The address: whatever was picked, else the one typed into the popup, else
+    # the only candidate there is. More than one and no choice made means the UI
+    # didn't ask -- refuse rather than guess at the office's expense.
+    target = chosen or typed
+    if not target:
+        if len(candidates) == 1:
+            target = candidates[0]['email']
+        else:
+            cur.close(); conn.close()
+            flash('Pick which address the price list should go to.' if candidates
+                  else 'Add an email address for this prospect first.', 'error')
+            return redirect(back)
+    if '@' not in target or ' ' in target:
+        cur.close(); conn.close()
+        flash(f'"{target}" does not look like an email address.', 'error')
+        return redirect(back)
+
+    # A typed address is worth keeping: the popup only appears when nothing is
+    # on file, so this is how the gap gets filled. Lands on the property rather
+    # than invented against a person we may not know.
+    saved_note = ''
+    if typed and not prospect.get('general_email'):
+        cur.execute("""
+            UPDATE sales_prospects SET general_email = %s,
+                updated_at = CURRENT_TIMESTAMP, updated_by = %s WHERE id = %s
+        """, (target, username, prospect_id))
+        saved_note = ' Saved it to the prospect.'
+
+    cur.execute("""
+        UPDATE sales_prospects
+        SET price_list_requested_at = CURRENT_TIMESTAMP, price_list_requested_by = %s,
+            price_list_requested_to = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s
+    """, (username, target, username, prospect_id))
+
+    recipients = _office_recipients(company_key, cur)
+    conn.commit(); cur.close(); conn.close()
+
+    if not recipients:
+        flash('Request recorded, but no office email is configured to send it to — '
+              'set an alert email in Company Settings.', 'error')
+        return redirect(back)
+
+    branding_local = COMPANY_BRANDING.get(company_key, {})
+    site = ', '.join(x for x in [prospect.get('address'), prospect.get('city'),
+                                 prospect.get('state')] if x)
+    _send_email_via_resend(
+        recipients,
+        f"Price list requested — {prospect['property_name']}",
+        f"<p><strong>{session.get('full_name') or username}</strong> has a prospect asking "
+        f"for a price list.</p>"
+        f"<p><strong>Property:</strong> {prospect['property_name']}"
+        + (f"<br><strong>Address:</strong> {site}" if site else '') +
+        f"<br><strong>Send the price list to:</strong> {target}</p>"
+        + (f"<p><strong>Rehab planned</strong> at this property — "
+           f"treat as high priority.</p>" if prospect.get('rehab_planned') else '') +
+        f"<p>Please email the current price list to the address above. "
+        f"FieldKit has not contacted the prospect.</p>",
+        from_name=branding_local.get('name'))
+
+    flash(f'Price list request sent to the office for {prospect["property_name"]} '
+          f'(to be emailed to {target}).{saved_note}', 'success')
+    return redirect(back)
+
+
 def _rehab_contact_days(cur):
     cur.execute("""
         SELECT rehab_contact_days FROM dormancy_alerts_config
@@ -11214,6 +11368,8 @@ def _save_sales_prospect(company_key, prospect_id):
     contractor_company_name  = request.form.get('contractor_company_name', '').strip() or None
     active_projects          = _opt_num(request.form.get('active_projects')) or 0
     is_former_customer       = request.form.get('is_former_customer') == 'on'
+    general_email            = request.form.get('general_email', '').strip() or None
+    general_phone            = request.form.get('general_phone', '').strip() or None
     rehab_planned            = request.form.get('rehab_planned') == 'on'
     rehab_expected_date      = request.form.get('rehab_expected_date', '').strip() or None
     rehab_notes              = request.form.get('rehab_notes', '').strip() or None
@@ -11227,11 +11383,12 @@ def _save_sales_prospect(company_key, prospect_id):
             INSERT INTO sales_prospects (property_name, address, city, state, zip, management_company_id,
                 customer_type, contractor_company_name, active_projects, is_former_customer,
                 former_customer_last_job, rehab_planned, rehab_expected_date, rehab_notes,
-                created_by, updated_by)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id
+                general_email, general_phone, created_by, updated_by)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id
         """, (property_name, address, city, state, zip_, management_company_id, customer_type,
               contractor_company_name, active_projects, is_former_customer, former_customer_last_job,
-              rehab_planned, rehab_expected_date, rehab_notes, username, username))
+              rehab_planned, rehab_expected_date, rehab_notes, general_email, general_phone,
+              username, username))
         new_id = cur.fetchone()['id']
     else:
         cur.execute("SELECT id FROM sales_prospects WHERE id = %s AND deleted_at IS NULL", (prospect_id,))
@@ -11242,12 +11399,13 @@ def _save_sales_prospect(company_key, prospect_id):
             UPDATE sales_prospects SET property_name=%s, address=%s, city=%s, state=%s, zip=%s,
                 management_company_id=%s, customer_type=%s, contractor_company_name=%s, active_projects=%s,
                 is_former_customer=%s, former_customer_last_job=%s, rehab_planned=%s,
-                rehab_expected_date=%s, rehab_notes=%s,
+                rehab_expected_date=%s, rehab_notes=%s, general_email=%s, general_phone=%s,
                 updated_at=CURRENT_TIMESTAMP, updated_by=%s
             WHERE id=%s
         """, (property_name, address, city, state, zip_, management_company_id, customer_type,
               contractor_company_name, active_projects, is_former_customer, former_customer_last_job,
-              rehab_planned, rehab_expected_date, rehab_notes, username, prospect_id))
+              rehab_planned, rehab_expected_date, rehab_notes, general_email, general_phone,
+              username, prospect_id))
         new_id = prospect_id
     conn.commit(); cur.close(); conn.close()
     return new_id, None
@@ -11387,7 +11545,16 @@ def sales_prospect_detail(company_key, prospect_id, branding, all_companies, com
     pending_approval = cur.fetchone()
     cur.close(); conn.close()
     map_query = ', '.join(part for part in [prospect['address'], prospect['city'], prospect['state']] if part)
+    conn2 = get_db_connection(company_key)
+    cur2 = conn2.cursor()
+    price_candidates = _price_list_candidates(cur2, dict(prospect))
+    cur2.close(); conn2.close()
+    recent_request = bool(
+        prospect['price_list_requested_at']
+        and (datetime.now() - prospect['price_list_requested_at']).days < PRICE_LIST_DUPLICATE_DAYS)
     return render_template('sales_prospect_detail.html',
+        price_candidates=price_candidates, recent_request=recent_request,
+        duplicate_days=PRICE_LIST_DUPLICATE_DAYS,
         branding=branding, company_key=company_key,
         company_access=company_access, all_companies=all_companies,
         prospect=prospect, visits=visits, contacts=contacts, map_query=map_query,
