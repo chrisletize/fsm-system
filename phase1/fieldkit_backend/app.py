@@ -497,17 +497,43 @@ def sales_overview():
         abort(403)
     today = date.today()
     company_keys = [ck for ck in session.get('company_access', []) if ck in DB_CONFIG]
-    rows = _sales_overview_rows(company_keys, today, horizon_days=4)
+
+    # Five WORKING days, not five calendar days. Follow-ups are only ever
+    # scheduled Mon-Fri (_next_business_day), so a plain today+0..4 window
+    # spends two columns on weekends that can never hold anything -- and on a
+    # Thursday it would show only three actionable days. Walk forward instead.
+    # If today is itself a weekend the window starts at Monday, which is also
+    # the first day anything could be actioned.
+    columns, d = [], today
+    while len(columns) < 5:
+        if d.weekday() < 5:
+            columns.append(d)
+        d += timedelta(days=1)
+
+    # Horizon comes from the last column rather than a fixed offset, or the
+    # query would cut off the days the calendar is about to render.
+    rows = _sales_overview_rows(company_keys, today,
+                                horizon_days=(columns[-1] - today).days)
 
     overdue = sorted((r for r in rows if r['follow_up_date'] < today), key=lambda r: r['follow_up_date'])
 
     days = []
-    for i in range(5):
-        d = today + timedelta(days=i)
+    for i, d in enumerate(columns):
+        if d == today:
+            label = 'Today'
+        elif d == today + timedelta(days=1):
+            label = 'Tomorrow'
+        else:
+            label = d.strftime('%A')
         days.append({
             'date': d,
-            'label': 'Today' if i == 0 else ('Tomorrow' if i == 1 else d.strftime('%A')),
-            'visits': [r for r in rows if r['follow_up_date'] == d],
+            'label': label,
+            # Bucket by business day, so a legacy weekend row written before
+            # _next_business_day existed lands on its Monday instead of falling
+            # through every column and vanishing from the calendar.
+            'visits': [r for r in rows
+                       if r['follow_up_date'] >= today
+                       and _next_business_day(r['follow_up_date']) == d],
         })
 
     companies = [{'key': ck, **COMPANY_BRANDING.get(ck, {})} for ck in company_keys]
@@ -1589,6 +1615,24 @@ def _opt_num(value):
     """Empty string -> None; otherwise the stripped string (psycopg2 casts NUMERIC/INT)."""
     value = (value or '').strip()
     return value if value != '' else None
+
+
+def _next_business_day(d):
+    """Roll a Saturday or Sunday forward to the following Monday.
+
+    Chris, 2026-10-11: follow-ups were landing on weekends because the date was
+    pure arithmetic (visit date + the tag's default_followup_days). Nobody is
+    visiting a leasing office on a Sunday, so a weekend follow-up is really a
+    Monday follow-up that reads as overdue by the time it's actioned.
+
+    Rolls FORWARD, never back: moving a Saturday to the preceding Friday would
+    shorten the interval the visit tag asked for, and could put the follow-up in
+    the past. weekday() is 5=Sat, 6=Sun.
+    """
+    if d is None:
+        return None
+    shift = {5: 2, 6: 1}.get(d.weekday(), 0)
+    return d + timedelta(days=shift) if shift else d
 
 
 def _audit_jsonable(v):
@@ -12303,6 +12347,7 @@ def sales_visit_log(company_key, branding, all_companies, company_access):
     username = session.get('username')
     error = None
     held_block = False
+    followup_rolled_to = None   # set if a weekend follow-up got moved to Monday
     if request.method == 'POST':
         property_type = request.form.get('property_type', '').strip()
         property_id   = _opt_num(request.form.get('property_id'))
@@ -12393,6 +12438,21 @@ def sales_visit_log(company_key, branding, all_companies, company_access):
                     tagrow = cur.fetchone()
                     if tagrow and tagrow['default_followup_days']:
                         follow_up_date = (date.today() + timedelta(days=tagrow['default_followup_days'])).isoformat()
+                # Mon-Fri only. Applied here rather than in either branch above so
+                # it catches both the tag's arithmetic and a hand-typed date -- the
+                # input is a free-text field, so the browser can't be trusted to
+                # have blocked the weekend. An unparseable string is left alone and
+                # fails at the INSERT as it did before.
+                if follow_up_date:
+                    try:
+                        _typed = datetime.strptime(follow_up_date, '%Y-%m-%d').date()
+                    except ValueError:
+                        _typed = None
+                    if _typed:
+                        _rolled = _next_business_day(_typed)
+                        if _rolled != _typed:
+                            followup_rolled_to = _rolled
+                        follow_up_date = _rolled.isoformat()
                 cur.execute("""
                     INSERT INTO sales_visits (property_id, property_type, visit_date, visit_tag, contact_id, notes,
                         follow_up_needed, follow_up_date, is_dormant_investigation, dormancy_reason,
@@ -12412,6 +12472,9 @@ def sales_visit_log(company_key, branding, all_companies, company_access):
                 cur.close(); conn.close()
 
             bits = ['Visit logged.']
+            if followup_rolled_to:
+                bits.append(f'Follow-up moved to Monday {followup_rolled_to.strftime("%b %-d")} '
+                            f'(weekends are skipped).')
             if new_prospect_name:
                 bits.append(f'Added prospect "{new_prospect_name}".')
             if new_contact_first or new_contact_last:

@@ -222,6 +222,7 @@
         </div>
         <input type="text" name="follow_up_date" id="followUpDate"
                placeholder="YYYY-MM-DD (auto-filled from visit type)">
+        <div id="followUpNote" style="font-size:.82rem; color:#8a6d1f; margin-top:.35rem;"></div>
     </div>
 
     <div class="form-group">
@@ -336,7 +337,29 @@
         if (btn.dataset.days && !followUpDate.value) {
             const d = new Date();
             d.setDate(d.getDate() + parseInt(btn.dataset.days, 10));
+            // Mirror the server's _next_business_day: Sat (6) -> Mon, Sun (0) -> Mon.
+            // The preview has to match what actually gets saved, or the placeholder
+            // promises a Saturday and the record shows the Monday.
+            if (d.getDay() === 6)      d.setDate(d.getDate() + 2);
+            else if (d.getDay() === 0) d.setDate(d.getDate() + 1);
             followUpDate.placeholder = d.toISOString().slice(0, 10) + ' (auto)';
+        }
+    });
+
+    // Typed weekend dates get rolled by the server too; say so here rather than
+    // letting it look like the date was ignored.
+    followUpDate.addEventListener('change', () => {
+        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(followUpDate.value.trim());
+        const note = document.getElementById('followUpNote');
+        if (!m) { note.textContent = ''; return; }
+        const d = new Date(+m[1], +m[2] - 1, +m[3]);
+        const wd = d.getDay();
+        if (wd === 6 || wd === 0) {
+            d.setDate(d.getDate() + (wd === 6 ? 2 : 1));
+            note.textContent = 'That’s a weekend — it’ll be scheduled for Monday '
+                             + d.toISOString().slice(0, 10) + '.';
+        } else {
+            note.textContent = '';
         }
     });
 
