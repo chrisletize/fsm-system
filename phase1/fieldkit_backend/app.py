@@ -11229,7 +11229,7 @@ def sales_intake(company_key, prospect_id, branding, all_companies, company_acce
         recipients = _office_recipients(company_key, cur2)
         cur2.close(); conn2.close()
         if recipients:
-            _send_email_via_resend(recipients,
+            intake_mid, intake_err = _send_email_via_resend(recipients,
                 # Company-prefixed like every other alert the office gets, and
                 # here it's load-bearing: Kleanit Charlotte and Kleanit SF share
                 # office@kleanit.com, so without the prefix the office can't tell
@@ -11253,6 +11253,19 @@ def sales_intake(company_key, prospect_id, branding, all_companies, company_acce
                 + ('</p>' if already_queued else
                    ' A conversion request is waiting in Sales Approvals.</p>'),
                 from_name=branding.get('name'))
+            # Logged, not flashed: the next screen is the customer-facing
+            # thank-you, so a warning there would be shown to the wrong person.
+            # email_log is where anyone asking "did the office get it?" looks.
+            conn3 = get_db_connection(company_key)
+            cur3 = conn3.cursor()
+            _log_email(cur3, 'customer_intake', prospect_id, recipients,
+                       f"[{branding.get('name', company_key)}] New customer information — "
+                       f"{property_name}", intake_mid,
+                       'failed' if intake_err else 'sent', intake_err, username)
+            conn3.commit(); cur3.close(); conn3.close()
+            if intake_err:
+                print(f"INTAKE EMAIL FAILED prospect={prospect_id} "
+                      f"company={company_key}: {intake_err}", flush=True)
         return redirect(f'/{company_key}/sales/prospects/{prospect_id}/intake/done')
 
     cur.execute("SELECT name FROM management_companies WHERE deleted_at IS NULL ORDER BY name")
@@ -11427,6 +11440,11 @@ COMPANY_OFFICE_EMAIL = {
     'cts':               'office@ctsofraleigh.com',
 }
 
+# Price-list requests go here IN ADDITION to the company office (Chris,
+# 2026-10-12). Scoped to price-list requests only, not every office alert --
+# which is why it isn't folded into _office_recipients().
+PRICE_LIST_EXTRA_RECIPIENTS = ('michaelobuckley@yahoo.com',)
+
 
 def _intake_person(f, prefix):
     """One line of 'Name — phone · email' from the wizard's name/phone/email
@@ -11554,6 +11572,11 @@ def sales_request_price_list(company_key, prospect_id):
     """, (username, target, username, prospect_id))
 
     recipients = _office_recipients(company_key, cur)
+    # Dedupe while keeping order: the office first, extras after, and if an
+    # extra is ever also a company office it must not be sent twice.
+    for extra in PRICE_LIST_EXTRA_RECIPIENTS:
+        if extra.lower() not in {r.lower() for r in recipients}:
+            recipients.append(extra)
     conn.commit(); cur.close(); conn.close()
 
     if not recipients:
@@ -11564,7 +11587,11 @@ def sales_request_price_list(company_key, prospect_id):
     branding_local = COMPANY_BRANDING.get(company_key, {})
     site = ', '.join(x for x in [prospect.get('address'), prospect.get('city'),
                                  prospect.get('state')] if x)
-    _send_email_via_resend(
+    # The return value matters: this used to be discarded, so a rejected send
+    # still flashed "sent to the office" and the salesperson had no way to know
+    # the office never heard about it (Chris, 2026-10-12 -- requests weren't
+    # landing and nothing surfaced it).
+    message_id, send_error = _send_email_via_resend(
         recipients,
         f"[{branding_local.get('name', company_key)}] Price list requested — "
         f"{prospect['property_name']}",
@@ -11579,8 +11606,28 @@ def sales_request_price_list(company_key, prospect_id):
         f"FieldKit has not contacted the prospect.</p>",
         from_name=branding_local.get('name'))
 
-    flash(f'Price list request sent to the office for {prospect["property_name"]} '
-          f'(to be emailed to {target}).{saved_note}', 'success')
+    # Logged either way, into the same email_log the invoice sender uses. Until
+    # now no sales email was recorded anywhere, which is why "did the price list
+    # request actually send?" had no answer to look up.
+    subject = (f"[{branding_local.get('name', company_key)}] Price list requested — "
+               f"{prospect['property_name']}")
+    conn3 = get_db_connection(company_key)
+    cur3 = conn3.cursor()
+    _log_email(cur3, 'price_list_request', prospect_id, recipients, subject,
+               message_id, 'failed' if send_error else 'sent', send_error, username)
+    conn3.commit(); cur3.close(); conn3.close()
+
+    if send_error:
+        # Say who it didn't reach and what to do instead. The request itself is
+        # still recorded on the prospect, so the office can find it -- but the
+        # salesperson must not walk away believing an email went out.
+        flash(f'Request recorded, but the email FAILED to send to '
+              f'{", ".join(recipients)} — {send_error}. Tell the office directly.',
+              'error')
+    else:
+        flash(f'Price list request sent to {", ".join(recipients)} for '
+              f'{prospect["property_name"]} (to be emailed to {target}).{saved_note}',
+              'success')
     return redirect(back)
 
 
