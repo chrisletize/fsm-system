@@ -11219,7 +11219,8 @@ def sales_intake(company_key, prospect_id, branding, all_companies, company_acce
         conn.commit(); cur.close(); conn.close()
 
         site = ', '.join(x for x in [f.get('address', '').strip(), f.get('city', '').strip(),
-                                     f.get('state', '').strip()] if x)
+                                     ' '.join(y for y in [f.get('state', '').strip(),
+                                                          f.get('zip', '').strip()] if y)] if x)
         portals = [n for n, k in (('OPS', 'portal_ops'), ('VendorCafé', 'portal_vendorcafe'),
                                   ('Paymode-X', 'portal_paymode')) if f.get(k) == 'on']
         recipients = []
@@ -11229,7 +11230,11 @@ def sales_intake(company_key, prospect_id, branding, all_companies, company_acce
         cur2.close(); conn2.close()
         if recipients:
             _send_email_via_resend(recipients,
-                f"New customer information — {property_name}",
+                # Company-prefixed like every other alert the office gets, and
+                # here it's load-bearing: Kleanit Charlotte and Kleanit SF share
+                # office@kleanit.com, so without the prefix the office can't tell
+                # which branch the visit was for.
+                f"[{branding.get('name', company_key)}] New customer information — {property_name}",
                 f"<p><strong>{property_name}</strong> completed the new-customer form on site"
                 f"{' with ' + username if username else ''}.</p>"
                 f"<p><strong>Address:</strong> {site or '—'}<br>"
@@ -11239,10 +11244,10 @@ def sales_intake(company_key, prospect_id, branding, all_companies, company_acce
                 f"<strong>Management company:</strong> {mgmt_name or '—'}<br>"
                 f"<strong>Management software:</strong> {f.get('management_software', '').strip() or '—'}<br>"
                 f"<strong>Portals:</strong> {', '.join(portals) if portals else 'none ticked'}</p>"
-                f"<p><strong>Manager:</strong> {f.get('manager_name', '').strip() or '—'} "
-                f"{f.get('manager_phone', '').strip() or ''}<br>"
-                f"<strong>Maintenance:</strong> {f.get('maintenance_name', '').strip() or '—'} "
-                f"{f.get('maintenance_phone', '').strip() or ''}</p>"
+                # Phone AND email for both people. The office was getting the
+                # phone only, which loses half of what the paper form asked for.
+                f"<p><strong>Manager:</strong> {_intake_person(f, 'manager')}<br>"
+                f"<strong>Maintenance:</strong> {_intake_person(f, 'maintenance')}</p>"
                 f"<p>Filled in by {f.get('completed_by_name', '').strip() or 'unknown'}"
                 f"{', ' + f.get('completed_by_title').strip() if f.get('completed_by_title', '').strip() else ''}."
                 + ('</p>' if already_queued else
@@ -11423,6 +11428,22 @@ COMPANY_OFFICE_EMAIL = {
 }
 
 
+def _intake_person(f, prefix):
+    """One line of 'Name — phone · email' from the wizard's name/phone/email
+    trio, skipping whatever the property left blank.
+
+    Exists because the office email was listing each person's phone and quietly
+    dropping their email, so half of what the form asked the property to write
+    down never left FieldKit.
+    """
+    name = (f.get(f'{prefix}_name') or '').strip()
+    rest = [v for v in ((f.get(f'{prefix}_phone') or '').strip(),
+                        (f.get(f'{prefix}_email') or '').strip()) if v]
+    if not name and not rest:
+        return '—'
+    return (name or '(name not given)') + (' — ' + ' · '.join(rest) if rest else '')
+
+
 def _price_list_candidates(cur, prospect):
     """Every address a price list could sensibly be aimed at, labelled so the
     salesperson can tell them apart: the property's own general inbox plus each
@@ -11545,7 +11566,8 @@ def sales_request_price_list(company_key, prospect_id):
                                  prospect.get('state')] if x)
     _send_email_via_resend(
         recipients,
-        f"Price list requested — {prospect['property_name']}",
+        f"[{branding_local.get('name', company_key)}] Price list requested — "
+        f"{prospect['property_name']}",
         f"<p><strong>{session.get('full_name') or username}</strong> has a prospect asking "
         f"for a price list.</p>"
         f"<p><strong>Property:</strong> {prospect['property_name']}"
