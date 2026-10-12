@@ -12029,6 +12029,16 @@ def sales_prospect_detail(company_key, prospect_id, branding, all_companies, com
         ORDER BY ph.created_at DESC
     """, (prospect_id,))
     cards = cur.fetchall()
+    # Whether the last price-list request actually reached the office. The flash
+    # only exists for one page load, so it answers "did it send?" at the moment
+    # of tapping and never again -- which is the state Chris called blind. This
+    # is the same answer, readable whenever anyone looks at the prospect.
+    cur.execute("""
+        SELECT to_emails, status, error, sent_at, sent_by
+        FROM email_log WHERE kind = 'price_list_request' AND related_id = %s
+        ORDER BY sent_at DESC LIMIT 1
+    """, (prospect_id,))
+    price_email = cur.fetchone()
     cur.close(); conn.close()
     map_query = ', '.join(part for part in [prospect['address'], prospect['city'], prospect['state']] if part)
     conn2 = get_db_connection(company_key)
@@ -12057,7 +12067,7 @@ def sales_prospect_detail(company_key, prospect_id, branding, all_companies, com
         company_access=company_access, all_companies=all_companies,
         prospect=prospect, visits=visits, contacts=contacts, map_query=map_query,
         pending_approval=pending_approval, cards=cards,
-        max_photos=MAX_PHOTOS_PER_VISIT,
+        max_photos=MAX_PHOTOS_PER_VISIT, price_email=price_email,
     )
 
 

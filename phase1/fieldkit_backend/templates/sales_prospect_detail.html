@@ -1,88 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ prospect.property_name }} — {{ branding.name }}
-<div id="delayModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45);
-     z-index:1000; align-items:center; justify-content:center;">
-  <div style="background:#fff; border-radius:8px; padding:1.5rem; width:100%; max-width:440px;
-              box-shadow:0 4px 24px rgba(0,0,0,.2);">
-    <h3 style="font-size:1.1rem; color:#a32d2d; margin-bottom:.4rem;">Pause sales on this property</h3>
-    <p style="font-size:.86rem; color:#777; margin-bottom:1rem;">
-        Stops it appearing in follow-ups, the rehab list and the overview.
-        {% if session.user_role in ('admin','manager') %}You can apply this yourself.
-        {% else %}A manager has to approve it before it takes effect.{% endif %}
-    </p>
-    <form method="POST" action="/{{ company_key }}/sales/delay-request">
-      <input type="hidden" name="property_type" value="prospect">
-      <input type="hidden" name="property_id" value="{{ prospect.id }}">
-      <div style="font-size:.82rem; font-weight:600; color:#555; margin-bottom:.4rem;">For how long?</div>
-      {% for m in delay_months %}
-      <label style="display:flex; gap:.5rem; align-items:center; padding:.5rem; border:1px solid #eee;
-                    border-radius:6px; margin-bottom:.4rem; cursor:pointer;">
-        <input type="radio" name="months" value="{{ m }}" {% if loop.first %}checked{% endif %}>
-        <span>{{ m }} months</span>
-      </label>
-      {% endfor %}
-      <div style="font-size:.82rem; font-weight:600; color:#555; margin:.7rem 0 .3rem;">
-          Reason <span style="font-weight:400; color:#999;">(required)</span></div>
-      <textarea name="reason" rows="3" required placeholder="e.g. non-payment, in litigation…"
-                style="width:100%; padding:.6rem .75rem; border:1px solid #ddd; border-radius:4px;
-                       font-size:.95rem; font-family:inherit;"></textarea>
-      <div style="display:flex; gap:.6rem; margin-top:1.1rem;">
-        <button type="submit" class="btn btn-primary" style="flex:1;">
-            {% if session.user_role in ('admin','manager') %}Request Pause{% else %}Request Pause{% endif %}</button>
-        <button type="button" class="btn btn-outline" onclick="closeDelay()">Cancel</button>
-      </div>
-    </form>
-  </div>
-</div>
-
-<div id="priceListModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45);
-     z-index:1000; align-items:center; justify-content:center;">
-  <div style="background:#fff; border-radius:8px; padding:1.5rem; width:100%; max-width:460px;
-              max-height:85vh; overflow-y:auto; box-shadow:0 4px 24px rgba(0,0,0,.2);">
-    <h3 style="font-size:1.1rem; color:{{ branding.color_primary }}; margin-bottom:.4rem;">
-        Request a price list</h3>
-    <p style="font-size:.86rem; color:#777; margin-bottom:1rem;">
-        This emails the office, not the prospect. They'll send the current pricing by hand.
-        {% if recent_request %}<br><strong style="color:#8a6100;">One was already requested
-        {{ prospect.price_list_requested_at.strftime('%b %-d') }}.</strong>{% endif %}
-    </p>
-    <form method="POST" action="/{{ company_key }}/sales/prospects/{{ prospect.id }}/request-price-list">
-      {% if price_candidates %}
-      <div style="font-size:.82rem; font-weight:600; color:#555; margin-bottom:.4rem;">
-          Which address should it go to?</div>
-      {% for c in price_candidates %}
-      <label style="display:flex; gap:.5rem; align-items:flex-start; padding:.5rem;
-                    border:1px solid #eee; border-radius:6px; margin-bottom:.4rem; cursor:pointer;">
-        <input type="radio" name="send_to" value="{{ c.email }}" {% if loop.first %}checked{% endif %}
-               style="margin-top:.2rem;">
-        <span><strong style="font-size:.9rem;">{{ c.email }}</strong>
-          <br><span style="font-size:.78rem; color:#888;">{{ c.label }}</span></span>
-      </label>
-      {% endfor %}
-      <div style="font-size:.82rem; color:#888; margin:.6rem 0 .3rem;">…or a different address:</div>
-      {% else %}
-      <div style="font-size:.86rem; color:#8a6100; background:#fff8ef; border:1px solid #f0dcb0;
-                  border-radius:6px; padding:.6rem .8rem; margin-bottom:.8rem;">
-        No email on file for this property or its contacts. Enter one and it'll be saved to the prospect.
-      </div>
-      {% endif %}
-      <input type="text" name="new_email" placeholder="name@property.com"
-             style="width:100%; padding:.6rem .75rem; border:1px solid #ddd; border-radius:4px;
-                    font-size:.95rem;">
-      <div style="display:flex; gap:.6rem; margin-top:1.1rem;">
-        <button type="submit" class="btn btn-primary" style="flex:1;">Send Request</button>
-        <button type="button" class="btn btn-outline" onclick="closePriceList()">Cancel</button>
-      </div>
-    </form>
-  </div>
-</div>
-<script>
-function openDelay() { document.getElementById('delayModal').style.display = 'flex'; }
-function closeDelay() { document.getElementById('delayModal').style.display = 'none'; }
-function openPriceList() { document.getElementById('priceListModal').style.display = 'flex'; }
-function closePriceList() { document.getElementById('priceListModal').style.display = 'none'; }
-</script>
-{% endblock %}
+{% block title %}{{ prospect.property_name }} — {{ branding.name }}{% endblock %}
 
 {% block extra_css %}
 <style>
@@ -160,11 +77,34 @@ function closePriceList() { document.getElementById('priceListModal').style.disp
         </div>
         {% endif %}
         {% if prospect.price_list_requested_at %}
+        {# Says whether the office actually got the email, not just that the
+           button was pressed. The two are different and only one matters. #}
+        {% if price_email and price_email.status == 'failed' %}
+        <div class="sub" style="color:#a32d2d; font-weight:600;">
+            ⚠ Price list request on {{ prospect.price_list_requested_at.strftime('%b %-d, %Y') }}
+            was NOT emailed — the office never got it. Tell them directly.
+            <div style="font-weight:400; font-size:.85em;">{{ price_email.error }}</div>
+        </div>
+        {% elif price_email %}
         <div class="sub" style="color:#3b6d11;">
+            ✓ Price list requested {{ prospect.price_list_requested_at.strftime('%b %-d, %Y') }}
+            by {{ prospect.price_list_requested_by }}
+            {% if prospect.price_list_requested_to %} → to be sent to
+            {{ prospect.price_list_requested_to }}{% endif %}
+            <div style="font-weight:400;">
+                Office emailed: {{ price_email.to_emails }}
+            </div>
+        </div>
+        {% else %}
+        {# Requested before email_log covered price lists (pre-migration 038),
+           so there's no delivery record either way -- don't imply one. #}
+        <div class="sub" style="color:#8a6100;">
             Price list requested {{ prospect.price_list_requested_at.strftime('%b %-d, %Y') }}
             by {{ prospect.price_list_requested_by }}
             {% if prospect.price_list_requested_to %} → {{ prospect.price_list_requested_to }}{% endif %}
+            — no delivery record for this one.
         </div>
+        {% endif %}
         {% endif %}
         {% if map_query %}
         <div class="sub"><a href="https://www.google.com/maps/search/?api=1&query={{ map_query|urlencode }}" target="_blank" rel="noopener" style="color:{{ branding.color_primary }};">{{ prospect.address }}{% if prospect.city %}, {{ prospect.city }}, {{ prospect.state }}{% endif %} ↗</a></div>
@@ -301,4 +241,92 @@ function closePriceList() { document.getElementById('priceListModal').style.disp
         </form>
     </div>
 </div>
+
+{# Modals live at the end of the content block, not in the title block --
+   they were inside {% block title %} until 2026-10-12, which put them (and
+   the script defining openPriceList/openDelay) inside <title>, where the
+   browser treats them as text. The buttons threw "openPriceList is not
+   defined" and nothing happened at all. #}
+<div id="delayModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45);
+     z-index:1000; align-items:center; justify-content:center;">
+  <div style="background:#fff; border-radius:8px; padding:1.5rem; width:100%; max-width:440px;
+              box-shadow:0 4px 24px rgba(0,0,0,.2);">
+    <h3 style="font-size:1.1rem; color:#a32d2d; margin-bottom:.4rem;">Pause sales on this property</h3>
+    <p style="font-size:.86rem; color:#777; margin-bottom:1rem;">
+        Stops it appearing in follow-ups, the rehab list and the overview.
+        {% if session.user_role in ('admin','manager') %}You can apply this yourself.
+        {% else %}A manager has to approve it before it takes effect.{% endif %}
+    </p>
+    <form method="POST" action="/{{ company_key }}/sales/delay-request">
+      <input type="hidden" name="property_type" value="prospect">
+      <input type="hidden" name="property_id" value="{{ prospect.id }}">
+      <div style="font-size:.82rem; font-weight:600; color:#555; margin-bottom:.4rem;">For how long?</div>
+      {% for m in delay_months %}
+      <label style="display:flex; gap:.5rem; align-items:center; padding:.5rem; border:1px solid #eee;
+                    border-radius:6px; margin-bottom:.4rem; cursor:pointer;">
+        <input type="radio" name="months" value="{{ m }}" {% if loop.first %}checked{% endif %}>
+        <span>{{ m }} months</span>
+      </label>
+      {% endfor %}
+      <div style="font-size:.82rem; font-weight:600; color:#555; margin:.7rem 0 .3rem;">
+          Reason <span style="font-weight:400; color:#999;">(required)</span></div>
+      <textarea name="reason" rows="3" required placeholder="e.g. non-payment, in litigation…"
+                style="width:100%; padding:.6rem .75rem; border:1px solid #ddd; border-radius:4px;
+                       font-size:.95rem; font-family:inherit;"></textarea>
+      <div style="display:flex; gap:.6rem; margin-top:1.1rem;">
+        <button type="submit" class="btn btn-primary" style="flex:1;">
+            {% if session.user_role in ('admin','manager') %}Request Pause{% else %}Request Pause{% endif %}</button>
+        <button type="button" class="btn btn-outline" onclick="closeDelay()">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="priceListModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45);
+     z-index:1000; align-items:center; justify-content:center;">
+  <div style="background:#fff; border-radius:8px; padding:1.5rem; width:100%; max-width:460px;
+              max-height:85vh; overflow-y:auto; box-shadow:0 4px 24px rgba(0,0,0,.2);">
+    <h3 style="font-size:1.1rem; color:{{ branding.color_primary }}; margin-bottom:.4rem;">
+        Request a price list</h3>
+    <p style="font-size:.86rem; color:#777; margin-bottom:1rem;">
+        This emails the office, not the prospect. They'll send the current pricing by hand.
+        {% if recent_request %}<br><strong style="color:#8a6100;">One was already requested
+        {{ prospect.price_list_requested_at.strftime('%b %-d') }}.</strong>{% endif %}
+    </p>
+    <form method="POST" action="/{{ company_key }}/sales/prospects/{{ prospect.id }}/request-price-list">
+      {% if price_candidates %}
+      <div style="font-size:.82rem; font-weight:600; color:#555; margin-bottom:.4rem;">
+          Which address should it go to?</div>
+      {% for c in price_candidates %}
+      <label style="display:flex; gap:.5rem; align-items:flex-start; padding:.5rem;
+                    border:1px solid #eee; border-radius:6px; margin-bottom:.4rem; cursor:pointer;">
+        <input type="radio" name="send_to" value="{{ c.email }}" {% if loop.first %}checked{% endif %}
+               style="margin-top:.2rem;">
+        <span><strong style="font-size:.9rem;">{{ c.email }}</strong>
+          <br><span style="font-size:.78rem; color:#888;">{{ c.label }}</span></span>
+      </label>
+      {% endfor %}
+      <div style="font-size:.82rem; color:#888; margin:.6rem 0 .3rem;">…or a different address:</div>
+      {% else %}
+      <div style="font-size:.86rem; color:#8a6100; background:#fff8ef; border:1px solid #f0dcb0;
+                  border-radius:6px; padding:.6rem .8rem; margin-bottom:.8rem;">
+        No email on file for this property or its contacts. Enter one and it'll be saved to the prospect.
+      </div>
+      {% endif %}
+      <input type="text" name="new_email" placeholder="name@property.com"
+             style="width:100%; padding:.6rem .75rem; border:1px solid #ddd; border-radius:4px;
+                    font-size:.95rem;">
+      <div style="display:flex; gap:.6rem; margin-top:1.1rem;">
+        <button type="submit" class="btn btn-primary" style="flex:1;">Send Request</button>
+        <button type="button" class="btn btn-outline" onclick="closePriceList()">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+<script>
+function openDelay() { document.getElementById('delayModal').style.display = 'flex'; }
+function closeDelay() { document.getElementById('delayModal').style.display = 'none'; }
+function openPriceList() { document.getElementById('priceListModal').style.display = 'flex'; }
+function closePriceList() { document.getElementById('priceListModal').style.display = 'none'; }
+</script>
 {% endblock %}
