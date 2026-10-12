@@ -142,6 +142,15 @@
                 <button type="submit" class="btn btn-outline"
                         style="padding:.4rem .8rem; font-size:.82rem; color:#777;">Dismiss</button>
             </form>
+            {# Dismiss keeps the photo and clears the queue; Delete removes the
+               photo itself, for a shot that came out unusable. #}
+            <form method="POST" action="/{{ company_key }}/sales/photos/{{ p.id }}/delete"
+                  style="display:inline;"
+                  onsubmit="return confirm('Delete this card photo? Use Dismiss instead if the card was already entered.');">
+                <button type="submit" class="btn btn-outline"
+                        style="padding:.4rem .8rem; font-size:.82rem; color:#a32d2d;
+                               border-color:#e0b4b0;">Delete</button>
+            </form>
         </div>
     </div>
     {% endfor %}

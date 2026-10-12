@@ -225,6 +225,26 @@
         <div id="followUpNote" style="font-size:.82rem; color:#8a6d1f; margin-top:.35rem;"></div>
     </div>
 
+    {# A rehab is learned on the visit, so it's flagged here. Hidden for customer
+       visits: only sales_prospects carries the rehab columns. #}
+    <div class="form-group" id="rehabGroup">
+        <div class="checkbox-row">
+            <input type="checkbox" id="rehabCheck" name="rehab_planned">
+            <label for="rehabCheck" style="font-weight:400;">They're planning a rehab</label>
+        </div>
+        <div class="dormant-block" id="rehabBlock">
+            <div class="form-group">
+                <label>Expected when? <span class="hint">(optional)</span></label>
+                <input type="text" name="rehab_expected_date" placeholder="YYYY-MM-DD">
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>What's the scope? <span class="hint">(optional)</span></label>
+                <textarea name="rehab_notes" rows="3"
+                          placeholder="How many units, which trades, who's deciding…"></textarea>
+            </div>
+        </div>
+    </div>
+
     <div class="form-group">
         <div class="checkbox-row">
             <input type="checkbox" id="dormantCheck" name="is_dormant_investigation"
@@ -369,6 +389,22 @@
     dormantCheck.addEventListener('change', syncDormant);
     syncDormant();
 
+    const rehabCheck = document.getElementById('rehabCheck');
+    const rehabBlock = document.getElementById('rehabBlock');
+    function syncRehab() { rehabBlock.classList.toggle('open', rehabCheck.checked); }
+    rehabCheck.addEventListener('change', syncRehab);
+    syncRehab();
+
+    // Rehab lives on sales_prospects only, so hide the whole control on a
+    // customer visit rather than offering a tick the server has to refuse.
+    function syncRehabVisible() {
+        const t = document.querySelector('input[name="property_type"]');
+        const isProspect = !t || t.value !== 'customer';
+        document.getElementById('rehabGroup').style.display = isProspect ? '' : 'none';
+        if (!isProspect) { rehabCheck.checked = false; syncRehab(); }
+    }
+    syncRehabVisible();
+
     // ---------- step 2: add-someone-new ----------
     const toggleNewContact = document.getElementById('toggleNewContact');
     const newContactBox = document.getElementById('newContactBox');
@@ -457,6 +493,7 @@
 
     function chooseExisting(id, type, name) {
         idInput.value = id; typeInput.value = type;
+        syncRehabVisible();
         newName.value = ''; newAddress.value = '';
         newBox.style.display = 'none';
         chosenName.innerHTML = esc(name) + ' <span class="hint">'
@@ -468,7 +505,7 @@
     }
 
     function chooseNew(name) {
-        idInput.value = ''; typeInput.value = '';
+        idInput.value = ''; typeInput.value = ''; syncRehabVisible();
         newName.value = name;
         newBox.style.display = 'block';
         chosenName.innerHTML = esc(name) + ' <span class="hint">new prospect</span>';
@@ -481,7 +518,7 @@
     }
 
     input.addEventListener('input', () => {
-        idInput.value = ''; typeInput.value = '';
+        idInput.value = ''; typeInput.value = ''; syncRehabVisible();
         const q = input.value.trim();
         clearTimeout(timer);
         if (q.length < 2) { close(); return; }
@@ -498,7 +535,7 @@
     input.addEventListener('blur', () => setTimeout(close, 180));
 
     document.getElementById('propClear').addEventListener('click', () => {
-        idInput.value = ''; typeInput.value = '';
+        idInput.value = ''; typeInput.value = ''; syncRehabVisible();
         newName.value = ''; newAddress.value = '';
         ['newProspectCity','newProspectState','newProspectZip'].forEach(function(id) {
             const el = document.getElementById(id); if (el) el.value = '';

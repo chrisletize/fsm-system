@@ -93,6 +93,8 @@ function closePriceList() { document.getElementById('priceListModal').style.disp
            font-weight:500; cursor:pointer; border:none; font-size:.9rem; }
     .btn-primary { background:{{ branding.color_primary }}; color:white; }
     .btn-outline { background:white; color:{{ branding.color_primary }}; border:1px solid {{ branding.color_primary }}; }
+    /* Deleting a card photo should not look like an ordinary action. */
+    .btn-danger { background:white; color:#a32d2d; border:1px solid #e0b4b0; }
     .sales-grid { display:grid; grid-template-columns:1fr 1fr; gap:1.25rem; }
     @media (max-width:768px) { .sales-grid { grid-template-columns:1fr; } }
     .card h2 { font-size:1rem; color:#444; margin-bottom:.9rem; }
@@ -248,6 +250,55 @@ function closePriceList() { document.getElementById('priceListModal').style.disp
         {% else %}
         <div class="empty">No visits logged yet.</div>
         {% endfor %}
+    </div>
+
+    {# Every card for this property in one place, however it arrived. Cards can
+       be added here without logging a visit -- a visit that didn't happen must
+       not end up in the log just to carry a photo. #}
+    <div class="card">
+        <h2>Business Cards</h2>
+        {% for ph in cards %}
+        <div class="row-item" style="display:flex; align-items:center; gap:.75rem;">
+            <a href="/{{ company_key }}/sales/photos/{{ ph.id }}" target="_blank" rel="noopener">
+                <img src="/{{ company_key }}/sales/photos/{{ ph.id }}" alt="Business card"
+                     style="width:84px; height:56px; object-fit:cover; border-radius:5px;
+                            border:1px solid #e3e7eb; display:block;">
+            </a>
+            <div style="flex:1; min-width:0;">
+                <div>
+                    {% if ph.visit_id %}From the visit on
+                        {{ ph.visit_date.strftime('%b %-d, %Y') if ph.visit_date else 'an earlier date' }}
+                    {% else %}Added without a visit{% endif %}
+                </div>
+                <div class="row-sub">
+                    {{ ph.created_at.strftime('%b %-d, %Y') }} by {{ ph.created_by or '—' }}
+                    {% if ph.transcribed_at %} · entered{% else %}
+                    · <span style="color:#8a6100;">not entered yet</span>{% endif %}
+                </div>
+            </div>
+            <form method="POST" action="/{{ company_key }}/sales/photos/{{ ph.id }}/delete"
+                  onsubmit="return confirm('Delete this card photo?');" style="margin:0;">
+                <button type="submit" class="btn btn-danger" style="padding:.4rem .7rem; font-size:.8rem;">
+                    Delete
+                </button>
+            </form>
+        </div>
+        {% else %}
+        <div class="empty">No card photos yet.</div>
+        {% endfor %}
+
+        <form method="POST" action="/{{ company_key }}/sales/prospects/{{ prospect.id }}/cards"
+              enctype="multipart/form-data" style="margin-top:1rem;">
+            <label style="font-weight:600; display:block; margin-bottom:.4rem;">
+                Add card photos
+            </label>
+            <input type="file" name="card_photos" accept="image/jpeg,image/png" multiple
+                   capture="environment" style="margin-bottom:.6rem;">
+            <div style="font-size:.78rem; color:#8a93a0; margin-bottom:.6rem;">
+                JPEG or PNG, up to {{ max_photos }} at a time. No visit gets logged.
+            </div>
+            <button type="submit" class="btn btn-outline">Upload</button>
+        </form>
     </div>
 </div>
 {% endblock %}

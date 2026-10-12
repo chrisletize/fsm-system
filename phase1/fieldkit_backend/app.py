@@ -11970,6 +11970,18 @@ def sales_prospect_detail(company_key, prospect_id, branding, all_companies, com
         ORDER BY submitted_at DESC LIMIT 1
     """, (prospect_id,))
     pending_approval = cur.fetchone()
+    # Every card for this property, however it arrived -- on a visit or added
+    # straight here (migration 037). One list rather than two, because from the
+    # office's point of view a card is a card.
+    cur.execute("""
+        SELECT ph.id, ph.created_at, ph.created_by, ph.transcribed_at, ph.visit_id,
+               sv.visit_date
+        FROM sales_visit_photos ph
+        LEFT JOIN sales_visits sv ON sv.id = ph.visit_id AND sv.deleted_at IS NULL
+        WHERE ph.property_id = %s AND ph.property_type = 'prospect' AND ph.deleted_at IS NULL
+        ORDER BY ph.created_at DESC
+    """, (prospect_id,))
+    cards = cur.fetchall()
     cur.close(); conn.close()
     map_query = ', '.join(part for part in [prospect['address'], prospect['city'], prospect['state']] if part)
     conn2 = get_db_connection(company_key)
@@ -11997,7 +12009,8 @@ def sales_prospect_detail(company_key, prospect_id, branding, all_companies, com
         branding=branding, company_key=company_key,
         company_access=company_access, all_companies=all_companies,
         prospect=prospect, visits=visits, contacts=contacts, map_query=map_query,
-        pending_approval=pending_approval,
+        pending_approval=pending_approval, cards=cards,
+        max_photos=MAX_PHOTOS_PER_VISIT,
     )
 
 
@@ -12235,16 +12248,30 @@ def _read_photo_uploads(field='card_photos'):
     return photos, None
 
 
-def _store_visit_photo(cur, company_key, visit_id, photo, username):
-    stored = f'visit{visit_id}_{secrets.token_hex(12)}.{photo["ext"]}'
+def _store_visit_photo(cur, company_key, visit_id, photo, username,
+                       property_id=None, property_type=None):
+    """Store one card photo against a property, and against a visit if there was
+    one.
+
+    visit_id is optional as of migration 037 -- a card can arrive without a
+    visit (trade show, post, handed over in a car park) and inventing a visit to
+    hold it would corrupt the visit log, which is what managers read. The
+    property, though, is always required: an unanchored photo has no name
+    against it and would sit in the pending queue forever.
+
+    Called with a visit_id from the wizard, which passes the visit's own
+    property through so both columns are filled either way.
+    """
+    prefix = f'visit{visit_id}' if visit_id else f'{property_type}{property_id}'
+    stored = f'{prefix}_{secrets.token_hex(12)}.{photo["ext"]}'
     with open(os.path.join(_photo_dir(company_key), stored), 'wb') as fh:
         fh.write(photo['data'])
     cur.execute("""
-        INSERT INTO sales_visit_photos (visit_id, photo_kind, original_filename,
-            stored_filename, content_type, byte_size, created_by, updated_by)
-        VALUES (%s, 'business_card', %s, %s, %s, %s, %s, %s) RETURNING id
-    """, (visit_id, photo['filename'], stored, photo['content_type'],
-          len(photo['data']), username, username))
+        INSERT INTO sales_visit_photos (visit_id, property_id, property_type, photo_kind,
+            original_filename, stored_filename, content_type, byte_size, created_by, updated_by)
+        VALUES (%s, %s, %s, 'business_card', %s, %s, %s, %s, %s, %s) RETURNING id
+    """, (visit_id, property_id, property_type, photo['filename'], stored,
+          photo['content_type'], len(photo['data']), username, username))
     return cur.fetchone()['id']
 
 
@@ -12252,10 +12279,18 @@ def _pending_cards(cur, limit=25):
     """Cards photographed but never typed in — the dashboard queue."""
     cur.execute("""
         SELECT p.id, p.created_at, p.created_by, p.original_filename,
-               sv.id AS visit_id, sv.visit_date, sv.property_id, sv.property_type
+               sv.id AS visit_id, sv.visit_date,
+               -- The photo's own property, not the visit's: as of migration 037
+               -- a card can exist without a visit, and LEFT JOIN would give NULL.
+               p.property_id, p.property_type
         FROM sales_visit_photos p
-        JOIN sales_visits sv ON sv.id = p.visit_id
-        WHERE p.transcribed_at IS NULL AND p.deleted_at IS NULL AND sv.deleted_at IS NULL
+        -- LEFT, so a card added straight to a prospect still reaches the queue.
+        LEFT JOIN sales_visits sv ON sv.id = p.visit_id AND sv.deleted_at IS NULL
+        WHERE p.transcribed_at IS NULL AND p.deleted_at IS NULL
+          -- Unchanged from before 037: a card whose visit was deleted drops off
+          -- the queue with it. Only cards that never had a visit survive on
+          -- their own.
+          AND (p.visit_id IS NULL OR sv.id IS NOT NULL)
         ORDER BY p.created_at DESC LIMIT %s
     """, (limit,))
     rows = []
@@ -12322,6 +12357,88 @@ def sales_photo_view(company_key, photo_id):
                              f'inline; filename="{_sanitize_filename(photo["original_filename"])}"'})
 
 
+@app.route('/<company_key>/sales/prospects/<int:prospect_id>/cards', methods=['POST'])
+@login_required
+@company_access_required
+def sales_prospect_add_cards(company_key, prospect_id):
+    """Add card photos straight to a prospect, with no visit attached.
+
+    Chris, 2026-10-12: cards don't only arrive on visits. Logging a fake visit
+    to carry one would put a visit that never happened into the log managers
+    read, so the photo hangs off the property instead (migration 037).
+
+    The card still lands in the same "awaiting entry" queue, because the point
+    of photographing it is unchanged -- somebody types it in later.
+    """
+    if session.get('user_role') not in SALES_ROLES:
+        abort(403)
+    username = session.get('username')
+    back = f'/{company_key}/sales/prospects/{prospect_id}'
+
+    photos, photo_error = _read_photo_uploads()
+    if photo_error:
+        flash(photo_error, 'error')
+        return redirect(back)
+    if not photos:
+        flash('Pick at least one photo.', 'error')
+        return redirect(back)
+
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    try:
+        cur.execute("""SELECT id FROM sales_prospects
+                       WHERE id = %s AND deleted_at IS NULL""", (prospect_id,))
+        if not cur.fetchone():
+            cur.close(); conn.close(); abort(404)
+        for photo in photos:
+            _store_visit_photo(cur, company_key, None, photo, username,
+                               property_id=prospect_id, property_type='prospect')
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close(); conn.close()
+
+    flash(f'{len(photos)} card photo{"s" if len(photos) != 1 else ""} added — '
+          f'queued for entry.', 'success')
+    return redirect(back)
+
+
+@app.route('/<company_key>/sales/photos/<int:photo_id>/delete', methods=['POST'])
+@login_required
+@company_access_required
+def sales_photo_delete(company_key, photo_id):
+    """Soft-delete a card photo — Chris, 2026-10-12: a bad shot gets saved by
+    accident and needs removing.
+
+    Soft, per CLAUDE.md, and the file stays on disk: migration 032's reasoning
+    holds, that a mis-tap must not destroy the only record of someone's contact
+    details. So this is undoable in the database by anyone who needs it back.
+    """
+    if session.get('user_role') not in SALES_ROLES:
+        abort(403)
+    username = session.get('username')
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE sales_visit_photos
+        SET deleted_at = CURRENT_TIMESTAMP, deleted_by = %s,
+            updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s AND deleted_at IS NULL
+        RETURNING property_id, property_type
+    """, (username, username, photo_id))
+    row = cur.fetchone()
+    conn.commit(); cur.close(); conn.close()
+    if not row:
+        # Already gone, or never existed -- either way there's nothing to say
+        # beyond it not being there, and a 404 would lose the page they're on.
+        flash('That photo is already deleted.', 'error')
+        return redirect(request.referrer or f'/{company_key}/sales')
+    flash('Card photo deleted.', 'success')
+    return redirect(request.referrer or f'/{company_key}/sales')
+
+
 @app.route('/<company_key>/sales/photos/<int:photo_id>/transcribed', methods=['POST'])
 @login_required
 @company_access_required
@@ -12381,6 +12498,9 @@ def sales_visit_log(company_key, branding, all_companies, company_access):
         is_dormant_investigation        = request.form.get('is_dormant_investigation') == 'on'
         dormancy_reason                 = request.form.get('dormancy_reason', '').strip() or None
         dormancy_reported_to_management = request.form.get('dormancy_reported_to_management') == 'on'
+        rehab_planned       = request.form.get('rehab_planned') == 'on'
+        rehab_expected_date = request.form.get('rehab_expected_date', '').strip() or None
+        rehab_notes         = request.form.get('rehab_notes', '').strip() or None
 
         # Step 1 may have created the property instead of finding one
         new_prospect_name    = request.form.get('new_prospect_name', '').strip()
@@ -12484,8 +12604,28 @@ def sales_visit_log(company_key, branding, all_companies, company_access):
                       is_dormant_investigation, dormancy_reason, dormancy_reported_to_management, username, username))
                 visit_id = cur.fetchone()['id']
 
+                # A rehab is something the salesperson LEARNS on the visit, so
+                # this is where it gets flagged (Chris, 2026-10-12) rather than
+                # only on the prospect edit form.
+                #
+                # Ticking sets the flag; leaving it unticked does NOT clear it.
+                # A per-visit control that cleared on every subsequent visit
+                # would quietly drop the flag the next time anyone called in.
+                # Taking a rehab back off stays on the prospect edit page, where
+                # it's a deliberate act.
+                if rehab_planned and property_type == 'prospect':
+                    cur.execute("""
+                        UPDATE sales_prospects SET
+                            rehab_planned = TRUE,
+                            rehab_expected_date = COALESCE(%s, rehab_expected_date),
+                            rehab_notes = COALESCE(NULLIF(%s, ''), rehab_notes),
+                            updated_at = CURRENT_TIMESTAMP, updated_by = %s
+                        WHERE id = %s AND deleted_at IS NULL
+                    """, (rehab_expected_date, rehab_notes, username, property_id))
+
                 for photo in photos:
-                    _store_visit_photo(cur, company_key, visit_id, photo, username)
+                    _store_visit_photo(cur, company_key, visit_id, photo, username,
+                                       property_id=property_id, property_type=property_type)
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -12504,11 +12644,26 @@ def sales_visit_log(company_key, branding, all_companies, company_access):
             if photos:
                 bits.append(f'{len(photos)} card photo{"s" if len(photos) != 1 else ""} '
                             f'queued for entry.')
+            if rehab_planned and property_type == 'prospect':
+                bits.append('Flagged as planning a rehab.')
+            elif rehab_planned:
+                # Only sales_prospects carries the rehab columns, so a customer
+                # visit can't take the flag. Say so rather than dropping it.
+                bits.append('Rehab flag not applied — it only applies to prospects, '
+                            'not existing customers.')
             if is_dormant_investigation and dormancy_reported_to_management:
                 bits.append('Flagged for the Monday management report.')
             flash(' '.join(bits), 'success')
-            dest = (f'/{company_key}/sales/prospects/{property_id}' if property_type == 'prospect'
-                    else f'/{company_key}/customers/{property_id}')
+            if property_type == 'prospect':
+                dest = f'/{company_key}/sales/prospects/{property_id}'
+            elif session.get('user_role') == SALES_ONLY_ROLE:
+                # The salesperson role is confined to /sales/* pages, so sending
+                # him to the customer page would 403 him immediately after a
+                # successful save -- looking like the visit failed, and losing
+                # the confirmation flash with it.
+                dest = f'/{company_key}/sales'
+            else:
+                dest = f'/{company_key}/customers/{property_id}'
             return redirect(dest)
 
     # On a validation-error re-render (falls through from the POST branch
