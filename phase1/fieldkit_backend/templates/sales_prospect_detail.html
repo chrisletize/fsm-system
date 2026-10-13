@@ -242,11 +242,11 @@
     </div>
 </div>
 
-{# Modals live at the end of the content block, not in the title block --
-   they were inside {% block title %} until 2026-10-12, which put them (and
-   the script defining openPriceList/openDelay) inside <title>, where the
-   browser treats them as text. The buttons threw "openPriceList is not
-   defined" and nothing happened at all. #}
+{# Modals live at the end of the content block, deliberately. Until 2026-10-12
+   they sat inside an unclosed title block, which rendered them -- and the
+   script defining openPriceList/openDelay -- inside the document title, where
+   a browser treats the lot as text. The buttons threw "openPriceList is not
+   defined" and nothing happened at all. Keep these out of the head blocks. #}
 <div id="delayModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45);
      z-index:1000; align-items:center; justify-content:center;">
   <div style="background:#fff; border-radius:8px; padding:1.5rem; width:100%; max-width:440px;

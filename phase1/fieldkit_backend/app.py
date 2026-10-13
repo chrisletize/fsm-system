@@ -11223,10 +11223,11 @@ def sales_intake(company_key, prospect_id, branding, all_companies, company_acce
                                                           f.get('zip', '').strip()] if y)] if x)
         portals = [n for n, k in (('OPS', 'portal_ops'), ('VendorCafé', 'portal_vendorcafe'),
                                   ('Paymode-X', 'portal_paymode')) if f.get(k) == 'on']
-        recipients = []
         conn2 = get_db_connection(company_key)
         cur2 = conn2.cursor()
-        recipients = _office_recipients(company_key, cur2)
+        # Office for this company, plus the standing sales copies (Chris,
+        # 2026-10-13: the intake details should reach Michael too).
+        recipients = _sales_email_recipients(company_key, cur2)
         cur2.close(); conn2.close()
         if recipients:
             intake_mid, intake_err = _send_email_via_resend(recipients,
@@ -11440,10 +11441,29 @@ COMPANY_OFFICE_EMAIL = {
     'cts':               'office@ctsofraleigh.com',
 }
 
-# Price-list requests go here IN ADDITION to the company office (Chris,
-# 2026-10-12). Scoped to price-list requests only, not every office alert --
-# which is why it isn't folded into _office_recipients().
-PRICE_LIST_EXTRA_RECIPIENTS = ('michaelobuckley@yahoo.com',)
+# Copied on the SALES notifications -- price-list requests and the new-customer
+# intake -- in addition to the company office (Chris, 2026-10-12 and -13).
+#
+# Deliberately not folded into _office_recipients(): that also feeds the
+# uninvoiced, extraction and estimate alerts, which are operations traffic and
+# nothing to do with sales.
+SALES_EXTRA_RECIPIENTS = ('michaelobuckley@yahoo.com',)
+
+
+def _sales_email_recipients(company_key, cur):
+    """The company office plus the standing sales copies, deduped.
+
+    Order matters only for readability -- the office reads first. Dedupe is
+    case-insensitive and guards the day one of these extras is also somebody's
+    office address, which would otherwise send twice.
+    """
+    recipients = _office_recipients(company_key, cur)
+    seen = {r.lower() for r in recipients}
+    for extra in SALES_EXTRA_RECIPIENTS:
+        if extra.lower() not in seen:
+            recipients.append(extra)
+            seen.add(extra.lower())
+    return recipients
 
 
 def _intake_person(f, prefix):
@@ -11571,12 +11591,7 @@ def sales_request_price_list(company_key, prospect_id):
         WHERE id = %s
     """, (username, target, username, prospect_id))
 
-    recipients = _office_recipients(company_key, cur)
-    # Dedupe while keeping order: the office first, extras after, and if an
-    # extra is ever also a company office it must not be sent twice.
-    for extra in PRICE_LIST_EXTRA_RECIPIENTS:
-        if extra.lower() not in {r.lower() for r in recipients}:
-            recipients.append(extra)
+    recipients = _sales_email_recipients(company_key, cur)
     conn.commit(); cur.close(); conn.close()
 
     if not recipients:
