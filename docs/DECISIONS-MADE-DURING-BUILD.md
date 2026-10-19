@@ -2110,6 +2110,27 @@ tables and the whole October sales redesign. Full list in CURRENT-STATUS.
 
 ---
 
+D-113 — Nightly backups: local snapshot on the DMZ box, pulled from the homelab
+(2026-10-19). Chris asked for nightly backups to the NAS, with Hetzner later. The
+DMZ server can't reach the LAN, so it never pushes: it writes verified snapshots
+locally (`ops/backup/fieldkit-backup.sh`, cron 07:15 UTC, keep 14), and the trusted
+side pulls them with a key restricted by `rrsync -ro` to the backup folder. Choices:
+- `pg_dump -Fc` per DB, checked with `pg_restore --list` on every run. Each snapshot
+  is built in `.incomplete-*` and renamed only when complete, so a puller can never
+  copy a half-written one.
+- Uploads and server config (compose, Dockerfile, init) are included. `.env` is not:
+  secrets shouldn't multiply across machines, and every value in it can be
+  regenerated or re-fetched.
+- 14 local snapshots (~8.5 MB each). Long-term retention belongs on the NAS, which
+  pulls without `--delete`.
+- A test restore of getagrip into a scratch DB matched live row counts.
+**Pending:** the homelab pull (another Claude instance, per Chris) and Hetzner.
+Spotted while setting this up and left untouched: the `ubuntu-services-backup` key
+in `authorized_keys` has an unrestricted shell. Whatever uses it should move to a
+restricted key.
+
+---
+
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:
 #33 (OPS/VendorCafe export templates), #50 (SMS alerts via Twilio), and Stage 5.6
 (ServiceFusion price-list exports, company legal names/remit-to/reply-to/alert emails).

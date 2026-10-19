@@ -282,11 +282,13 @@ unclosed template block (D-111), not email delivery.
 ## Open items as of 2026-10-19 (from the D-112 audit)
 
 **Needs Chris's decision or input:**
-1. **Backups.** No DB backup since 2026-09-23 (`~/db-backups/`), and no
-   scheduled backup at all, while migrations 029–038 have gone in and real
-   sales/field data now lives in the system. `~/docker/fieldkit-prod/uploads/`
-   (signed release forms, card photos) isn't backed up either. Recommend a
-   nightly `pg_dump` of all four DBs + uploads, added to cron.
+1. **Backups — half done (D-113).** Nightly local snapshots (all four DBs +
+   uploads + server config) have run since 2026-10-19, and a test restore has
+   passed. **Still needed:** the homelab-side pull to the NAS, without which the
+   backups live on the same VM as the data. Handoff steps are in
+   `docs/DEPLOYMENT/backups.md`. Also: store `.env` in a password manager
+   (deliberately not backed up), and restrict or replace the
+   `ubuntu-services-backup` SSH key, which has a full shell on this server.
 2. ServiceFusion cutover import for Kleanit Charlotte, CTS, Kleanit SF —
    waiting on their exports.
 3. Company settings fields (legal names, remit-to, reply-to/alert emails);

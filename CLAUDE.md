@@ -163,7 +163,8 @@ This file is a map, not the territory. For anything deeper:
 |---|---|
 | **Where things stand now** — what's built, open items | `docs/PROJECT-KNOWLEDGE/CURRENT-STATUS.md` |
 | Per-change build log and numbered decisions (D-###) | `docs/BUILD-LOG-2026-09.md`, `docs/DECISIONS-MADE-DURING-BUILD.md` |
-| Server-only files (compose, Dockerfile, .env keys, uploads, backups) | `docs/DEPLOYMENT/fieldkit-prod-server.md`, `docs/DEPLOYMENT/cron-jobs.md` |
+| Server-only files (compose, Dockerfile, .env keys, uploads) | `docs/DEPLOYMENT/fieldkit-prod-server.md`, `docs/DEPLOYMENT/cron-jobs.md` |
+| Nightly backups, restore procedure, homelab pull setup | `docs/DEPLOYMENT/backups.md`, `ops/backup/fieldkit-backup.sh` |
 | Infra request flow, debugging decision tree, drift-check script, incident case study | `docs/FIELDKIT_STACK_REFERENCE.md` |
 | Full architecture rationale (why 4 DBs, auth, roles, sales system) | `docs/ARCHITECTURE.md` |
 | Table-by-table schema (**stale since 2026-02 — missing ~40 tables; trust the migration files**) | `docs/DATABASE-SCHEMA.md` |

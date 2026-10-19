@@ -62,19 +62,17 @@ The DB holds metadata only; file names are always app-generated. "Removing" a fo
 or photo is a soft delete that leaves the file on disk, by design. As of
 2026-10-19: 3 files, 6.8 MB, all Get a Grip — real customer documents.
 
-**This folder is not backed up by anything**, and neither is the database on a
-schedule (see below).
+Included in the nightly backup since 2026-10-19 (see below).
 
 ## Backups
 
-Manual, ad hoc, under `~/db-backups/<date-reason>/`, taken before risky changes.
-The latest is `2026-09-23-clear-catalog-descriptions`. **No backup has been taken
-since then**, although migrations 029–038 have been applied to production and the
-Sales CRM is now in real daily use (50 prospects / 48 visits at Get a Grip). There
-is no scheduled `pg_dump` in cron. Open item — see CURRENT-STATUS.
+Nightly since 2026-10-19: all four DBs, uploads and server config go to
+`~/backups/fieldkit/` at 07:15 UTC. **Full detail, restore steps and the homelab
+pull setup are in `backups.md`.** The off-box copy (the NAS pull) isn't set up yet.
+The older manual dumps under `~/db-backups/` are left as they are.
 
 ## Cron
 
 Four `jobs.py` entries under the `letize` user's crontab, logging to
-`~/logs/fieldkit-jobs.log`. Full detail in `cron-jobs.md` (unchanged since
-2026-09-19; still accurate as of 2026-10-19).
+`~/logs/fieldkit-jobs.log`; full detail in `cron-jobs.md`. A fifth entry
+(07:15 UTC) runs the nightly backup, logging to `~/logs/fieldkit-backup.log`.

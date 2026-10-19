@@ -1714,3 +1714,13 @@ byte-identical to live via a scratch DB, then dropped); stale in-repo compose
 mirror; this log, DECISIONS and CURRENT-STATUS not updated since 2026-09-23.
 **Migration:** none applied. Files added: `029_work_order_visit_status_log.sql`,
 `004b_password_reset_tokens.sql`.
+
+## 2026-10-19 — Nightly backups, local half (D-113)
+
+**What:** `ops/backup/fieldkit-backup.sh` + crontab entry (07:15 UTC) writing
+verified snapshots of all four DBs, uploads and server config to
+`~/backups/fieldkit/` (keep 14). First two runs succeeded (one under a cron-like
+empty environment); getagrip test restore into a scratch DB matched live row
+counts. **Pending:** homelab pull to the NAS — steps in
+`docs/DEPLOYMENT/backups.md`.
+**Migration:** none.
