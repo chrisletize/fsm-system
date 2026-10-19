@@ -1724,3 +1724,22 @@ empty environment); getagrip test restore into a scratch DB matched live row
 counts. **Pending:** homelab pull to the NAS — steps in
 `docs/DEPLOYMENT/backups.md`.
 **Migration:** none.
+
+## 2026-10-19 — Dispatch LEDs go dark once the office closes the job out (D-114)
+
+**What:** Chris reported the Completed LED "never stops flashing" after the tech
+marks a job done. The existing rule (dark once the invoice is Sent, `6b7a1fd`) was
+correct as far as it went, but had never fired in production: no invoice has ever
+been created from a work order yet (all 268 GAG invoices are ServiceFusion imports
+with no WO). It also left two cases lit forever: No Charge / Cancelled jobs, which
+never get invoiced, and a voided invoice still counted as billed. `_dispatch_board_data`
+now treats a job as closed out when its invoice is Sent (email or "Mark Sent (no
+email)") and not voided, or when its status is No Charge / Cancelled. Draft and
+Hardened invoices keep the LED lit, so the light still nags until the invoice
+actually goes out.
+**Migration:** none. **Tests:** new `tests/smoke_dispatch_led_closeout.py`
+(11 checks; it fails on the old code at the void case and passes on the new). Full
+suite: 25 of 29 pass. The 4 failures (`smoke_dashboard`, `smoke_extraction`,
+`smoke_permissions`, `smoke_sales_crm`) fail identically on the pre-change code;
+they are stale tests from D-100/D-101/D-103/D-109 (see CURRENT-STATUS). Deployed
+with `docker compose restart app`; host/container md5 match.

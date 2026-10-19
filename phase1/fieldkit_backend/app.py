@@ -4698,20 +4698,27 @@ def _dispatch_board_data(company_key, target_date):
             techs_by_wo.setdefault(row['work_order_id'], []).append(row['username'])
     visit_statuses = _current_visit_statuses(cur, wo_ids)
 
-    # Once the invoice has actually been SENT to the customer (not just
-    # created -- invoice_versions.sent_at, distinct from the invoice's
-    # existence), the visit LEDs stop mattering: office already closed the
-    # loop, so the flashing would only be a distraction from here on. Chris:
-    # "the flashing led can be turned off so it's not distracting."
-    invoiced_wo_ids = set()
+    # The visit LEDs exist to prompt the office (a pulsing green Completed
+    # means "go close this job out"), so they go dark once the office has
+    # done that. Chris, 2026-10-19: "the light should turn off once the
+    # office has done its work." Closed out means either:
+    #   * an invoice for the job has actually been SENT -- the current
+    #     version's sent_at, set by emailing it or by "Mark Sent (no email)".
+    #     Merely creating the invoice (which moves the WO to Invoiced) or
+    #     hardening it isn't enough; it hasn't reached the customer yet. A
+    #     voided invoice doesn't count, since the job then needs billing again.
+    #   * or the office set the WO to No Charge / Cancelled -- nothing will
+    #     ever be invoiced, so without this the LED would pulse forever.
+    closed_out_wo_ids = {w['id'] for w in wos if w['status'] in ('No Charge', 'Cancelled')}
     if wo_ids:
         cur.execute("""
             SELECT DISTINCT inv.work_order_id
             FROM invoices inv
             JOIN invoice_versions iv ON iv.id = inv.current_version_id
-            WHERE inv.work_order_id = ANY(%s) AND inv.deleted_at IS NULL AND iv.sent_at IS NOT NULL
+            WHERE inv.work_order_id = ANY(%s) AND inv.deleted_at IS NULL
+              AND inv.voided_at IS NULL AND iv.sent_at IS NOT NULL
         """, (wo_ids,))
-        invoiced_wo_ids = {row['work_order_id'] for row in cur.fetchall()}
+        closed_out_wo_ids |= {row['work_order_id'] for row in cur.fetchall()}
     cur.close(); conn.close()
 
     blocks, unscheduled = [], []
@@ -4728,7 +4735,7 @@ def _dispatch_board_data(company_key, target_date):
             'is_delinquent': w['is_delinquent'], 'adjusted_letter_grade': w['adjusted_letter_grade'],
             'is_callback': w['is_callback'],
             'techs': techs_by_wo.get(w['id'], []),
-            'visit_status_by_tech': {} if w['id'] in invoiced_wo_ids else {
+            'visit_status_by_tech': {} if w['id'] in closed_out_wo_ids else {
                 uname: visit_statuses.get(w['id'], {}).get(uname, {}).get('status')
                 for uname in techs_by_wo.get(w['id'], [])
             },

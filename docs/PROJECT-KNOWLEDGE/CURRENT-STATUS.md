@@ -21,7 +21,7 @@ reporting until FieldKit's billing is complete.
 | Users: list (per-company scoped)/new/edit (incl. username rename)/reset-password/toggle-active/email reset via Resend | Built. Dispatchable/active-tech are per-company (migration 028, `user_company_dispatch`), not global. See D-094. |
 | Catalog CRUD, equipment registry CRUD | Built |
 | Work orders: list/search/new/edit/detail/delete, two-row-type line items, per-day equipment accrual, `work_site_label`, auto-description, double-booking banner, status history, tech assignment (username-keyed), tech/date list filters, live catalog-duration estimate | Built |
-| Dispatch board | Built (2.1, migration 017, `/dispatch`): drag-to-move (rewritten D-097, confirmed smooth by Chris D-098), resize, click-to-popover, double-click to edit, day/week views, collision detection, tech profiles. Customer name is the block's main label. Block fill = WO status, per-tech LED = visit status, 60s poll (D-100). |
+| Dispatch board | Built (2.1, migration 017, `/dispatch`): drag-to-move (rewritten D-097, confirmed smooth by Chris D-098), resize, click-to-popover, double-click to edit, day/week views, collision detection, tech profiles. Customer name is the block's main label. Block fill = WO status, per-tech LED = visit status, 60s poll (D-100). LEDs go dark once the office closes the job out: invoice Sent and not voided, or No Charge/Cancelled (D-114). |
 | Visit status | Built (migration 029, D-100): per-tech On The Way/Started/Completed/Cancelled, separate from WO status, set from `/myday` (any `is_field_tech` user) or by office. |
 | Occupied release forms | Built (migration 030, D-102): signed PDF upload on WO form/detail, `RELEASE ON FILE` token, invoice PDF line; office hard-blocked from scheduling occupied jobs without one. In real use (1 form on file, GAG). |
 | Billing page | Full rebuild (1.8): summary cards, aging strip, filter bar (delinquent/no_contact/portal/all), per-customer Record Payment pre-filtered to real open invoices. |
@@ -298,9 +298,16 @@ unclosed template block (D-111), not email delivery.
 6. `import_job_dates.py --commit` still on hold (Increment 3.3).
 
 **Engineering debt (no decision needed, just work):**
-7. No committed smoke tests for anything since 2026-09-23. The checks that
-   were run were ad-hoc and weren't saved, so the 28-file suite covers none
-   of migrations 029–038. The suite was also not re-run during this audit.
+7. Test suite (re-run 2026-10-19, 29 files): **25 pass, 4 fail, all stale tests
+   rather than bugs.** Each still expects behaviour that was later changed on
+   purpose, and each fails the same way on code from before D-114:
+   `smoke_dashboard` (expects the dashboard for the salesperson, who is now
+   locked to Sales, D-101); `smoke_extraction` (final retrieval without dry
+   confirmation, D-103); `smoke_permissions` (posts My Day status to the
+   pre-D-100 endpoint → 404); `smoke_sales_crm` (expects +5 calendar days;
+   follow-ups now roll weekends to Monday, D-109). Apart from the new
+   `smoke_dispatch_led_closeout.py`, nothing covers migrations 029–038; the
+   checks run in those sessions were never saved.
 8. `docs/DATABASE-SCHEMA.md` (2026-02-10) is missing ~40 of the 54 live
    tables; `docs/SALES-SYSTEM.md` (2026-02-10) predates the whole October
    sales redesign. The migration files are the accurate schema record

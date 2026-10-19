@@ -2131,6 +2131,18 @@ restricted key.
 
 ---
 
+D-114 — Dispatch LED = "office still owes this job something" (Chris,
+2026-10-19). The pulsing Completed LED is a prompt for the office, so it goes dark
+when the office is finished: invoice actually **Sent** (not just created or
+hardened) and not voided, **or** the WO set to No Charge / Cancelled. Sent was
+chosen over "invoice exists" because creating an invoice only produces a draft;
+until it reaches the customer the office still has work to do, and the LED keeps
+reminding them. If Chris wants the light off as soon as the invoice is created
+instead, it's a one-line change to that query. A revised invoice (new Live version)
+relights the LED until it's re-sent, the same logic as void.
+
+---
+
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:
 #33 (OPS/VendorCafe export templates), #50 (SMS alerts via Twilio), and Stage 5.6
 (ServiceFusion price-list exports, company legal names/remit-to/reply-to/alert emails).
