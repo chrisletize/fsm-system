@@ -99,15 +99,46 @@ Note: the `users` table schema is replicated to all four databases, and the user
 create/edit routes write through `write_to_all_dbs()` so new/edited users land in all
 four. But **authentication always reads only `fieldkit_getagrip.users`**
 (`get_user_by_username`, `update_last_login` hardcode `'getagrip'`) — that DB is the
-de facto canonical/admin source for login and `session['company_access']`. There is
-no FK from any per-company table to the local `users` row (tech assignment columns
-like `work_order_techs.username` are plain `VARCHAR`, not a foreign key), so the other
+de facto canonical/admin source for login and `session['company_access']`. No
+business table (customers, work orders, sales, …) has an FK to the local `users` row
+(tech assignment columns like `work_order_techs.username` are plain `VARCHAR`), so the other
 three DBs' `users` tables being out of sync doesn't break anything today. As of
-2026-09-18, `fieldkit_getagrip.users` has 7 rows; the other three DBs have 0 — those 7
-were seeded directly into `getagrip` before `write_to_all_dbs()` existed and were never
-backfilled. Verified live against all four DBs at the start of the September 2026 build
-(see `docs/FIELDKIT_BUILD_DIRECTIVE_2026-09.md` §0.1 and
-`docs/DECISIONS-MADE-DURING-BUILD.md`).
+2026-10-19, `fieldkit_getagrip.users` has 8 rows and the other three DBs have 1 each.
+The original 7 were seeded directly into `getagrip` before `write_to_all_dbs()` existed
+and were never backfilled; the one user created since then landed in all four, with a
+different `id` in each DB. Don't rely on `users.id` matching across DBs. Three tables
+do FK to the local `users.id` — `user_company_dispatch` (keyed by `company_key`, migration
+028), `user_sessions`, `password_reset_tokens` — but like `users` itself, the app only
+ever reads and writes their `getagrip` copies. Verified live
+against all four DBs (see `docs/FIELDKIT_BUILD_DIRECTIVE_2026-09.md` §0.1 and
+`docs/DECISIONS-MADE-DURING-BUILD.md` D-003, D-112).
+
+## Migrations
+
+Files live in `phase1/fieldkit_phase1/database/migrations/NNN_name.sql`, one per
+change, each applied by hand to all four DBs (`psql -U fieldkit` — the DB superuser is
+`fieldkit`, not `postgres`). **Commit the `.sql` file in the same commit as the code
+that needs it.** Migration 029 and the `password_reset_tokens` table were once applied
+to production without their file ever being committed, and had to be rebuilt from
+`pg_dump -s` later (D-112). Quick check that the four DBs still match: dump
+`information_schema.columns` from each and diff.
+
+## Server-only files and uploads
+
+`docker-compose.yml`, `Dockerfile`, `.env`, `init/` and `uploads/` sit in
+`~/docker/fieldkit-prod/`, one level above this checkout, outside git. The compose
+file is mirrored at `phase1/fieldkit_backend/docker-compose.yml`; keep the mirror in
+sync. `uploads/` holds real customer documents (signed release forms, business-card
+photos) and must never be moved into the checkout. Details in
+`docs/DEPLOYMENT/fieldkit-prod-server.md`.
+
+## Keeping the docs current
+
+After each change, update `docs/BUILD-LOG-2026-09.md` (what/migration/commit),
+add a `D-###` entry to `docs/DECISIONS-MADE-DURING-BUILD.md` for any judgment call,
+and refresh `docs/PROJECT-KNOWLEDGE/CURRENT-STATUS.md`. Do it in the same commit as the
+work, not at the end of the session: a session that lost its connection once left
+three weeks of work recorded only in commit messages (backfilled 2026-10-19, D-112).
 
 ## Soft delete, everywhere
 
@@ -130,13 +161,16 @@ This file is a map, not the territory. For anything deeper:
 
 | Topic | File |
 |---|---|
+| **Where things stand now** — what's built, open items | `docs/PROJECT-KNOWLEDGE/CURRENT-STATUS.md` |
+| Per-change build log and numbered decisions (D-###) | `docs/BUILD-LOG-2026-09.md`, `docs/DECISIONS-MADE-DURING-BUILD.md` |
+| Server-only files (compose, Dockerfile, .env keys, uploads, backups) | `docs/DEPLOYMENT/fieldkit-prod-server.md`, `docs/DEPLOYMENT/cron-jobs.md` |
 | Infra request flow, debugging decision tree, drift-check script, incident case study | `docs/FIELDKIT_STACK_REFERENCE.md` |
 | Full architecture rationale (why 4 DBs, auth, roles, sales system) | `docs/ARCHITECTURE.md` |
-| Complete table-by-table schema | `docs/DATABASE-SCHEMA.md` |
+| Table-by-table schema (**stale since 2026-02 — missing ~40 tables; trust the migration files**) | `docs/DATABASE-SCHEMA.md` |
 | Infra inventory, company list, people, current-as-of snapshot | `docs/FIELDKIT_PROJECT_REFERENCE.md` |
 | Day-to-day working process (read-before-edit, curl-before-frontend, nano for multi-line edits) | `docs/DEVELOPMENT_WORKFLOW.md` |
-| Sales CRM / prospect pipeline design | `docs/SALES-SYSTEM.md` |
-| Design addenda (catalog/equipment, worksite/double-booking, duration/rating, mobile after-hours extraction, reconciliation framework) | `docs/FIELDKIT_DESIGN_ADDENDUM_*.md` |
+| Sales CRM / prospect pipeline design (original Feb 2026 design; October changes are in D-101, D-105–D-111) | `docs/SALES-SYSTEM.md` |
+| Design addenda (catalog/equipment, worksite/double-booking, duration/rating, mobile after-hours extraction, reconciliation framework, visit-status tracking, card payments) | `docs/FIELDKIT_DESIGN_ADDENDUM_*.md` |
 | Full v2 system design | `docs/FIELDKIT_COMPLETE_SYSTEM_DESIGN_v2.md` |
 | Session-by-session history | `docs/FIELDKIT_SESSION_*.md`, `docs/SESSION_NOTES_*.md`, `docs/PROJECT-KNOWLEDGE/` |
 | Reusable patterns extracted from past sessions | `docs/FIELDKIT_REUSABLE_BRICKS.md` |

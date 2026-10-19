@@ -1990,6 +1990,126 @@ question). Full 28-file regression suite green.
 
 ---
 
+*D-100 through D-111 were backfilled on 2026-10-19 (D-112): the session that made
+these decisions lost its connection before recording them here. Each is condensed
+from its commit message — `git show <hash>` has the full reasoning, written at the
+time. Quotes attributed to Chris are as recorded in those messages.*
+
+D-100 — Visit status is a separate state machine from WO status (2026-09-25;
+`32406aa`, `6acadab`, `6b7a1fd`; migration 029). A tech's per-trip status (On The
+Way / Started / Completed / Cancelled) lives in an append-only
+`work_order_visit_status_log`, per (WO, tech), and never changes
+`work_orders.status` — a completed five-minute extraction check must not close a
+multi-day job. Built into the existing `/myday` (which had been writing directly to
+`work_orders.status` and excluding extraction jobs — the exact problem) rather
+than a new page; the duplicate `/my-jobs` page was retired the same day. `/myday`
+access now keys on `is_field_tech`, matching D-095's `_company_techs()` fix. A job's
+`followup_tech_username` counts as assigned for status and extraction actions.
+Dispatch LEDs go dark on `invoice_versions.sent_at` (the real "sent" event), not on
+invoice creation. Full design in `FIELDKIT_DESIGN_ADDENDUM_visit-status-tracking.md`.
+
+D-101 — Salesperson role is sales-only, site-wide (2026-09-30; `562fb49`). Chris O's
+login is restricted to the Sales module by a `before_request` gate. Chris called it
+a trust-driven decision. `/sales-overview` is the first deliberate cross-database
+read in the app: read-only, limited to the user's `company_access`. It doesn't
+weaken the one-DB-per-company rule because nothing writes across DBs.
+
+D-102 — Occupied release forms gate scheduling (2026-10-01; `1442634`; migration
+030). Chris: "we do not even schedule occupied jobs without the form." Office staff
+are hard-blocked; managers/admins are the override (warning plus standing banners).
+The gate fires only on a new scheduling action (new job, changed start date, newly
+marked OCC), so older occupied jobs aren't trapped. Files are stored on the host
+outside the checkout, with metadata only in the DB. The PDF check uses magic bytes,
+not the extension. Removal is a soft delete that keeps the file, because a signed
+liability release shouldn't be destroyable by a mis-click.
+
+D-103 — Dry confirmation is a plain tick, and gates only the final pickup
+(2026-10-01; `8bce6ec`; migration 031). Chris chose no moisture readings. If
+readings are ever needed they go in a child table. The confirmation is three
+columns on `work_orders` (1:1 with the job). Partial retrievals are never blocked.
+Columns were added to getagrip too, even though it does no extraction: the schema
+stays identical and the app gates the feature.
+
+D-104 — Card payments: pay-links, no portal, hosted, processor-agnostic
+(2026-10-01; `66a2157`; design only). Settled: tokenized statement-aware pay-links
+for FieldKit and LKit, no customer accounts/saved cards/autopay (confirmed with
+Michele for FieldKit); card data never touches our servers. LKit dual-prices (a
+cash discount, not a surcharge); FieldKit recommended not to surcharge in v1.
+**Still open:** processor choice; portal-vs-pay-link details; refunds/chargebacks;
+surcharge compliance. Full doc: `FIELDKIT_DESIGN_ADDENDUM_card-payments.md`.
+
+D-105 — Sales is driven by logging visits (2026-10-05; `51a46a3`; migration 032).
+Chris: "the sales page is driven by logging visits." Log Visit is a single-page
+four-step wizard submitted once, so abandoning it leaves no orphan prospect or
+contact. Business-card photos have a `transcribed_at IS NULL` queue so cards don't
+get photographed and forgotten. HEIC is rejected because it won't render in most
+browsers. Last names are optional (`''` satisfies NOT NULL; no migration). Address
+autocomplete uses Photon (free, no key, ~900 lookups/yr), isolated in one macro so
+it's easy to swap to a paid provider later.
+
+D-106 — Rehab prospects resurface by rule, not by follow-up (2026-10-06; `c71dd12`;
+migration 033). A follow-up dies when completed; a rehab must never go quiet. Same
+shape as dormancy alerts: a flag on `sales_prospects` plus a computed "not visited
+in N days" check (N per company, default 21, stored on `dormancy_alerts_config`).
+Chris chose a fixed cadence — `rehab_expected_date` is informational only.
+**Open:** whether existing *customers* can be rehab-flagged (left alone in D-110).
+
+D-107 — Price list requests go to the office, not the prospect (2026-10-11;
+`56acfb8`; migration 034). Pricing changes, and an auto-sent stale list is worse
+than none. Prospects get `general_email`/`general_phone`, named separately from
+`billing_email` because a leasing inbox usually isn't where invoices get paid. No
+remembered "preferred" address (per Chris). Office inboxes are hardcoded per
+company, falling back to `alert_email` and then to admins/managers. Deliberately
+separate from `alert_email`, which also feeds operations alerts.
+
+D-108 — Sales holds need manager approval; intake wizard is customer-facing
+(2026-10-11; `c2ef7c1`; migration 035). Holds (6/12 months, with a reason; e.g. a
+property being sued for non-payment) ride `approval_queue`, so "stop selling here"
+has a name against it. Holds don't rewrite Recent Visits. A visit to a held
+property is allowed with a recorded override. The intake wizard doesn't extend
+`base.html` (the customer holding the tablet sees only the company's branding).
+`management_software` (e.g. Yardi) is kept separate from portal flags (e.g.
+VendorCafe).
+
+D-109 — Follow-ups roll forward to Monday, never back (2026-10-11; `087af90`;
+migration 036). Rolling back would shorten the interval and could land in the past.
+Completed follow-ups are left untouched (their date is history).
+
+D-110 — Rehab can be set from a visit but only cleared deliberately; photos belong
+to a property (2026-10-12; `116893b`; migration 037). The visit-wizard tick sets the
+flag and never clears it, because a per-visit control that cleared would silently
+drop the flag. Card photos now anchor to a property, optionally also a visit, with
+a CHECK so a photo is never anchored to nothing. Delete is a soft delete and keeps
+the file. "Dismiss" (keep photo, clear queue) and "Delete" (unusable shot) are
+separate actions.
+
+D-111 — Sales emails must report failure and be logged; one sales recipient list
+(2026-10-12 → 10-13; `6c6c037`, `8cfa7b0`, `81a9d3e`, `71188cc`; migration 038).
+Sales sends now check `_send_email_via_resend`'s error and log to `email_log` under
+their own kinds (`price_list_request`, `customer_intake`), not `'alert'`. The intake copy
+failure is logged, not flashed, because the next screen is customer-facing. The
+"not landing" report actually came from an unclosed `{% block title %}`. That
+showed a gap: route-level POST tests can't tell whether the UI can reach the
+route. A one-off block-balance sweep across the sales templates came back clean,
+but it isn't automated. `SALES_EXTRA_RECIPIENTS`
+(Michael) goes on both sales emails via `_sales_email_recipients()`, kept apart
+from `_office_recipients()` (operations traffic).
+
+D-112 — Documentation audit after a lost session (2026-10-19). Chris asked for an
+audit because a long session lost its connection and he wasn't sure everything had
+been pushed. Findings: all code was pushed, and git, host and container were
+identical. Missing: migration files 029 and the May 2026 `password_reset_tokens`
+table (rebuilt from `pg_dump -s`, checked identical to live in a scratch DB, all
+`IF NOT EXISTS`; the latter is numbered `004b` because "004" was reused); the
+in-repo compose mirror (stale since May); D-100–D-111, the build log, and
+CURRENT-STATUS. Not fixed, flagged for Chris: no DB backup since 2026-09-23 and no
+scheduled backup at all, while real data now lives in the system; `uploads/` not
+backed up; ad-hoc test checks from 2026-09-25 onward never committed;
+`DATABASE-SCHEMA.md` and `SALES-SYSTEM.md` are from February and miss roughly 40
+tables and the whole October sales redesign. Full list in CURRENT-STATUS.
+
+---
+
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:
 #33 (OPS/VendorCafe export templates), #50 (SMS alerts via Twilio), and Stage 5.6
 (ServiceFusion price-list exports, company legal names/remit-to/reply-to/alert emails).

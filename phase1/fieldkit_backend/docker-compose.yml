@@ -1,3 +1,9 @@
+# REFERENCE COPY -- not the file Docker runs.
+# The live file is ~/docker/fieldkit-prod/docker-compose.yml on ubuntu-business,
+# one level ABOVE this git checkout, so it isn't under version control. This copy
+# mirrors it so the repo records the real production config; if you change the
+# live file, update this one in the same sitting. Last synced 2026-10-19.
+# See docs/DEPLOYMENT/fieldkit-prod-server.md for the other server-only files.
 services:
   db:
     image: postgres:16
@@ -18,7 +24,7 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "3100:5001"
+      - "3000:5001"
     environment:
       DB_HOST: db
       DB_PORT: 5432
@@ -28,8 +34,14 @@ services:
       RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL}
       APP_BASE_URL: ${APP_BASE_URL}
       FLASK_SECRET_KEY: ${FLASK_SECRET_KEY}
+      UPLOAD_DIR: /data/uploads
     volumes:
       - ./fsm-system/phase1/fieldkit_backend:/app
+      # Uploaded documents (signed occupied-release PDFs). Deliberately
+      # OUTSIDE the git checkout at ./fsm-system so customer documents never
+      # land in the repo working tree, and a host folder rather than a named
+      # volume so they stay browsable/backup-able with ordinary file tools.
+      - ./uploads:/data/uploads
     depends_on:
       db:
         condition: service_healthy

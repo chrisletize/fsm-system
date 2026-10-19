@@ -1,4 +1,4 @@
-# Build Log — September 2026
+# Build Log — September 2026 (continues through October 2026)
 
 One dated entry per increment: what was built, migration number, commit hash, smoke
 result, anything deferred. Companion to `FIELDKIT_BUILD_DIRECTIVE_2026-09.md`.
@@ -1548,3 +1548,169 @@ and the wider calendar are working as intended.**
 **Deferred:** other pages that render internal tasks (`daysheet.html`,
 `jobs_report.html`, `extraction_queue.html`) left untouched — revisit only
 if Chris reports the same clutter there.
+
+---
+
+# Backfilled entries — 2026-09-23 through 2026-10-13
+
+*Written 2026-10-19 during a documentation audit (D-112). The session that did
+this work lost its connection before updating this log, `CURRENT-STATUS.md` or
+`DECISIONS-MADE-DURING-BUILD.md`. Every commit below was pushed; these entries are
+reconstructed from the commit messages (which are detailed — read them for full
+reasoning: `git show <hash>`), the migration files, and the live databases.
+**Verification caveat for this whole section:** from 32406aa onward the commits
+report ad-hoc checks ("49 checks", "38 checks") that were run but never committed
+to `tests/` — the committed smoke suite is still the 28 files it was on
+2026-09-23, and none of them cover the features below.*
+
+## 2026-09-23 — Dispatch follow-ups, catalog descriptions, return-to-origin (D-098, D-099)
+
+**What:** "Mark No Charge" removed from the dispatch popover; line-item error
+highlight changed to non-brand orange; dispatch stress test with 19 throwaway WOs
+(cleaned up). Catalog `default_description` cleared in all four DBs (data only).
+Sitewide `return_to` navigation (`safe_return_to()`, `return_to_field()` macro).
+Then two small follow-ups: dispatch blocks lead with the **customer name** instead
+of the WO number (and the timeline/unscheduled chips now HTML-escape it — closes a
+stored-XSS gap); the duration-mismatch warning names its WO number.
+**Migration:** none. **Commits:** `0785ac8`, `66177c1`, `3ea41de`, `dbfb717`,
+`2f1bf69`, `68e3cf7`, `b0607ac`. **Tests:** `smoke_return_to_navigation.py` (new);
+28-file suite green.
+
+## 2026-09-25 — Visit status tracking + dispatch status colors (D-100)
+
+**What:** per-tech On The Way / Started / Completed / Cancelled visit status,
+independent of `work_orders.status`. Folded into the existing `/myday` page (a
+duplicate `/my-jobs` page was built first, then retired); `/myday` gains Extraction
+Follow-Ups and is now visible to anyone with `is_field_tech`, not only
+`role='technician'`. Dispatch board: block fill = WO status, per-tech LED dot =
+visit status, 60s background poll; LEDs go dark once the invoice is actually sent.
+`extraction_log()` now saves its notes. Fixed a misplaced `@app.route` decorator
+that crashed every status change.
+**Migration:** 029 (`work_order_visit_status_log`), all four DBs. **The .sql file
+was never committed** — reconstructed from the live schema 2026-10-19 (D-112).
+**Commits:** `32406aa`, `6acadab`, `6b7a1fd`.
+**Design:** `FIELDKIT_DESIGN_ADDENDUM_visit-status-tracking.md`.
+
+## 2026-09-30 — Sales CRM goes live for Chris O (D-101)
+
+**What:** salesperson role locked site-wide to the Sales module (`before_request`
+gate, nav, landing pages route to `/sales`). New `/sales-overview` — first page
+that reads across all four company DBs (read-only): merged follow-ups plus a
+"Customer Check" search. Inline "+ Add new management company" and "+ Someone not
+on this list" quick-adds; follow-ups card gets a Today/3/7/All filter.
+**Migration:** none. **Commit:** `562fb49`.
+
+## 2026-10-01 — Occupied release forms (D-102)
+
+**What:** the app's first inbound upload. Signed PDF attaches to a WO (card on WO
+detail + upload on the WO form), adds a `RELEASE ON FILE` description token, prints
+a line on the invoice PDF, links from the invoice sidebar. Office staff are
+hard-blocked from scheduling an occupied job without a form; managers/admins can
+override with a warning and standing banners. Files in `./uploads/<company>/`
+outside the checkout; `%PDF-` magic-byte check; removal is a soft delete.
+**Migration:** 030 (`work_order_attachments`). **Commit:** `1442634`.
+**Server change:** `./uploads` mount + `UPLOAD_DIR` in the live
+`docker-compose.yml` (outside git — mirrored into the repo 2026-10-19).
+
+## 2026-10-01 — Extraction: per-piece retrieval + dry confirmation (D-103)
+
+**What:** per-piece retrieval already worked in the backend; the office Retrieved
+modal pre-ticked every unit. Now per-unit checkboxes, nothing pre-ticked, with
+"Retrieved all" / "Clear". New dry confirmation (tick + optional note) gates the
+retrieval that would empty the site; partial pickups never blocked; managers can
+undo. Verified on a real 3-unit job.
+**Migration:** 031 (`work_orders.dry_confirmed_at/_by/dry_confirmation_notes`).
+**Commit:** `8bce6ec`.
+
+## 2026-10-01 — Card payments design addendum (D-104)
+
+**What:** design only, no code. Tokenized pay-links for FieldKit and the LKit
+billing site, no customer portal, hosted/tokenized, processor-agnostic.
+**Commit:** `66a2157`. **Doc:** `FIELDKIT_DESIGN_ADDENDUM_card-payments.md`.
+
+## 2026-10-05 — Visit-driven sales: wizard, card photos, predictive addresses (D-105)
+
+**What:** Log Visit is the sales front door — a four-step single-page wizard
+(property → who → details → photos) that can create the prospect and contact on
+the way, all in one transaction. Business-card photos with a "cards awaiting
+entry" queue (JPEG/PNG only, HEIC rejected with the iPad fix). Last names optional.
+Photon address autocomplete as a shared `_macros.html` macro (state normalized to
+2-letter codes, deduped). Removed `/sales/contacts/quick-add`.
+**Migration:** 032 (`sales_visit_photos`). **Commit:** `51a46a3`.
+
+## 2026-10-06 — Searchable visit log page
+
+**What:** `/<company>/sales/visits` — full-text notes, search, date range with
+shortcuts (default last 30 days, dropped when searching), type/author/dormancy/photo
+filters; one query via LEFT JOINs instead of N+1. Customer rows are plain text for
+the salesperson (he can't open customer pages).
+**Migration:** none. **Commit:** `abf4763`.
+
+## 2026-10-06 — Rehab-flagged prospects (D-106)
+
+**What:** a prospect flag plus a computed "flagged and not visited in N days"
+rule (default 21, per company on `dormancy_alerts_config`) that resurfaces it on
+the dashboard. Deliberately not a follow-up. Dashboard card, REHAB badge, list
+filter, prospect banner.
+**Migration:** 033. **Commit:** `c71dd12`.
+
+## 2026-10-11 — Price list request + prospect contact fields (D-107)
+
+**What:** one-tap "Request Price List" emails the **office**, never the prospect.
+Prospects gain `general_email`/`general_phone`; candidate picker (property inbox,
+then each contact); typed address saved to the prospect; requests logged with a
+one-week duplicate warning. Not carried into `billing_email` on conversion.
+**Migration:** 034. **Commit:** `56acfb8`.
+
+## 2026-10-11 — Sales holds + customer intake wizard (D-108)
+
+**What:** 6- or 12-month "pause sales" hold on prospects and customers, requested
+by the salesperson and approved by a manager via `approval_queue`
+(`request_type='delay_sales'`); suppresses the property from rehab list and
+follow-ups but not Recent Visits; visiting anyway needs a recorded override tick.
+The paper "New Customer Information" sheet became a customer-facing tablet wizard
+(no FieldKit nav, branded) that creates contacts, links the management company,
+emails the office and queues conversion; re-running doesn't duplicate.
+**Migration:** 035. **Commit:** `c2ef7c1`. **Verified:** 49 ad-hoc checks (not committed).
+
+## 2026-10-11 — Follow-ups on working days only (D-109)
+
+**What:** `_next_business_day()` rolls weekend follow-ups forward to Monday (both
+tag-derived and typed dates) with a notice; `/sales-overview` shows five working
+days. Migration rolled the 9 open weekend follow-ups (8 GAG, 1 KC).
+**Migration:** 036. **Commit:** `087af90`.
+
+## 2026-10-12 → 10-13 — Sales intake/price-list fixes (D-110, D-111)
+
+**What:**
+- Intake and price-list subjects lead with the company name (both Kleanits share
+  `office@kleanit.com`); intake body carries every field incl. emails and ZIP
+  (`6c6c037`).
+- Rehab flag settable from the visit wizard (sets, never clears); card photos can
+  belong to a property without a visit; card photos can be soft-deleted; a visit
+  logged against a customer no longer redirects the salesperson to a 403
+  (`116893b`, migration 037, 38 ad-hoc checks).
+- Sales email failures are surfaced instead of flashing success, and logged to
+  `email_log` with new kinds (`8cfa7b0`, migration 038).
+- **Real cause of "price list requests not landing":** an unclosed
+  `{% block title %}` in `sales_prospect_detail.html` swallowed both modals and
+  their script, so the button did nothing whenever a prospect had more than one
+  candidate address. Fixed; the prospect page now shows a permanent delivery
+  record from `email_log` (`81a9d3e`).
+- Michael (`michaelobuckley@yahoo.com`) copied on both sales emails via one `_sales_email_recipients()`
+  list, kept separate from `_office_recipients()` (`71188cc`).
+
+**Migrations:** 037, 038. **Commits:** `6c6c037`, `116893b`, `8cfa7b0`, `81a9d3e`,
+`71188cc`.
+
+## 2026-10-19 — Documentation audit (D-112)
+
+**What:** no feature work. Verified git = host = container (identical md5s,
+container restarted after the last edit), all four DB schemas identical (54
+tables / 800 columns / 374 indexes+constraints+functions+views), every live table
+traceable to a committed `.sql` file. Found and fixed: missing migration files for
+029 and the May 2026 `password_reset_tokens` table (reconstructed, verified
+byte-identical to live via a scratch DB, then dropped); stale in-repo compose
+mirror; this log, DECISIONS and CURRENT-STATUS not updated since 2026-09-23.
+**Migration:** none applied. Files added: `029_work_order_visit_status_log.sql`,
+`004b_password_reset_tokens.sql`.

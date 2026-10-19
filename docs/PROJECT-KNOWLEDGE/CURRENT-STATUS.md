@@ -21,7 +21,9 @@ reporting until FieldKit's billing is complete.
 | Users: list (per-company scoped)/new/edit (incl. username rename)/reset-password/toggle-active/email reset via Resend | Built. Dispatchable/active-tech are per-company (migration 028, `user_company_dispatch`), not global. See D-094. |
 | Catalog CRUD, equipment registry CRUD | Built |
 | Work orders: list/search/new/edit/detail/delete, two-row-type line items, per-day equipment accrual, `work_site_label`, auto-description, double-booking banner, status history, tech assignment (username-keyed), tech/date list filters, live catalog-duration estimate | Built |
-| Dispatch board | Built (2.1, migration 017, `/dispatch`): drag-to-move, resize, click-to-popover, day/week views, collision detection, tech profiles (color/dispatchable/sort order) on the user form. |
+| Dispatch board | Built (2.1, migration 017, `/dispatch`): drag-to-move (rewritten D-097, confirmed smooth by Chris D-098), resize, click-to-popover, double-click to edit, day/week views, collision detection, tech profiles. Customer name is the block's main label. Block fill = WO status, per-tech LED = visit status, 60s poll (D-100). |
+| Visit status | Built (migration 029, D-100): per-tech On The Way/Started/Completed/Cancelled, separate from WO status, set from `/myday` (any `is_field_tech` user) or by office. |
+| Occupied release forms | Built (migration 030, D-102): signed PDF upload on WO form/detail, `RELEASE ON FILE` token, invoice PDF line; office hard-blocked from scheduling occupied jobs without one. In real use (1 form on file, GAG). |
 | Billing page | Full rebuild (1.8): summary cards, aging strip, filter bar (delinquent/no_contact/portal/all), per-customer Record Payment pre-filtered to real open invoices. |
 | A/R Aging report | Built (1.8, `/reports/aging`), 4-bucket (0-30/31-60/61-90/90+), sortable, print-friendly drill-down. |
 | `tax_rates` | Built, effective-dated (migration 009), `/settings/tax` UI live. 101 rows (NC) in GAG/KC/CTS, 0 in Kleanit SF. |
@@ -30,7 +32,7 @@ reporting until FieldKit's billing is complete.
 | Compliance portals | Built (1.8, migration 015): `customer_compliance_portals` table, enrollment/edit/toggle UI, auto-assign-on-harden, `/compliance` review page with accept/reject + generic `.xlsx` export (real per-portal templates still pending from Chris/Michele). |
 | NC cash-basis tax report | Built (1.10, migration 016, `/reports/tax`): cash-basis by county, state/county/transit split incl. Mecklenburg's 1% additional-county line, refund handling, Excel + PDF export. Untested against real data (none exists yet). |
 | Cutover import from ServiceFusion | Built and run for real for Get a Grip (2026-09-22): `import_catalog.py`, `import_open_invoices.py`, `import_job_history_direct.py` (all `phase1/fieldkit_phase1/`, dry-run default). Sources directly from ServiceFusion exports, not the statements DB — that premise turned out wrong (D-038: zero invoice/tax rows there for all four companies). See D-093. Kleanit Charlotte/CTS/Kleanit SF not yet run — waiting on their exports. |
-| Water extraction queue | Built (2.2, migration 018, `/extraction`): one-WO-lifecycle model (no cloning), daily log, Retrieved flow with per-day billing recompute, pickup-list PDF, follow-up-WO offer. **Not available for Get a Grip** (bathtub/surface resurfacing — never does this work; gated post-build 2026-09-19, D-071). Fully intact for the other three companies. |
+| Water extraction queue | Built (2.2, migration 018, `/extraction`): one-WO-lifecycle model (no cloning), daily log, Retrieved flow with per-day billing recompute, pickup-list PDF, follow-up-WO offer. **Not available for Get a Grip** (bathtub/surface resurfacing — never does this work; gated post-build 2026-09-19, D-071). Fully intact for the other three companies. Per-piece retrieval UI + dry confirmation gating the final pickup added 2026-10-01 (migration 031, D-103). |
 | Day sheet / hours / job activity reports | Built (2.3, `/reports`, `/reports/daysheet`, `/reports/hours`, `/reports/jobs`): printable per-tech schedule, honest "scheduled not actual" hours, job list + CSV export. No migration needed — all columns already existed. |
 | Retired-tag replacements | Built (2.4 + 2.5, migrations 019/020): `is_internal_task` (customer-less WOs), derived "New Customer" badge, and (once `customer_flags` existed) the Delinquent Account badge on customer detail/WO form/dispatch board. Callback still deferred to §4.4. |
 | Scheduled jobs | Built (2.5, migration 020, `phase1/fieldkit_backend/jobs.py`): nightly customer_flags/extraction upkeep, uninvoiced alert, EOD digest, weekly sales report placeholder. Per-company master on/off switch (`company_settings.scheduled_alerts_enabled`, `/settings/company`) — **off for all four companies**; cron installed and live (computing/logging) but sends no real email until switched on. See `docs/DEPLOYMENT/cron-jobs.md`. |
@@ -38,13 +40,13 @@ reporting until FieldKit's billing is complete.
 | Customer ratings | Built (3.2, migration 022): nightly A–F grade (payment timeliness + cancellation rate + job volume), manager override, badges on customer detail/WO form/estimate form/dispatch popover. Currently all grade A across all four companies — no real invoice/WO history exists yet. |
 | Recency report | Built (3.3, migration 023, `/reports/recency`): last-service date = GREATEST of WO history and imported `customer_job_dates`, bucketed 1-2/3-6/6-12/12+ months (boundaries matched to the Phase 0 site), grouped by management company, PDF export. History-import script (`import_job_dates.py`) written and dry-run for real against production statements data — 258 customers/2,859 job dates would import for Get a Grip (the only company with statements job history); `--commit` on hold pending Chris's review. |
 | Callbacks | Built (3.4, migration 024): WO form's "This is a callback for…" combo pre-fills location/site/lines from the prior job, defaults Responsible Tech to its lead tech; badges on dispatch/WO list/customer detail/WO detail; `/reports/callbacks` grouped by responsible tech with paid-vs-unpaid detection (no payroll engine — just exposes the data); customer rating gets a new signed `callback_score` (-3 per callback, trailing 12mo). |
-| Sales CRM | Built (3.5, migration 025): prospects/contacts/visits/approval-queue CRUD under `/sales`, mobile quick-tap visit logging, follow-ups, unified customer+prospect search, dormant-customer detection reusing the recency-report formula, convert-to-customer via manager approval (creates customer + contacts in one transaction), Monday weekly report email. See below. |
+| Sales CRM | Built (3.5, migration 025): prospects/contacts/visits/approval-queue CRUD under `/sales`, mobile quick-tap visit logging, follow-ups, unified customer+prospect search, dormant-customer detection reusing the recency-report formula, convert-to-customer via manager approval (creates customer + contacts in one transaction), Monday weekly report email. See below. **Live and in real use since 2026-09-30** (GAG: 50 prospects / 48 visits; KC: 2 / 2 as of 2026-10-19). Redesigned around visit logging in October (migrations 032–038, D-101, D-105–D-111): salesperson locked to Sales only, `/sales-overview` across all companies, Log Visit wizard, business-card photo queue, Photon address autocomplete, `/sales/visits` log, rehab prospects, price-list requests to the office, manager-approved sales holds, customer-facing intake wizard, business-day follow-ups, `email_log` delivery records for sales emails. |
 | Dashboard | Built (5.1, no migration, `/<company>/dashboard`): today's jobs, uninvoiced completed WOs (loud), open extraction units, outstanding A/R + 90+ + unapplied credits (from the `customer_flags` nightly cache), follow-ups due, pending approvals, last-15 recent activity across WO/invoice/payment status history, role-gated Quick Actions. Role-gated sections, not a role-gated route — technicians land on the reduced view; salespeople land on the full sales-aware view. |
 | Customer merge + duplicate detection | Built (5.2, migration 026): non-blocking duplicate-customer banner on the customer form; admin-only `/customers/<id>/merge` with AJAX side-by-side preview and a one-transaction merge across every referencing table; merged customer URLs redirect to the target. |
 | Audit trail | Built (5.3, migration 027): `record_audit` written from customers/contacts/service locations/work orders/invoices/payments/estimates/catalog/tax rates/users via one shared `_record_audit()` helper; read-only History panel on customer/WO/invoice/payment detail; admin-only global view at `/settings/audit`. |
 | Permissions sweep + My Day | Built (5.4, no migration): full route audit against the Appendix A matrix, gaps closed (see D-091); technician customer access read-only and scoped to own-job customers (`_technician_customer_ids()`); `/<company>/myday` — date-scoped list of a technician's own assigned WOs with On The Way / Start / Complete status buttons. |
 | Settings landing + in-app help | Built (5.5, no migration): `/<company>/settings` (admin/manager) with a card per reachable settings page plus the Scheduled Jobs panel inline; collapsible `help_panel()` macro on invoice detail (Revise vs. Reissue), billing, estimate detail, the WO form, extraction queue, and My Day. See D-092. |
-| Payment methods | Not built |
+| Card payments / pay-links | Design only (D-104, `FIELDKIT_DESIGN_ADDENDUM_card-payments.md`); no code or migration. Processor not chosen. |
 
 This table matches `FIELDKIT_BUILD_DIRECTIVE_2026-09.md` §0.2 — confirmed by grepping
 the full route list out of `app.py` (3,248 lines) and querying row counts in all four
@@ -263,14 +265,47 @@ actual available width instead of a fixed constant. See D-097. Full
 verified in a real browser** (Chrome extension not connected in this
 environment, same limitation as D-096) — awaiting Chris's hands-on test.
 
-Next: Chris to try the new dispatch board drag/drop and the internal-task
-list filter and report back — if the drag feel needs further tuning
-(easing timing, snap increment, etc.) that's a quick follow-up now that
-the underlying mechanism is real mouse tracking instead of native
-HTML5 drag/drop. Then the same ServiceFusion cutover import for the other
-three companies, then Stage 5's remaining items (drift check,
-`DEPLOYMENT/RUNBOOK.md`, final doc pass) once all four companies are
-done, or continue at Chris's direction.
+Chris confirmed the drag/drop rewrite live on 2026-09-23 (D-098).
+
+**2026-09-23 → 2026-10-13 — field and sales work driven by real use**
+(backfilled 2026-10-19; see BUILD-LOG "Backfilled entries" and D-100–D-111):
+visit status tracking + dispatch status colors (migration 029), Sales CRM
+live for Chris O with sales-only lockdown and a cross-company overview,
+occupied release forms gating scheduling (030), extraction per-piece retrieval
++ dry confirmation (031), the card-payments design addendum, and a run of
+sales features from Chris O's field use (032–038): visit-driven wizard, card
+photos, visit log, rehab prospects, price-list requests, sales holds,
+customer intake wizard, business-day follow-ups, and making sales email
+failures visible. The real cause of "price list requests not landing" was an
+unclosed template block (D-111), not email delivery.
+
+## Open items as of 2026-10-19 (from the D-112 audit)
+
+**Needs Chris's decision or input:**
+1. **Backups.** No DB backup since 2026-09-23 (`~/db-backups/`), and no
+   scheduled backup at all, while migrations 029–038 have gone in and real
+   sales/field data now lives in the system. `~/docker/fieldkit-prod/uploads/`
+   (signed release forms, card photos) isn't backed up either. Recommend a
+   nightly `pg_dump` of all four DBs + uploads, added to cron.
+2. ServiceFusion cutover import for Kleanit Charlotte, CTS, Kleanit SF —
+   waiting on their exports.
+3. Company settings fields (legal names, remit-to, reply-to/alert emails);
+   scheduled alerts still **off** for all four companies.
+4. Card payments: processor choice, plus the open items in D-104.
+5. Whether existing customers can be rehab-flagged (D-106/D-110).
+6. `import_job_dates.py --commit` still on hold (Increment 3.3).
+
+**Engineering debt (no decision needed, just work):**
+7. No committed smoke tests for anything since 2026-09-23. The checks that
+   were run were ad-hoc and weren't saved, so the 28-file suite covers none
+   of migrations 029–038. The suite was also not re-run during this audit.
+8. `docs/DATABASE-SCHEMA.md` (2026-02-10) is missing ~40 of the 54 live
+   tables; `docs/SALES-SYSTEM.md` (2026-02-10) predates the whole October
+   sales redesign. The migration files are the accurate schema record
+   until these are rewritten.
+9. Stage 5 remainder: `DEPLOYMENT/RUNBOOK.md` (partly started as
+   `DEPLOYMENT/fieldkit-prod-server.md`), final doc pass.
+10. The ~30 single-origin routes not converted to `return_to` (D-099).
 
 Decisions Chris has already made for this build (delinquent threshold = 90 days past
 invoice date, FL tax left empty/exempt for Kleanit SF, SF-import receivables excluded
@@ -280,10 +315,14 @@ progress (migration numbers, commit hashes, smoke results) is in
 `docs/BUILD-LOG-2026-09.md`.
 
 ## Known data quirk (not a bug, just worth knowing)
-`fieldkit_getagrip.users` has 7 rows; the `users` tables in the other three DBs have 0.
-Login only ever reads `getagrip`'s copy, and nothing else has a foreign key into a
-per-company `users` table, so this doesn't break anything today. Full detail in
-`CLAUDE.md` and `docs/DECISIONS-MADE-DURING-BUILD.md` D-003.
+`fieldkit_getagrip.users` has 8 rows; the other three DBs have 1 each (as of
+2026-10-19). The 7 original users were seeded into getagrip only; the one user
+created since (`braulio o`, 2026-09-22) went through `write_to_all_dbs()` and
+landed everywhere, with different `id`s per DB (120 in GAG, 113 in CTS). Login only
+ever reads `getagrip`'s copy, and the three tables that FK to `users.id`
+(`user_company_dispatch`, `user_sessions`, `password_reset_tokens`) are likewise
+only read/written in getagrip, so this doesn't break anything today. Full detail in `CLAUDE.md` and
+`docs/DECISIONS-MADE-DURING-BUILD.md` D-003.
 
 ## Where things live
 See `CLAUDE.md`'s pointer table for the doc map. `docs/FIELDKIT_BUILD_DIRECTIVE_2026-09.md`
@@ -291,4 +330,5 @@ is the authoritative work plan for this build; where it disagrees with an older 
 doc, the directive wins (disagreements are catalogued in
 `docs/FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md`).
 
-*Last commit at time of writing: `48e2085` (2026-09-20).*
+*Last updated 2026-10-19 (documentation audit, D-112). Last code commit covered:
+`71188cc` (2026-10-13).*
