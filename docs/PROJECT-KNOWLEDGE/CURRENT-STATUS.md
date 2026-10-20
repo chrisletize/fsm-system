@@ -296,6 +296,10 @@ unclosed template block (D-111), not email delivery.
 4. Card payments: processor choice, plus the open items in D-104.
 5. Whether existing customers can be rehab-flagged (D-106/D-110).
 6. `import_job_dates.py --commit` still on hold (Increment 3.3).
+6a. **Customer-name flag prefixes** (`**OPS**`, `**NEED NEW BILLING**`, `*FL*` and
+    others): 86 active customers across the four companies, every Kleanit SF
+    customer among them, carried over from ServiceFusion. Proposed cleanup in
+    `docs/sf-reference/SF_MOBILE_APP_ANALYSIS.md` (batch 2); needs Chris's go-ahead.
 
 **Engineering debt (no decision needed, just work):**
 7. Test suite (re-run 2026-10-19, 29 files): **25 pass, 4 fail, all stale tests

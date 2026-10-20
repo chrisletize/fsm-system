@@ -165,6 +165,86 @@ map. Add it when the screenshot arrives.
 
 ---
 
+## Batch 2 (2026-10-20, screenshots 17–19)
+
+### Home screen (menu closed)
+**Screenshot:** `17-home-screen.png`. The same tile grid as `01`, with the
+**Customers** tile visible (it was hidden behind the open menu there).
+
+### My Work: agenda
+**Screenshot:** `18-my-work-agenda-current.png`
+
+**What SF shows:**
+- Header: search icon. Toolbar: list/menu icon and a calendar icon (agenda vs.
+  calendar view), with the title **Agenda**.
+- Tabs: **PAST / CURRENT / FUTURE**.
+- One card per job: a status icon on the left (**STARTED**, a blue play icon;
+  **SCHEDULED**, a green calendar check), then customer name (bold, red), the
+  job's first description line (e.g. "Unit # 21-102 tub-master", "Unit #
+  10-1126-N OCC ******occ release form in gag office …"), Start window
+  ("8:00am – 8:30am"), Duration, Assigned to, Location (full address) and Job #.
+- This account sees **other techs' jobs** too (Christian Cole, Danyal Sherer): an
+  admin view, not "my" work.
+
+**FieldKit today:** `/<company>/myday` is a date picker plus today's assigned jobs:
+time, customer, visit-status pill, address with a Map link, contact phone,
+auto-description, notes for techs, line items, and visit-status buttons. Job
+number and duration aren't shown on the regular job cards. It shows only the
+logged-in tech's own jobs.
+
+**For the mobile app:**
+- Keep the card layout. It's the right density: customer first, unit/work line,
+  arrival window, address. Add **job number** and **duration**, which My Day lacks.
+- Past/Current/Future tabs are a nicer frame than a date picker for a tech.
+  "Current" = today plus anything still open (e.g. a Started job from yesterday).
+- The status icon should be the **visit status** (migration 029), with the job's
+  own status secondary, the same split the dispatch board uses.
+- An admin/manager "everyone's jobs" view is useful (Chris sees all techs here),
+  but keep the default **my jobs only**.
+- Note the description text "OCC ******occ release form in gag office". That's the
+  paper workflow FieldKit already replaced: the OCC token plus the signed form
+  attached to the job (migration 030, D-102). The app should show "Release on
+  file ✓" instead of free-text asterisks.
+
+### Customers list
+**Screenshot:** `19-customers-list.png`
+
+**What SF shows:** a searchable list of customer name plus address. Several names
+carry **flags typed into the name itself**: `**NEED NEW BILLING**Junction 1504`,
+`**OPS**The Weathersby at Station Circle`, `**see notes for billing**Stonesthrow
+Apartments (Greensboro)`, `*FL* Woodsdale Oaks`.
+
+**FieldKit today:** structured equivalents already exist for each of those
+prefixes:
+- `**OPS**` / `**VENDOR**` / `**VENDOR CAFE**` → compliance portals
+  (`customer_compliance_portals`, migration 015)
+- `**NEED NEW BILLING**` / `**see notes for billing**` → billing-contact readiness
+  (the billing page's `no_contact` filter, billing contact flags)
+- `*FL*` → the property belongs to Kleanit South Florida, which has its own database
+
+⚠️ **Data-quality finding: the prefixes came across into FieldKit.** Live count,
+2026-10-20, of active customers whose name starts with `*`:
+
+| Company | Count | Prefixes |
+|---|---|---|
+| Get a Grip | 4 | `*FL*`, `**NEED NEW BILLING**`, `**OPS**`, `**see notes for billing**` |
+| Kleanit Charlotte | 5 | `* FL*` (2), assorted "need new billing" spellings |
+| CTS | 16 | `**OPS**` (9), `**VENDOR**` (4), `**VENDOR CAFE**`, `**ops**`, `**need billing info**` |
+| Kleanit SF | 61 | `*FL*` (58), `**FL**` (3); **every customer** |
+
+They clutter search, sort to the top of lists, and duplicate (or contradict) the
+structured fields. A one-off cleanup would strip each prefix, set the matching
+structured field (portal enrolment, billing-contact follow-up), and keep the
+original name in the audit trail. For the Florida ones in the Charlotte companies'
+lists, confirm whether they belong in Kleanit SF instead. **Not done; needs Chris's
+go-ahead.** Listed as an open item in CURRENT-STATUS.
+
+**For the mobile app:** a customer list for techs is only their own jobs' customers
+(D-091 scoping). Show structured badges ("OPS portal", "Billing info needed") instead
+of name prefixes.
+
+---
+
 ## Running list: decisions this reference raises for Chris
 
 1. Time clock (Clock In/Out, Time Log): wanted, or skip?
@@ -174,3 +254,6 @@ map. Add it when the screenshot arrives.
 5. Company reference library (colour charts): build on the web now, or wait for
    the app?
 6. Inventory / barcode scanning: skip?
+7. Should managers/admins get an "everyone's jobs" view in the app, alongside my jobs?
+8. Clean up the `**OPS**` / `**NEED NEW BILLING**` / `*FL*` prefixes in 86 FieldKit
+   customer names (batch 2)?
