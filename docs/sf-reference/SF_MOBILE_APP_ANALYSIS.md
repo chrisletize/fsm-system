@@ -148,15 +148,16 @@ showing their live location, e.g. "CL" near Cornelius.
 **FieldKit today:** none.
 
 **For the mobile app:**
-- ⚠️ **This conflicts with a principle already written down.** FieldKit's mobile
-  designs say **one-shot location, never continuous tracking**
-  (`FIELDKIT_DESIGN_ADDENDUM_mobile-afterhours-extraction.md`, MOBILE-APP-BACKLOG),
-  for battery, privacy and App Review reasons. A live team map needs continuous
-  background location.
-- A middle ground that fits the principle: show each tech's **last known position
-  from their own actions**, such as where they tapped On The Way / Started /
-  Completed (visit status, migration 029) or arrival detection, with a timestamp
-  ("at Brookside Apts, 11:40"). That answers "where is everyone" without tracking.
+- ⚠️ **This goes further than the location design already written down.**
+  FieldKit's mobile designs rule out a continuous GPS stream and geofencing, and use
+  iOS visit monitoring (arrival/departure events) for work features
+  (`FIELDKIT_DESIGN_ADDENDUM_mobile-afterhours-extraction.md`). A *live* team map
+  needs continuous background location.
+- A middle ground that fits the design: show each tech's **last known position
+  from their own actions and visit events**, such as where they tapped On The Way /
+  Started / Completed (visit status, migration 029) or an arrival the phone
+  detected, with a timestamp ("at Brookside Apts, 11:40"). That answers "where is
+  everyone" without a live stream.
 - **Decision for Chris:** a live map, or last-known-from-activity?
 
 ### Map View
@@ -245,6 +246,98 @@ of name prefixes.
 
 ---
 
+## Batch 3 (2026-10-20, screenshots 20–30): job detail, status, edit forms
+
+*Chris: "that's all of the screens I can access in the service fusion mobile app."
+This completes the reference. The consolidated plan, which merges these notes with
+everything FieldKit already intends for the app, is `docs/MOBILE-APP-PLAN.md`.*
+
+### Job detail
+**Screenshots:** `21-job-detail-notes-tab.png`, `22-job-detail-docs-tab.png`,
+`23-job-detail-eqpt-tab.png`, `20-job-photos-empty.png`
+
+**What SF shows:**
+- Header: customer name, **Edit**, and a customer link bar under it.
+- Four round action buttons: **info**, **map**, **photo**, **sign**.
+- Fields: Location (full address), Description (Job# plus the first line, "Unit #
+  21-102 tub-master"), **Custom Fields**, **Additional Visits: 0**, **Completion
+  Notes**, Assigned to.
+- Tab bar: **Tasks · Notes · Docs · Eqpt · Invoice**.
+  - Notes: **Notes For Techs** and **Job Notes**, plus **Add Notes**.
+  - Docs: "Stored Documents", **Upload new**.
+  - Eqpt: "No equipment assigned", **Add Equipment** (customer-owned equipment,
+    e.g. HVAC units; not the same as FieldKit's extraction equipment).
+- Photo: "No images yet", **Add new**.
+
+**FieldKit today:** WO detail has notes for techs (`notes_for_techs`), status history,
+the record_audit History panel, attachments (release forms, migration 030), and line
+items with per-unit deployed/retrieved dates for extraction equipment. No job
+photos, no signature capture, no "completion notes" field as such, no custom fields
+on WOs (custom fields exist on customers).
+
+### Invoice tab
+**Screenshots:** `24-job-invoice-tab-charges.png`, `25-job-invoice-tab-actions.png`
+
+**What SF shows:**
+- "Estimated Charges": line items with edit icons ("Unit # 21-102 vacant (1.00)
+  $0.00", "Bathtub Resurface XL-master (1.00) $335.00"), Fees & Discounts, Taxes
+  (**Mecklenburg $27.64**), and a Summary (Line Items, Drive & Labor, Billable
+  Expenses, Fees & Discounts, Taxes, Payments/Deposits, **Total Due $362.64**).
+- Buttons: **Add Line Item** (+ barcode), **Add Time**, **Add Expense**, **Email Job**,
+  **Print Job**, **Apply Deposit**.
+- Notice: "Please complete the job to create an invoice."
+
+**Observations:**
+- The tax matches FieldKit: Mecklenburg is 8.25% in `tax_rates` (4.75 state +
+  3.00 county incl. the 1% additional + 0.50 transit, effective 2026-07-01), and
+  8.25% of $335 is $27.64. A good spot check that the tax engine agrees with SF on
+  a real job.
+- "Unit # 21-102 vacant" is a **$0.00 line item used as a description**: SF had
+  nowhere better to put the unit. FieldKit already has `work_site_label` and the
+  auto-description for that, so no $0 lines are needed.
+- Techs can edit prices and add line items in the field here. In FieldKit, pricing
+  and invoicing are office-side (invoices harden and freeze totals, D-104
+  reasoning).
+
+### Status picker
+**Screenshot:** `26-job-status-picker.png`
+
+**What SF shows:** one picker with **UNSCHEDULED, SCHEDULED, ON THE WAY, ON SITE,
+COMPLETED, CANCELLED**, over a header of date, arrival window and duration.
+
+**FieldKit today:** deliberately **two** state machines (D-100): the job's own status
+(office-controlled) and the tech's **visit status** (On The Way / Started / Completed
+/ Cancelled, per tech, migration 029). SF mixes them into one list, which is exactly
+the problem D-100 solved (a "completed" daily extraction check must not close the
+job). SF says **"On Site"** where FieldKit says **"Started"**. Worth deciding which
+word the techs prefer.
+
+### Edit job
+**Screenshots:** `27-job-edit-top.png`, `28-job-edit-lower.png`
+
+**What SF shows:** Customer, Service Location, Date & Arrival Time Window (dropdowns),
+Job Duration (Hr / Min text boxes), Referral Source, Job Description, **Save Job**.
+The same fields as Create Job (batch 1).
+
+### Edit customer
+**Screenshots:** `29-customer-edit-top.png`, `30-customer-edit-lower.png`
+
+**What SF shows:** Customer Name, PrimaryContact (first/last), Email, Mobile, a second
+Email/Mobile, Referral Source, Customer Custom Fields, **Public/Work Order Notes**,
+**Save**.
+
+**Observations:**
+- The primary contact for "Legacy Cornelius Apartment Homes" is first name
+  "Legacy", last name "Cornelius Apartment": the property name split in two, not a
+  person. The email `GCIAP@AVIDBILL.COM` is an **AvidBill accounts-payable
+  inbox**, i.e. a billing portal address rather than a contact. FieldKit models
+  this properly (billing-flagged contacts, compliance portals), so the app should
+  show **contacts** and **billing** separately, and techs shouldn't edit billing data.
+- Customer editing from the phone: FieldKit techs are read-only on customers (D-091).
+  Keep that.
+
+---
+
 ## Running list: decisions this reference raises for Chris
 
 1. Time clock (Clock In/Out, Time Log): wanted, or skip?
@@ -257,3 +350,7 @@ of name prefixes.
 7. Should managers/admins get an "everyone's jobs" view in the app, alongside my jobs?
 8. Clean up the `**OPS**` / `**NEED NEW BILLING**` / `*FL*` prefixes in 86 FieldKit
    customer names (batch 2)?
+9. Can techs add or price line items in the field, or is that office-only (batch 3)?
+10. "Started" or "On Site" as the visit-status word?
+
+*All of these are carried into the discussion agenda in `docs/MOBILE-APP-PLAN.md`.*

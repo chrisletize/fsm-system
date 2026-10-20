@@ -325,6 +325,12 @@ auto-ties to an existing customer/prospect by address (D-115). Designed in
 `docs/FIELDKIT_DESIGN_ADDENDUM_sales-tip-location-assistant.md`. Everything else
 waiting on the mobile app is indexed in `docs/MOBILE-APP-BACKLOG.md`.
 
+**Mobile app planning (2026-10-20):** `docs/MOBILE-APP-PLAN.md` merges every earlier
+mobile requirement with 30 ServiceFusion app screens (`docs/sf-reference/`) into one
+feature catalogue, a proposed v1, and a discussion agenda. Nothing built yet; next is
+the design discussion with Chris. A Mac mini on Tailscale is now available for iOS
+builds.
+
 Decisions Chris has already made for this build (delinquent threshold = 90 days past
 invoice date, FL tax left empty/exempt for Kleanit SF, SF-import receivables excluded
 from the tax report) are in `docs/DECISIONS-MADE-DURING-BUILD.md` D-001. Every other

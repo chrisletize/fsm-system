@@ -172,7 +172,7 @@ This file is a map, not the territory. For anything deeper:
 | Day-to-day working process (read-before-edit, curl-before-frontend, nano for multi-line edits) | `docs/DEVELOPMENT_WORKFLOW.md` |
 | Sales CRM / prospect pipeline design (original Feb 2026 design; October changes are in D-101, D-105–D-111) | `docs/SALES-SYSTEM.md` |
 | Design addenda (catalog/equipment, worksite/double-booking, duration/rating, mobile after-hours extraction, reconciliation framework, visit-status tracking, card payments, sales-tip location assistant) | `docs/FIELDKIT_DESIGN_ADDENDUM_*.md` |
-| **Everything deferred to the mobile app** (start here when Phase 6 begins; add to it when deferring anything) | `docs/MOBILE-APP-BACKLOG.md` |
+| **Mobile app**: consolidated plan + discussion agenda (start here), and the index of everything deferred to it (add to it when deferring anything) | `docs/MOBILE-APP-PLAN.md`, `docs/MOBILE-APP-BACKLOG.md` |
 | Full v2 system design | `docs/FIELDKIT_COMPLETE_SYSTEM_DESIGN_v2.md` |
 | Session-by-session history | `docs/FIELDKIT_SESSION_*.md`, `docs/SESSION_NOTES_*.md`, `docs/PROJECT-KNOWLEDGE/` |
 | Reusable patterns extracted from past sessions | `docs/FIELDKIT_REUSABLE_BRICKS.md` |

@@ -1766,3 +1766,20 @@ compared NULL < today. It now shows a "No date" badge.
 DBs after a fresh backup (`2026-10-20T1542Z`); schemas still identical.
 **Tests:** new `tests/smoke_sales_tips.py` (43 checks, Resend monkey-patched).
 Full suite 26/30; the same 4 stale tests fail at the same assertions as before.
+
+## 2026-10-20 — Mobile app reference and consolidated plan (docs only)
+
+**What:** Chris shared 30 screenshots of the ServiceFusion iPhone app (three batches),
+saved under `docs/sf-reference/mobile-app/screenshots/` and analysed screen by screen
+in `docs/sf-reference/SF_MOBILE_APP_ANALYSIS.md`. `docs/MOBILE-APP-PLAN.md` merges
+those notes with every mobile requirement in the January–October planning docs and
+addenda: principles, users, platform/infrastructure (native required; Mac mini for
+iOS builds; the JSON API, device tokens and push the server will need), a feature
+catalogue tagged v1/v2/later/decide/skip, a proposed v1, new data needed, and a
+discussion agenda. While merging, a wrong claim was corrected in three docs: the
+location principle had been written as "one-shot, never tracking", but the
+after-hours design actually uses background iOS visit monitoring (and explicitly
+rejects geofencing). Findings along the way: SF's Mecklenburg tax on a real job
+($27.64 on $335) matches FieldKit's 8.25% rate; 86 FieldKit customers still carry SF
+name-flag prefixes (open item 6a).
+**Migration:** none. **Code:** none.

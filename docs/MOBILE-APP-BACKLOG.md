@@ -1,6 +1,7 @@
 # FieldKit Mobile App — Backlog Index
 
-*Start here when mobile app development begins. Created 2026-10-20.*
+*Index of ideas deferred to the mobile app. Created 2026-10-20. For the consolidated
+plan and discussion agenda, start with `MOBILE-APP-PLAN.md`.*
 
 Ideas meant for the mobile app (Phase 6) have been filed in several docs over
 time. This page lists every one of them in one place, with a pointer to where
@@ -33,18 +34,24 @@ are what the app should talk to.
 
 ## ServiceFusion app reference
 
-Chris shared screenshots of the ServiceFusion mobile app (2026-10-20, more to come)
+Chris shared screenshots of the ServiceFusion mobile app (2026-10-20, three batches)
 as a feature reference. Notes, FieldKit equivalents, and decisions they raise are in
 `sf-reference/SF_MOBILE_APP_ANALYSIS.md`; images are in
-`sf-reference/mobile-app/screenshots/`. Notable items: a company reference library
-(Get a Grip's colour charts and mixing instructions), and a live team map that
-conflicts with the one-shot-location principle below.
+`sf-reference/mobile-app/screenshots/` (30 screens, complete). Notable items: a
+company reference library (Get a Grip's colour charts and mixing instructions), and a
+live team map, which raises the location-visibility decision below.
+
+**Everything here, plus the SF reference, is merged into `MOBILE-APP-PLAN.md`, the
+starting point for the mobile design discussion.**
 
 ## Shared principles across these designs
 
-- **One-shot location, never continuous tracking.** Visit monitoring for
-  arrival/departure, and a single reading when a tip is made. This matters for
-  battery, privacy and App Review alike.
+- **No continuous GPS stream, no geofencing.** Background iOS visit monitoring
+  (`CLVisit`) for arrival/departure-driven features, which is fuzzy by minutes and
+  never bills on its own; a single foreground reading for one-off actions like a
+  sales tip. Disclosed honestly to techs. Why: battery, privacy, App Review, and
+  iOS's ~20-region geofence cap (detail in the after-hours addendum). How much
+  managers can see is an open decision (`MOBILE-APP-PLAN.md` §9 A1).
 - **The phone proposes, the office (or the tech) confirms.** Nothing captured
   automatically becomes a billable record or a silent property match without a
   person confirming it.

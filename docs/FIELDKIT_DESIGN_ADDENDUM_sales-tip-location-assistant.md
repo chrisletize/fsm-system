@@ -187,8 +187,9 @@ free-text tips prove hard for the salesman in practice.
 ## Dependencies & cross-references
 
 - **Sales tips** (migration 039, D-115): the table and flow this extends.
-- **Mobile after-hours extraction addendum**: the same one-shot,
-  no-tracking location principle.
+- **Mobile after-hours extraction addendum**: the overall location design (no
+  continuous GPS, no geofencing, background visit monitoring for work events); a tip
+  only needs a single foreground reading.
 - **Visit-status tracking addendum**: the other GPS features deferred to the
   native app.
 - `customer_dupe_check()` in `app.py`: the normalized-address SQL to reuse.
