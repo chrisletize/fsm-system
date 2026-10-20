@@ -1,0 +1,176 @@
+# ServiceFusion Mobile App — FieldKit Reference
+*Documented: October 20, 2026 | Source: iPhone screenshots of the ServiceFusion app shared by Chris*
+*Purpose: Functional reference for the FieldKit mobile app (Phase 6). Same approach as
+`SF_SCREEN_ANALYSIS.md`: adapt and improve, don't copy pixel for pixel.*
+
+Screenshots are saved in `mobile-app/screenshots/`, numbered in the order Chris
+shared them, so they never need re-sharing. **More batches are coming** (16 photos
+per message limit); add them here as `17-…`, `18-…` and keep the numbering going.
+
+For each screen:
+- **What SF shows**: data, actions and layout observed
+- **FieldKit today**: what already exists on the web, with route or table
+- **For the mobile app**: what to build, improvements, open questions
+
+Index of everything waiting on the mobile app: `docs/MOBILE-APP-BACKLOG.md`.
+
+---
+
+## Batch 1 (2026-10-20, screenshots 01–16)
+
+### Home screen
+**Screenshot:** `01-home-menu-open.png` (also visible behind `15`)
+
+**What SF shows:**
+- Header bar: **Refresh**, connection state (**Online**), hamburger menu.
+- Menu: **Logout**, **My Profile**, **Time Log**.
+- Tile grid: **My Work**, **Customers**, **Map View**, **My Team**, **Catalogs**,
+  **Create New**, **Inventory**, **FusionDrive**.
+- Small red corner triangles on the Catalogs and Create New tiles (meaning not
+  known from the screenshot).
+- Bottom: "last Clocked Out at 05/22/2024 02:03 pm" and a big green **Clock In**
+  button.
+
+**FieldKit today:** My Work ≈ `/<company>/myday`. Customers: techs have read-only
+access scoped to their own jobs' customers (`_technician_customer_ids()`, D-091). No
+clock in/out or time log.
+
+**For the mobile app:**
+- An explicit **Online/Offline** indicator plus Refresh fits the offline-first plan
+  (PHASE-1-PLANNING). Show it the same way.
+- Keep the home screen to what techs actually use. Of these 8 tiles, check with
+  the techs which ones they touch; this account's last clock-out was May 2024,
+  which suggests clock-in may not be used at all at Get a Grip.
+- Add FieldKit-specific tiles SF doesn't have: **📣 Sales tip** (D-115) and
+  **Extraction follow-ups** (non-GAG companies).
+- **Open question:** is time clock (clock in/out, time log) wanted? It's listed in
+  `FIELDKIT_TASKS.md` Phase 6, but nothing is built and it touches payroll.
+
+### Create New: Job / Estimate / Calendar Task
+**Screenshots:** `15-create-new-menu.png`, `14-create-job-top.png`,
+`13-create-job-lower.png`, `12-create-estimate-top.png`,
+`11-create-estimate-lower.png`, `10-create-calendar-task.png`
+
+**What SF shows:**
+- A modal with three choices: **Job**, **Estimate**, **Calendar Task**.
+- **Create Job** and **Create Estimate** are the same form: Customer → Service
+  Location → Date & Arrival Time Window (date, start, end) → Job Duration (hr/min
+  pickers) → Job Description → (Job) Category → Referral Source → **Dispatch &
+  Settings**.
+- **Create Task:** type toggle **Call / Email / Misc**, Start and End
+  date/time, **Assigned To** (defaults to the current user), Description,
+  **Everyone can see this task**, **Complete**.
+
+**FieldKit today:** the WO form (`/<company>/workorders/new`) has customer, service
+location, start date, arrival window (`arrival_window_start/_end`, migration 005),
+duration (with the catalog-duration estimate) and auto-description. `job_source`
+(Phone/Email/Website/Referral/Salesperson) is the equivalent of Referral Source.
+Estimates: `/<company>/estimates/new` (migration 021). Calendar tasks ≈
+**internal tasks** (`is_internal_task`, migration 019): customer-less WOs with a
+Task Details field, shown on the dispatch board.
+
+**For the mobile app:**
+- Field techs creating jobs and estimates on the phone: **decide who may**. Today
+  the web WO form is office-side, and techs are read-only on customers (D-091).
+- **Job Category** has no FieldKit equivalent on work orders. FieldKit's catalog
+  has a category, and the auto-description already says what the job is. Probably
+  not needed; confirm.
+- The task type (Call/Email/Misc) and "Everyone can see" have no equivalent on
+  internal tasks. Overlaps with sales tips (D-115), which already cover "remind the
+  salesman". Decide whether tasks need types at all.
+- Improvement: the phone form should reuse the WO form's live catalog-duration
+  estimate and the double-booking warning rather than plain hr/min pickers.
+
+### Catalogs
+**Screenshots:** `08-catalogs-root.png`, `06-catalogs-products.png`,
+`07-catalogs-services.png`
+
+**What SF shows:**
+- Root: **Products** and **Services**.
+- Each has a search box with a **barcode scanner** button, category tiles
+  (Products: Discount, Non-inventory Part, QBO Product, Service; Services: Discount,
+  QBO Service, Service), then the items with photo, name, description and price.
+  Every price shown is **$0.00**.
+- "Create" on Products: techs can add catalog items from the phone.
+
+**FieldKit today:** catalog CRUD on the web (`catalog_items`, migration 004); 45
+real GAG items imported from ServiceFusion (D-093). No item photos, no barcodes.
+
+**For the mobile app:**
+- A **read-only catalog browser** is enough for techs. Creating catalog items
+  stays office-side; SF letting techs create them is likely how junk items like
+  "products used" at $0.00 got in.
+- The $0.00 prices suggest SF's catalog was never priced, and the QBO categories
+  are QuickBooks sync leftovers. Don't copy those categories.
+- Barcode scanning: only worth it if real inventory tracking is wanted (below).
+
+### Inventory
+**Screenshot:** `09-inventory-levels.png`
+
+**What SF shows:** "Inventory Levels" with a Search dropdown — **No results found**.
+
+**FieldKit today:** no stock inventory; the equipment registry (`equipment_units`)
+tracks extraction equipment units, which is a different thing.
+
+**For the mobile app:** empty in SF, so evidently unused. **Skip** unless Chris
+wants stock tracking (materials, colour kits) later.
+
+### FusionDrive (files)
+**Screenshots:** `05-fusiondrive-root.png`, `03-fusiondrive-company-files.png`,
+`04-fusiondrive-my-files.png`, `02-fusiondrive-shared-with-me.png`
+
+**What SF shows:**
+- Three folders: **My Files**, **Company Files**, **Shared With Me**.
+- Company Files has four PDFs, all uploaded 02/06/2025: **Basic Color Chart.pdf**,
+  **GAG Mixing Instructions.pdf**, **Metallics Color Chart.pdf**, **Premium Color
+  Chart.pdf**, each with a download button.
+- My Files and Shared With Me are empty.
+
+**FieldKit today:** none. File upload infrastructure does exist (`./uploads/`,
+`work_order_attachments`, migration 030).
+
+**For the mobile app:**
+- The real use is a **company reference library**: colour charts and mixing
+  instructions a Get a Grip tech needs on site. Build that: office uploads per-company
+  documents, techs view them offline. Drop "My Files" and "Shared With Me", which
+  are unused.
+- Offline access matters most here: a tech in a basement unit needs the colour
+  chart without signal.
+- Small enough to build on the web first (an office upload page plus a tech
+  "Reference docs" link on My Day) if Chris wants it before the app.
+
+### My Team / Team Locations map
+**Screenshot:** `16-team-locations-map.png`
+
+**What SF shows:** "Team Locations", a map (HERE Maps) with a pin per team member
+showing their live location, e.g. "CL" near Cornelius.
+
+**FieldKit today:** none.
+
+**For the mobile app:**
+- ⚠️ **This conflicts with a principle already written down.** FieldKit's mobile
+  designs say **one-shot location, never continuous tracking**
+  (`FIELDKIT_DESIGN_ADDENDUM_mobile-afterhours-extraction.md`, MOBILE-APP-BACKLOG),
+  for battery, privacy and App Review reasons. A live team map needs continuous
+  background location.
+- A middle ground that fits the principle: show each tech's **last known position
+  from their own actions**, such as where they tapped On The Way / Started /
+  Completed (visit status, migration 029) or arrival detection, with a timestamp
+  ("at Brookside Apts, 11:40"). That answers "where is everyone" without tracking.
+- **Decision for Chris:** a live map, or last-known-from-activity?
+
+### Map View
+*Tile visible on the home screen; screen not yet shared.* Presumably today's jobs on a
+map. Add it when the screenshot arrives.
+
+---
+
+## Running list: decisions this reference raises for Chris
+
+1. Time clock (Clock In/Out, Time Log): wanted, or skip?
+2. Can techs create jobs/estimates from the phone, or only the office?
+3. Calendar task types (Call/Email/Misc): needed, given internal tasks and sales tips?
+4. Team map: live tracking, or last known position from visit-status taps?
+5. Company reference library (colour charts): build on the web now, or wait for
+   the app?
+6. Inventory / barcode scanning: skip?

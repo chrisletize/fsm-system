@@ -31,6 +31,15 @@ are what the app should talk to.
 | GPS reminders with a 10-minute grace window | `FIELDKIT_COMPLETE_SYSTEM_DESIGN_v2.md` (Phase 6) | |
 | Extraction queue mobile view | `FIELDKIT_COMPLETE_SYSTEM_DESIGN_v2.md` (Phase 6) | Extraction section of My Day |
 
+## ServiceFusion app reference
+
+Chris shared screenshots of the ServiceFusion mobile app (2026-10-20, more to come)
+as a feature reference. Notes, FieldKit equivalents, and decisions they raise are in
+`sf-reference/SF_MOBILE_APP_ANALYSIS.md`; images are in
+`sf-reference/mobile-app/screenshots/`. Notable items: a company reference library
+(Get a Grip's colour charts and mixing instructions), and a live team map that
+conflicts with the one-shot-location principle below.
+
 ## Shared principles across these designs
 
 - **One-shot location, never continuous tracking.** Visit monitoring for
