@@ -2166,7 +2166,9 @@ tipster's.
 property details when creating a tip, which auto-ties to an existing customer or
 prospect when the address matches. It extends this table (place_id, lat/lng,
 formatted address) rather than replacing it, and the address match can reuse the
-normalized-address SQL from the double-booking banner (FIELDKIT_REUSABLE_BRICKS).
+normalized-address SQL in `customer_dupe_check()`. Full design:
+`FIELDKIT_DESIGN_ADDENDUM_sales-tip-location-assistant.md`; indexed in
+`MOBILE-APP-BACKLOG.md`.
 Also fixed here: the sales dashboard "All" tab returned a 500 on a follow-up ticked
 with no date (one real row, GAG visit 117). It now shows as "No date".
 

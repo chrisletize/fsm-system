@@ -317,7 +317,9 @@ unclosed template block (D-111), not email delivery.
 10. The ~30 single-origin routes not converted to `return_to` (D-099).
 
 **Future (mobile app):** a Google Maps-assisted location lookup for sales tips that
-auto-ties to an existing customer/prospect by address (D-115).
+auto-ties to an existing customer/prospect by address (D-115). Designed in
+`docs/FIELDKIT_DESIGN_ADDENDUM_sales-tip-location-assistant.md`. Everything else
+waiting on the mobile app is indexed in `docs/MOBILE-APP-BACKLOG.md`.
 
 Decisions Chris has already made for this build (delinquent threshold = 90 days past
 invoice date, FL tax left empty/exempt for Kleanit SF, SF-import receivables excluded

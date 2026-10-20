@@ -110,6 +110,8 @@
 - [ ] Before/after photo upload (target 2–5 sec vs ServiceFusion ~30 sec)
 - [ ] Offline-first architecture
 - [ ] iOS after-hours capture via CLVisit (design addendum exists)
+- [ ] Sales tip location assistant: Google Maps property lookup, auto-tie to existing customer/prospect (`FIELDKIT_DESIGN_ADDENDUM_sales-tip-location-assistant.md`)
+- Full list of everything deferred to the app: `docs/MOBILE-APP-BACKLOG.md`
 
 ### Designed, not built
 - [ ] Customer rating system (A–F composite) — addendum exists
