@@ -57,10 +57,10 @@
     {% for r in overdue %}
     <div class="visit-item">
         <span class="visit-company-dot" style="background:{{ r.company_color }};"></span>
-        <span class="visit-name">{{ r.property_name or 'Unknown property' }}</span>
+        <span class="visit-name">{% if r.is_tip %}🔥 {% endif %}{{ r.property_name or 'Unknown property' }}</span>
         <div class="visit-sub">
             {{ r.company_name }}{% if r.visit_tag %} · {{ r.visit_tag }}{% endif %} · due {{ r.follow_up_date.strftime('%b %-d') }}
-            · <a href="/{{ r.company_key }}/sales/visits/log?property_type={{ r.property_type }}&property_id={{ r.property_id }}" style="color:{{ r.company_color }};">Log Visit</a>
+            · <a href="{{ r.log_url }}" style="color:{{ r.company_color }};">Log Visit</a>
         </div>
     </div>
     {% endfor %}
@@ -74,10 +74,10 @@
         {% for r in day.visits %}
         <div class="visit-item">
             <span class="visit-company-dot" style="background:{{ r.company_color }};"></span>
-            <span class="visit-name">{{ r.property_name or 'Unknown property' }}</span>
+            <span class="visit-name">{% if r.is_tip %}🔥 {% endif %}{{ r.property_name or 'Unknown property' }}</span>
             <div class="visit-sub">{{ r.company_name }}{% if r.visit_tag %} · {{ r.visit_tag }}{% endif %}</div>
             <div class="visit-sub">
-                <a href="/{{ r.company_key }}/sales/visits/log?property_type={{ r.property_type }}&property_id={{ r.property_id }}" style="color:{{ r.company_color }};">Log Visit</a>
+                <a href="{{ r.log_url }}" style="color:{{ r.company_color }};">Log Visit</a>
             </div>
         </div>
         {% else %}

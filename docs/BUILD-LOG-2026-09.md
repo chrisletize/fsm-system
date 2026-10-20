@@ -1743,3 +1743,26 @@ suite: 25 of 29 pass. The 4 failures (`smoke_dashboard`, `smoke_extraction`,
 `smoke_permissions`, `smoke_sales_crm`) fail identically on the pre-change code;
 they are stale tests from D-100/D-101/D-103/D-109 (see CURRENT-STATUS). Deployed
 with `docker compose restart app`; host/container md5 match.
+
+## 2026-10-20 — Sales tips (D-115)
+
+**What:** anyone (techs especially) can send the salesman a "hot tip", e.g. a
+property doing a rehab with cabinet work. `/<company>/sales/tips/new` is open to
+every role. My Day has "📣 Send a sales tip" plus "📣 Sales tip about this
+property" on each job, which pre-fills the job's customer; the sales dashboard and
+follow-ups page have "+ Hot Tip". The property is optional: a free-text location
+is enough (Chris's option b) and gets tied to the real property when the salesman
+logs the visit. Tips list first on the dashboard Follow-Ups card (same
+Today/3/7/All window), the follow-ups page, `/sales-overview` and the company
+dashboard count, and they get a section in the Monday report. Sales holds hide
+them. A new tip emails the office, Michael and the salesperson (logged as
+`email_log` kind `sales_tip`, HTML-escaped; a failed send is surfaced). Logging a
+visit from the tip closes it, and so does any visit to the same property.
+"Dismiss" needs a reason.
+**Also fixed:** the sales dashboard's "All" tab returned a 500 for Get a Grip. One
+real follow-up (visit 117, 2026-10-12) was ticked with no date, and the loop
+compared NULL < today. It now shows a "No date" badge.
+**Migration:** 039 (`sales_tips`, `email_log` kind widened). Applied to all four
+DBs after a fresh backup (`2026-10-20T1542Z`); schemas still identical.
+**Tests:** new `tests/smoke_sales_tips.py` (43 checks, Resend monkey-patched).
+Full suite 26/30; the same 4 stale tests fail at the same assertions as before.

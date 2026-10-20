@@ -20,6 +20,8 @@
     .badge-today { background:#fff3d6; color:#8a6100; }
     .badge-upcoming { background:#eaf1fb; color:#2d5a92; }
     .badge-dormant { background:#f1efe8; color:#5f5e5a; }
+    .badge-tip { background:#ffe8d1; color:#9a4d00; }
+    .tip-notes { font-size:.82rem; color:#555; margin-top:.15rem; white-space:pre-line; }
     .empty { color:#aaa; padding:1rem 0; text-align:center; font-size:.9rem; }
     .quick-actions { display:flex; gap:.75rem; flex-wrap:wrap; margin-bottom:1.5rem; }
     /* The primary action, sized for a thumb on a tablet rather than a mouse. */
@@ -78,6 +80,7 @@
     <a href="/{{ company_key }}/sales/contacts" class="btn btn-outline">Contacts</a>
     <a href="/{{ company_key }}/sales/visits" class="btn btn-outline">Visit Log</a>
     <a href="/{{ company_key }}/sales/followups" class="btn btn-outline">Follow-Ups</a>
+    <a href="/{{ company_key }}/sales/tips/new" class="btn btn-outline">🔥 + Hot Tip</a>
     <a href="/{{ company_key }}/sales/prospects/new" class="btn btn-outline">+ Prospect (no visit)</a>
     <a href="/{{ company_key }}/sales/contacts/new" class="btn btn-outline">+ Contact (no visit)</a>
 </div>
@@ -173,7 +176,7 @@
 <div class="sales-grid">
     <div class="card">
         <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:.5rem; margin-bottom:.9rem;">
-            <h2 style="margin-bottom:0;">Follow-Ups ({{ followups|length }})</h2>
+            <h2 style="margin-bottom:0;">Follow-Ups ({{ followups|length + tips|length }})</h2>
             <div class="window-tabs">
                 <a href="?window=0" class="window-tab {% if window == '0' %}active{% endif %}">Today</a>
                 <a href="?window=3" class="window-tab {% if window == '3' %}active{% endif %}">3 days</a>
@@ -181,6 +184,25 @@
                 <a href="?window=all" class="window-tab {% if window == 'all' %}active{% endif %}">All</a>
             </div>
         </div>
+        {# Sales tips first (D-115): someone spotted something and nobody has been yet. #}
+        {% for t in tips %}
+        <div class="row-item">
+            <div>
+                <div class="row-name"><span class="badge badge-tip">🔥 TIP</span> {{ t.label }}</div>
+                <div class="tip-notes">{{ t.notes }}</div>
+                <div class="row-sub">from {{ t.created_by }} · {{ t.created_at.strftime('%b %-d') }}</div>
+            </div>
+            <div style="display:flex; align-items:center; gap:.5rem;">
+                <span class="badge {% if t.is_overdue %}badge-overdue{% elif t.days_until == 0 %}badge-today{% else %}badge-upcoming{% endif %}">
+                    {% if t.is_overdue %}Overdue
+                    {% elif t.days_until == 0 %}Today
+                    {% elif t.days_until == 1 %}Tomorrow
+                    {% else %}In {{ t.days_until }} days{% endif %}
+                </span>
+                <a href="{{ t.log_url }}" class="btn btn-primary" style="padding:.4rem .8rem; font-size:.82rem;">Log Visit</a>
+            </div>
+        </div>
+        {% endfor %}
         {% for f in followups %}
         <div class="row-item">
             <div>
@@ -190,6 +212,7 @@
             <div style="display:flex; align-items:center; gap:.5rem;">
                 <span class="badge {% if f.is_overdue %}badge-overdue{% elif f.days_until == 0 %}badge-today{% else %}badge-upcoming{% endif %}">
                     {% if f.is_overdue %}Overdue
+                    {% elif f.days_until is none %}No date
                     {% elif f.days_until == 0 %}Today
                     {% elif f.days_until == 1 %}Tomorrow
                     {% else %}In {{ f.days_until }} days{% endif %}
@@ -199,7 +222,7 @@
             </div>
         </div>
         {% else %}
-        <div class="empty">Nothing due — you're caught up.</div>
+        {% if not tips %}<div class="empty">Nothing due — you're caught up.</div>{% endif %}
         {% endfor %}
     </div>
 

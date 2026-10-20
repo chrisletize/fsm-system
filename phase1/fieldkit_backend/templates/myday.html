@@ -64,7 +64,12 @@
    started.</p>
 <p>You'll only ever see jobs connected to you.</p>
 {% endcall %}
-<div class="page-header"><h1>My Day</h1></div>
+<div class="page-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:.5rem;">
+    <h1>My Day</h1>
+    {# Sales tips (D-115): techs see more properties than anyone, so the
+       salesman hears about rehabs, new buildings, etc. from them first. #}
+    <a class="btn btn-outline" href="/{{ company_key }}/sales/tips/new?return_to={{ ('/' + company_key + '/myday?date=' + target_date)|urlencode }}">📣 Send a sales tip</a>
+</div>
 
 <form method="GET" class="controls">
     <label>Date <input type="date" name="date" value="{{ target_date }}"></label>
@@ -108,6 +113,10 @@
         </ul>
         {% endif %}
         <div class="visit-pill">Visit: {{ j.my_visit_status.status if j.my_visit_status else 'Not started' }}</div>
+        <div style="margin-top:.5rem;">
+            <a href="/{{ company_key }}/sales/tips/new?wo={{ j.id }}&return_to={{ ('/' + company_key + '/myday?date=' + target_date)|urlencode }}"
+               style="font-size:.85rem; font-weight:600;">📣 Sales tip about this property</a>
+        </div>
     </div>
 
     {% if j.actionable %}

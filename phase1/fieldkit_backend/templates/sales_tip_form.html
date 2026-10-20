@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% block title %}Sales Tip — {{ branding.name }}{% endblock %}
+
+{#
+  Sales tip (D-115, Chris 2026-10-20). Anyone can send one -- techs from My Day
+  are the main source. Kept to three things a tech can fill in standing in a
+  parking lot: where, what they saw, and (optionally) when. The property is
+  optional for now: if it isn't a known customer/prospect, a free-text location
+  is enough and the salesman ties it to a real property when he logs the visit.
+#}
+
+{% block extra_css %}
+<style>
+    .page-header { margin-bottom:1.25rem; }
+    .page-header h1 { font-size:1.6rem; color:{{ branding.color_primary }}; }
+    .sub { color:#888; font-size:.9rem; margin-top:.2rem; }
+    .form-group { display:flex; flex-direction:column; gap:.4rem; margin-bottom:1.1rem; }
+    .form-group label { font-size:.9rem; font-weight:600; color:#555; }
+    input[type=text], input[type=date], textarea {
+        padding:.75rem .9rem; border:1px solid #ddd; border-radius:6px; font-size:1rem; font-family:inherit;
+    }
+    textarea { min-height:110px; }
+    .hint { color:#888; font-size:.82rem; font-weight:400; }
+    .btn { display:inline-block; padding:.8rem 1.4rem; border-radius:6px; text-decoration:none;
+           font-weight:600; cursor:pointer; border:none; font-size:1rem; min-height:46px; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-secondary { background:#6c757d; color:white; }
+    .flash.error { background:#fee; color:#c33; border:1px solid #fcc; padding:.8rem 1rem; border-radius:4px; margin-bottom:1.25rem; }
+    .chosen { background:#eef5ee; border:1px solid #cfe0cf; border-radius:6px; padding:.75rem .9rem;
+              display:flex; justify-content:space-between; align-items:center; gap:.5rem; }
+    .chosen .name { font-weight:600; }
+    .chosen button { background:none; border:none; color:{{ branding.color_primary }};
+                     text-decoration:underline; cursor:pointer; font-size:.85rem; }
+    .checkbox-row { display:flex; align-items:center; gap:.6rem; font-weight:500; }
+    .checkbox-row input { width:20px; height:20px; }
+    .ac-wrap { position:relative; }
+    .ac-panel { display:none; position:absolute; top:100%; left:0; right:0; background:white; border:1px solid #ddd;
+                border-radius:4px; max-height:240px; overflow-y:auto; z-index:20; box-shadow:0 4px 10px rgba(0,0,0,.08); }
+    .ac-panel.open { display:block; }
+    .ac-item { padding:.65rem .75rem; cursor:pointer; font-size:.95rem; }
+    .ac-item:hover { background:#f5f5f5; }
+    .form-actions { display:flex; gap:.75rem; margin-top:1.25rem; flex-wrap:wrap; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>🔥 Sales Tip</h1>
+    <div class="sub">Spotted something the salesman should follow up on? A rehab, new construction,
+        a property unhappy with their vendor. It goes on his follow-up list and he gets an email.</div>
+</div>
+
+{% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+
+<form method="POST" class="card" id="tipForm">
+    <input type="hidden" name="return_to" value="{{ back_url }}">
+    {% if source_wo_id %}<input type="hidden" name="source_work_order_id" value="{{ source_wo_id }}">{% endif %}
+    <input type="hidden" name="property_type" id="propType"
+           value="{{ form.get('property_type') or prefill.property_type or '' }}">
+    <input type="hidden" name="property_id" id="propId"
+           value="{{ form.get('property_id') or prefill.property_id or '' }}">
+
+    <div class="form-group">
+        <label>Where?</label>
+        {% if prefill.property_name %}
+        <div class="chosen" id="prefillBox">
+            <span class="name">{{ prefill.property_name }}
+                {% if prefill.wo_number %}<span class="hint">· this job ({{ prefill.wo_number }})</span>{% endif %}
+            </span>
+        </div>
+        <label class="checkbox-row" style="margin-top:.4rem;">
+            <input type="checkbox" name="different_property" id="differentProperty"
+                   {% if form.get('different_property') %}checked{% endif %}>
+            It's a different property
+        </label>
+        {% elif is_sales %}
+        {# Office and the salesman can search known customers/prospects. #}
+        <div class="ac-wrap" id="searchWrap">
+            <input type="text" id="propSearch" autocomplete="off" placeholder="Search customers and prospects…">
+            <div class="ac-panel" id="propPanel"></div>
+        </div>
+        <div class="chosen" id="chosenBox" style="display:none;">
+            <span class="name" id="chosenName"></span>
+            <button type="button" id="chosenClear">change</button>
+        </div>
+        <span class="hint">Not in FieldKit yet? Leave this blank and describe the location below.</span>
+        {% endif %}
+    </div>
+
+    <div class="form-group" id="locationGroup">
+        <label for="location_text">
+            {% if prefill.property_name or is_sales %}Location notes <span class="hint">(optional if the property is picked above)</span>
+            {% else %}Property name or location{% endif %}
+        </label>
+        <input type="text" name="location_text" id="location_text" value="{{ form.get('location_text', '') }}"
+               placeholder="e.g. Brookside Apartments, or the complex across from the Elm St job">
+    </div>
+
+    <div class="form-group">
+        <label for="notes">What did you see?</label>
+        <textarea name="notes" id="notes" required
+                  placeholder="e.g. They're doing a rehab — new cabinets going into the vacant units.">{{ form.get('notes', '') }}</textarea>
+    </div>
+
+    <div class="form-group">
+        <label for="due_date">Follow up by <span class="hint">(defaults to the next working day)</span></label>
+        <input type="date" name="due_date" id="due_date" value="{{ form.get('due_date') or default_due }}">
+    </div>
+
+    <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Send Tip</button>
+        <a href="{{ back_url }}" class="btn btn-secondary">Cancel</a>
+    </div>
+</form>
+
+<script>
+(function () {
+    var propType = document.getElementById('propType');
+    var propId = document.getElementById('propId');
+
+    // Pre-filled from a job: "different property" drops the link and makes
+    // the free-text location the answer.
+    var diff = document.getElementById('differentProperty');
+    var loc = document.getElementById('location_text');
+    if (diff) {
+        var sync = function () {
+            document.getElementById('prefillBox').style.opacity = diff.checked ? '.45' : '1';
+            loc.required = diff.checked;
+            if (diff.checked) loc.focus();
+        };
+        diff.addEventListener('change', sync);
+        sync();
+    }
+
+    var search = document.getElementById('propSearch');
+    if (!search) return;
+    var panel = document.getElementById('propPanel');
+    var chosenBox = document.getElementById('chosenBox');
+    var searchWrap = document.getElementById('searchWrap');
+    var timer = null;
+
+    function esc(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+            return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c];
+        });
+    }
+    function choose(r) {
+        propType.value = r.type; propId.value = r.id;
+        document.getElementById('chosenName').textContent =
+            r.name + (r.type === 'prospect' ? '  ○ prospect' : '  ✓ customer');
+        chosenBox.style.display = 'flex'; searchWrap.style.display = 'none';
+        panel.classList.remove('open');
+    }
+    document.getElementById('chosenClear').addEventListener('click', function () {
+        propType.value = ''; propId.value = '';
+        chosenBox.style.display = 'none'; searchWrap.style.display = 'block';
+        search.value = ''; search.focus();
+    });
+    search.addEventListener('input', function () {
+        clearTimeout(timer);
+        var q = search.value.trim();
+        if (q.length < 2) { panel.classList.remove('open'); return; }
+        timer = setTimeout(function () {
+            fetch('/{{ company_key }}/sales/search?q=' + encodeURIComponent(q))
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    var results = data.results || [];
+                    panel.innerHTML = results.length ? '' : '<div class="ac-item" style="color:#999;">No match. Describe the location below instead.</div>';
+                    results.forEach(function (r) {
+                        var div = document.createElement('div');
+                        div.className = 'ac-item';
+                        div.innerHTML = esc(r.name) + ' <span class="hint">' +
+                            (r.type === 'prospect' ? '○ prospect' : '✓ customer') +
+                            (r.city ? ' · ' + esc(r.city) : '') + '</span>';
+                        div.addEventListener('click', function () { choose(r); });
+                        panel.appendChild(div);
+                    });
+                    panel.classList.add('open');
+                });
+        }, 200);
+    });
+})();
+</script>
+{% endblock %}

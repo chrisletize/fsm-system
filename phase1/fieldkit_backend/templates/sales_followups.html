@@ -17,11 +17,44 @@
     .btn-primary { background:{{ branding.color_primary }}; color:white; }
     .btn-outline { background:white; color:{{ branding.color_primary }}; border:1px solid {{ branding.color_primary }}; }
     .empty { color:#aaa; padding:2rem; text-align:center; }
+    .badge-tip { background:#ffe8d1; color:#9a4d00; }
+    .tip-notes { font-size:.85rem; color:#555; margin-top:.15rem; white-space:pre-line; }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="page-header"><h1>Follow-Ups</h1></div>
+<div class="page-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:.5rem;">
+    <h1>Follow-Ups</h1>
+    <a href="/{{ company_key }}/sales/tips/new?return_to=/{{ company_key }}/sales/followups" class="btn btn-outline">🔥 + Hot Tip</a>
+</div>
+
+{% if tips %}
+<div class="card" style="border:1px solid #f3c98b; background:#fffaf3; margin-bottom:1.25rem;">
+    <h2 style="font-size:1rem; color:#9a4d00; margin-bottom:.5rem;">Sales tips ({{ tips|length }})</h2>
+    {% for t in tips %}
+    <div class="row-item">
+        <div>
+            <div class="row-name"><span class="badge badge-tip">🔥 TIP</span> {{ t.label }}</div>
+            {% if t.property_name and t.location_text %}<div class="row-sub">{{ t.location_text }}</div>{% endif %}
+            <div class="tip-notes">{{ t.notes }}</div>
+            <div class="row-sub">from {{ t.created_by }} · {{ t.created_at.strftime('%b %-d') }} — due {{ t.due_date.strftime('%b %-d, %Y') }}</div>
+        </div>
+        <div style="display:flex; align-items:center; gap:.5rem;">
+            {% if t.is_overdue %}<span class="badge badge-overdue">Overdue</span>
+            {% elif t.days_until == 0 %}<span class="badge badge-today">Today</span>
+            {% else %}<span class="badge badge-upcoming">Upcoming</span>{% endif %}
+            <a href="{{ t.log_url }}" class="btn btn-primary">Log Visit</a>
+            {# Dismiss needs a reason, so whoever sent the tip can see why nothing came of it. #}
+            <form method="POST" action="/{{ company_key }}/sales/tips/{{ t.id }}/dismiss" style="display:inline;"
+                  onsubmit="var r = prompt('Why dismiss this tip? (the person who sent it will see this)'); if (!r || !r.trim()) return false; this.reason.value = r; return true;">
+                <input type="hidden" name="reason">
+                <button type="submit" class="btn btn-outline" style="color:#777;">Dismiss</button>
+            </form>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
 
 <div class="card">
     {% for f in followups %}
@@ -49,7 +82,7 @@
         </div>
     </div>
     {% else %}
-    <div class="empty">No open follow-ups.</div>
+    <div class="empty">No open follow-ups from visits.</div>
     {% endfor %}
 </div>
 {% endblock %}

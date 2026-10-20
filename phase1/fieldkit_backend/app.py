@@ -4,6 +4,7 @@ Phase 1: Authentication & Company-in-URL Architecture
 """
 
 from flask import Flask, request, session, jsonify, render_template, redirect, url_for, abort, flash, Response
+from markupsafe import escape as html_escape
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import bcrypt
@@ -480,14 +481,25 @@ def _sales_overview_rows(company_keys, today, horizon_days=4):
             ORDER BY sv.follow_up_date ASC
         """, (today + timedelta(days=horizon_days),))
         branding = COMPANY_BRANDING.get(ck, {})
+        company_bits = {'company_key': ck, 'company_name': branding.get('short_name', ck),
+                        'company_color': branding.get('color_primary', '#888')}
         for r in cur.fetchall():
             row = dict(r)
             row['property_name']  = _sales_property_name(cur, row['property_type'], row['property_id'])
-            row['company_key']    = ck
-            row['company_name']   = branding.get('short_name', ck)
-            row['company_color']  = branding.get('color_primary', '#888')
+            row['log_url'] = (f"/{ck}/sales/visits/log?property_type={row['property_type']}"
+                              f"&property_id={row['property_id']}")
+            row['is_tip'] = False
+            row.update(company_bits)
             rows.append(row)
+        # Sales tips (D-115), shaped like follow-up rows so the calendar treats
+        # them the same; is_tip lets the template badge them and sort them first.
+        for t in _open_tips(cur, today + timedelta(days=horizon_days)):
+            rows.append({'id': t['id'], 'follow_up_date': t['due_date'], 'property_name': t['label'],
+                         'visit_tag': '🔥 Tip', 'is_tip': True, 'notes': t['notes'],
+                         'log_url': _tip_log_visit_url(ck, t), **company_bits})
         cur.close(); conn.close()
+    # Tips first within a day; the callers bucket by date afterwards.
+    rows.sort(key=lambda r: (r['follow_up_date'], not r['is_tip']))
     return rows
 
 @app.route('/sales-overview')
@@ -676,7 +688,7 @@ def dashboard(company_key, branding, all_companies, company_access):
             WHERE deleted_at IS NULL AND follow_up_needed = TRUE AND follow_up_completed = FALSE
               AND follow_up_date <= %s
         """, (today,))
-        followups_due = cur.fetchone()['count']
+        followups_due = cur.fetchone()['count'] + len(_open_tips(cur, today))
 
     pending_approvals = None
     if role in SALES_APPROVAL_ROLES:
@@ -11740,9 +11752,16 @@ def sales_dashboard(company_key, branding, all_companies, company_access):
     for r in cur.fetchall():
         row = dict(r)
         row['property_name'] = _sales_property_name(cur, row['property_type'], row['property_id'])
-        row['is_overdue'] = row['follow_up_date'] < today
-        row['days_until'] = (row['follow_up_date'] - today).days
+        # A follow-up can be ticked with no date (no tag, nothing typed); only
+        # the "All" window reaches those, and it used to 500 on them (D-115).
+        due = row['follow_up_date']
+        row['is_overdue'] = bool(due and due < today)
+        row['days_until'] = (due - today).days if due else None
         followups.append(row)
+    # Tips ride the same window as follow-ups and list first (D-115).
+    tips = _open_tips(cur, None if window == 'all' else today + timedelta(days=int(window)))
+    for t in tips:
+        t['log_url'] = _tip_log_visit_url(company_key, t)
 
     cur.execute("""
         SELECT sv.id, sv.visit_date, sv.property_id, sv.property_type, sv.visit_tag, sv.notes, sv.created_by
@@ -11767,7 +11786,7 @@ def sales_dashboard(company_key, branding, all_companies, company_access):
     return render_template('sales_dashboard.html',
         branding=branding, company_key=company_key,
         company_access=company_access, all_companies=all_companies,
-        followups=followups, recent_visits=recent_visits, dormant=dormant,
+        followups=followups, tips=tips, recent_visits=recent_visits, dormant=dormant,
         pending_approvals=pending_approvals, today=today, window=window,
         pending_cards=pending_cards, rehab_due=rehab_due, rehab_days=rehab_days,
     )
@@ -12580,6 +12599,8 @@ def sales_visit_log(company_key, branding, all_companies, company_access):
         rehab_planned       = request.form.get('rehab_planned') == 'on'
         rehab_expected_date = request.form.get('rehab_expected_date', '').strip() or None
         rehab_notes         = request.form.get('rehab_notes', '').strip() or None
+        tip_id              = _opt_num(request.form.get('tip_id'))
+        tips_closed         = 0
 
         # Step 1 may have created the property instead of finding one
         new_prospect_name    = request.form.get('new_prospect_name', '').strip()
@@ -12705,6 +12726,10 @@ def sales_visit_log(company_key, branding, all_companies, company_access):
                 for photo in photos:
                     _store_visit_photo(cur, company_key, visit_id, photo, username,
                                        property_id=property_id, property_type=property_type)
+                # Same transaction as the visit: a tip is answered exactly
+                # when the visit that answers it exists (D-115).
+                tips_closed = _close_tips_for_visit(cur, visit_id, property_type, property_id,
+                                                    tip_id, username)
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -12732,6 +12757,8 @@ def sales_visit_log(company_key, branding, all_companies, company_access):
                             'not existing customers.')
             if is_dormant_investigation and dormancy_reported_to_management:
                 bits.append('Flagged for the Monday management report.')
+            if tips_closed:
+                bits.append(f'Closed {tips_closed} sales tip{"s" if tips_closed != 1 else ""}.')
             flash(' '.join(bits), 'success')
             if property_type == 'prospect':
                 dest = f'/{company_key}/sales/prospects/{property_id}'
@@ -12753,6 +12780,17 @@ def sales_visit_log(company_key, branding, all_companies, company_access):
     investigate   = request.args.get('investigate') == '1'
     conn = get_db_connection(company_key)
     cur = conn.cursor()
+    # Launched from a tip: show it at the top and carry it through to the
+    # submit. A tip with a property pre-fills step 1; a free-text one leaves
+    # step 1 open so the salesman picks or creates the real property.
+    tip = None
+    tip_id = _opt_num(request.form.get('tip_id') or request.args.get('tip'))
+    if tip_id:
+        cur.execute("SELECT * FROM sales_tips WHERE id = %s AND status = 'open' AND deleted_at IS NULL",
+                    (tip_id,))
+        tip = cur.fetchone()
+        if tip and tip['property_id'] and not property_id:
+            property_type, property_id = tip['property_type'], tip['property_id']
     property_name = _sales_property_name(cur, property_type, property_id)
     cur.execute("""
         SELECT tag_name, tag_description, default_followup_days FROM visit_tags_config
@@ -12780,7 +12818,7 @@ def sales_visit_log(company_key, branding, all_companies, company_access):
         company_access=company_access, all_companies=all_companies,
         error=error, property_type=property_type, property_id=property_id, property_name=property_name,
         tags=tags, contacts=contacts, last_contact_id=last_contact_id, investigate=investigate,
-        held_block=held_block,
+        held_block=held_block, tip=tip,
     )
 
 
@@ -12935,11 +12973,14 @@ def sales_followups(company_key, branding, all_companies, company_access):
         row['property_name'] = _sales_property_name(cur, row['property_type'], row['property_id'])
         row['is_overdue'] = bool(row['follow_up_date'] and row['follow_up_date'] < today)
         followups.append(row)
+    tips = _open_tips(cur)
+    for t in tips:
+        t['log_url'] = _tip_log_visit_url(company_key, t)
     cur.close(); conn.close()
     return render_template('sales_followups.html',
         branding=branding, company_key=company_key,
         company_access=company_access, all_companies=all_companies,
-        followups=followups, today=today,
+        followups=followups, tips=tips, today=today,
     )
 
 
@@ -12958,6 +12999,274 @@ def sales_followup_complete(company_key, visit_id):
     conn.commit(); cur.close(); conn.close()
     flash('Follow-up marked complete.', 'success')
     return redirect(request.referrer or f'/{company_key}/sales/followups')
+
+
+# ----------------------------------------------------------------------------
+# Sales tips (migration 039, D-115)
+#
+# Chris, 2026-10-20: a tech on a job sees a property doing a rehab with cabinet
+# work, and the salesman should go and talk pricing. A tip is a follow-up that
+# nobody has visited yet: anyone can submit one, it shows wherever follow-ups
+# show, and a visit closes it. The property is optional for now (free-text
+# location as the fallback) and gets tied to a real property when the salesman
+# logs the visit.
+# ----------------------------------------------------------------------------
+
+def _open_tips(cur, through=None):
+    """Open tips in due-date order, up to and including `through` (None = all).
+
+    Same sales-hold suppression as follow-ups (Chris, 2026-10-11: a held
+    property must not show up in anything that sends the salesperson out).
+    A free-text tip has no property to be held, so it always shows. COALESCE
+    rather than NOT(...) so a NULL hold date can't silently drop the row."""
+    cond, params = '', []
+    if through is not None:
+        cond, params = 'AND t.due_date <= %s', [through]
+    cur.execute(f"""
+        SELECT t.*, COALESCE(p.property_name, c.property_name) AS property_name
+        FROM sales_tips t
+        LEFT JOIN sales_prospects p ON t.property_type = 'prospect' AND p.id = t.property_id
+        LEFT JOIN customers c       ON t.property_type = 'customer' AND c.id = t.property_id
+        WHERE t.status = 'open' AND t.deleted_at IS NULL {cond}
+          AND COALESCE(p.sales_delayed_until, c.sales_delayed_until, DATE '1900-01-01') < CURRENT_DATE
+        ORDER BY t.due_date, t.id
+    """, params)
+    today = date.today()
+    tips = []
+    for r in cur.fetchall():
+        t = dict(r)
+        t['label'] = t['property_name'] or t['location_text'] or 'Unknown location'
+        t['is_overdue'] = t['due_date'] < today
+        t['days_until'] = (t['due_date'] - today).days
+        tips.append(t)
+    return tips
+
+
+def _tip_log_visit_url(company_key, tip):
+    """Log Visit for a tip: the wizard carries the tip through, with the
+    property pre-filled when the tip already has one."""
+    url = f"/{company_key}/sales/visits/log?tip={tip['id']}"
+    if tip.get('property_type') and tip.get('property_id'):
+        url += f"&property_type={tip['property_type']}&property_id={tip['property_id']}"
+    return url
+
+
+def _close_tips_for_visit(cur, visit_id, property_type, property_id, tip_id, username):
+    """Close what this visit answered. Returns how many tips closed.
+
+    * The tip the wizard was launched from, if any. A free-text tip picks up
+      the property the salesman chose in step 1 here, which is how option (b)
+      tips get tied to a real property.
+    * Any other open tip on the same property. Someone has now been there, so
+      leaving those open would send the salesman back for no reason."""
+    closed = 0
+    if tip_id:
+        cur.execute("""
+            UPDATE sales_tips
+            SET status = 'done', closed_visit_id = %s, closed_at = CURRENT_TIMESTAMP, closed_by = %s,
+                property_type = COALESCE(property_type, %s),
+                property_id   = COALESCE(property_id, %s),
+                updated_at = CURRENT_TIMESTAMP, updated_by = %s
+            WHERE id = %s AND status = 'open' AND deleted_at IS NULL
+            RETURNING id
+        """, (visit_id, username, property_type, property_id, username, tip_id))
+        closed += len(cur.fetchall())
+    cur.execute("""
+        UPDATE sales_tips
+        SET status = 'done', closed_visit_id = %s, closed_at = CURRENT_TIMESTAMP, closed_by = %s,
+            updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE property_type = %s AND property_id = %s AND status = 'open' AND deleted_at IS NULL
+        RETURNING id
+    """, (visit_id, username, username, property_type, property_id))
+    closed += len(cur.fetchall())
+    return closed
+
+
+def _salespeople_emails(company_key):
+    """Active salesperson-role users with access to this company. Read from
+    getagrip.users, the canonical login table (D-003)."""
+    conn = get_db_connection('getagrip')
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT email FROM users
+        WHERE is_active = TRUE AND role = 'salesperson' AND company_access @> %s::jsonb
+          AND email IS NOT NULL AND email <> ''
+    """, (json.dumps([company_key]),))
+    emails = [r['email'] for r in cur.fetchall()]
+    cur.close(); conn.close()
+    return emails
+
+
+def _email_new_tip(company_key, tip_id, label, location_line, notes, due_date, spotted_by, username):
+    """Tell the salesperson (plus the office and the standing sales copies) a
+    tip is waiting. Returns (recipients, error). Logged to email_log either way.
+    Tip text comes from any user, so it's escaped before going into HTML."""
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    recipients = _sales_email_recipients(company_key, cur)
+    seen = {r.lower() for r in recipients}
+    for e in _salespeople_emails(company_key):
+        if e.lower() not in seen:
+            recipients.append(e)
+            seen.add(e.lower())
+    if not recipients:
+        cur.close(); conn.close()
+        return [], 'no recipients configured'
+    branding_local = COMPANY_BRANDING.get(company_key, {})
+    subject = f"[{branding_local.get('name', company_key)}] Sales tip — {label}"
+    esc = lambda s: str(html_escape(s or ''))
+    body = (
+        f"<p><strong>{esc(spotted_by)}</strong> sent a sales tip.</p>"
+        f"<p><strong>Where:</strong> {esc(label)}"
+        + (f"<br><strong>Location notes:</strong> {esc(location_line)}" if location_line else '') +
+        f"<br><strong>Follow up by:</strong> {due_date.strftime('%a %b %-d')}</p>"
+        f"<p><strong>What they saw:</strong><br>{esc(notes).replace(chr(10), '<br>')}</p>"
+        f"<p>It's on the Follow-Ups list in FieldKit's Sales page. Logging a visit there closes it.</p>"
+    )
+    message_id, send_error = _send_email_via_resend(recipients, subject, body,
+                                                    from_name=branding_local.get('name'))
+    _log_email(cur, 'sales_tip', tip_id, recipients, subject, message_id,
+               'failed' if send_error else 'sent', send_error, username)
+    conn.commit(); cur.close(); conn.close()
+    return recipients, send_error
+
+
+@app.route('/<company_key>/sales/tips/new', methods=['GET', 'POST'])
+@login_required
+@company_access_required
+@with_branding
+def sales_tip_new(company_key, branding, all_companies, company_access):
+    """Anyone with access to the company can send a tip -- techs on My Day are
+    the main source (Chris, 2026-10-20). No SALES_ROLES gate on purpose."""
+    role = session.get('user_role')
+    username = session.get('username')
+    is_sales = role in SALES_ROLES
+    if role in ('technician',):
+        default_back = f'/{company_key}/myday'
+    elif is_sales:
+        default_back = f'/{company_key}/sales'
+    else:
+        default_back = f'/{company_key}/dashboard'
+    today = date.today()
+    default_due = _next_business_day(today + timedelta(days=1))
+
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+
+    # Pre-fill: from a job on My Day (?wo=), or a property (?property_type=&property_id=)
+    source_wo_id = _opt_num(request.values.get('source_work_order_id') or request.args.get('wo'))
+    prefill = {'property_type': None, 'property_id': None, 'property_name': None, 'wo_number': None}
+    if source_wo_id:
+        cur.execute("""
+            SELECT wo.id, wo.work_order_number, wo.customer_id, c.property_name
+            FROM work_orders wo LEFT JOIN customers c ON c.id = wo.customer_id
+            WHERE wo.id = %s AND wo.deleted_at IS NULL
+        """, (source_wo_id,))
+        wo = cur.fetchone()
+        if not wo:
+            source_wo_id = None
+        else:
+            prefill['wo_number'] = wo['work_order_number']
+            if wo['customer_id']:
+                prefill.update(property_type='customer', property_id=wo['customer_id'],
+                               property_name=wo['property_name'])
+    if not prefill['property_id'] and request.args.get('property_type') in ('prospect', 'customer'):
+        pid = _opt_num(request.args.get('property_id'))
+        name = _sales_property_name(cur, request.args.get('property_type'), pid)
+        if name:
+            prefill.update(property_type=request.args.get('property_type'), property_id=pid, property_name=name)
+
+    error = None
+    form = {}
+    if request.method == 'POST':
+        form = request.form
+        notes = (form.get('notes') or '').strip()
+        location_text = (form.get('location_text') or '').strip() or None
+        property_type = (form.get('property_type') or '').strip() or None
+        property_id = _opt_num(form.get('property_id'))
+        if form.get('different_property') == 'on':
+            property_type = property_id = None
+        if property_type not in ('prospect', 'customer') or not property_id:
+            property_type = property_id = None
+        property_name = _sales_property_name(cur, property_type, property_id) if property_id else None
+        if property_id and not property_name:
+            property_type = property_id = None
+        try:
+            due = datetime.strptime((form.get('due_date') or '').strip(), '%Y-%m-%d').date()
+        except ValueError:
+            due = default_due
+        due = _next_business_day(max(due, today))
+
+        if not notes:
+            error = 'Say what you saw — that is the tip.'
+        elif not property_id and not location_text:
+            error = 'Say where it is: pick the property, or describe the location.'
+        else:
+            cur.execute("""
+                INSERT INTO sales_tips (property_type, property_id, location_text, notes,
+                    source_work_order_id, due_date, created_by, updated_by)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *
+            """, (property_type, property_id, location_text, notes, source_wo_id, due, username, username))
+            tip = cur.fetchone()
+            _record_audit(cur, 'sales_tips', tip['id'], 'create', after=tip, changed_by=username)
+            conn.commit()
+            cur.close(); conn.close()
+
+            label = property_name or location_text
+            recipients, send_error = _email_new_tip(
+                company_key, tip['id'], label, location_text if property_name else None, notes, due,
+                session.get('full_name') or username, username)
+            if send_error:
+                flash(f'Tip saved for {label} — it is on the sales follow-up list, but the email '
+                      f'did NOT go out ({send_error}). Let the salesperson know directly.', 'error')
+            else:
+                flash(f'Tip sent for {label}. It is on the sales follow-up list for '
+                      f'{due.strftime("%a %b %-d")}.', 'success')
+            return redirect(return_to_from_request(default_back))
+
+    cur.close(); conn.close()
+    return render_template('sales_tip_form.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        error=error, form=form, prefill=prefill, source_wo_id=source_wo_id,
+        is_sales=is_sales, default_due=default_due.isoformat(),
+        back_url=return_to_from_request(default_back),
+    )
+
+
+@app.route('/<company_key>/sales/tips/<int:tip_id>/dismiss', methods=['POST'])
+@login_required
+@company_access_required
+def sales_tip_dismiss(company_key, tip_id):
+    """A dead-end tip. Needs a reason, so whoever sent it can see why nothing
+    came of it."""
+    if session.get('user_role') not in SALES_ROLES:
+        abort(403)
+    reason = (request.form.get('reason') or '').strip()
+    back = request.referrer or f'/{company_key}/sales/followups'
+    if not reason:
+        flash('Give a reason for dismissing the tip.', 'error')
+        return redirect(back)
+    username = session.get('username')
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM sales_tips WHERE id = %s AND deleted_at IS NULL", (tip_id,))
+    before = cur.fetchone()
+    if not before or before['status'] != 'open':
+        cur.close(); conn.close()
+        flash('That tip is already closed.', 'error')
+        return redirect(back)
+    cur.execute("""
+        UPDATE sales_tips SET status = 'dismissed', dismiss_reason = %s,
+            closed_at = CURRENT_TIMESTAMP, closed_by = %s,
+            updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s RETURNING *
+    """, (reason, username, username, tip_id))
+    _record_audit(cur, 'sales_tips', tip_id, 'update', before=before, after=cur.fetchone(),
+                  changed_by=username)
+    conn.commit(); cur.close(); conn.close()
+    flash('Tip dismissed.', 'success')
+    return redirect(back)
 
 
 # ----------------------------------------------------------------------------
@@ -13247,10 +13556,20 @@ def _sales_weekly_report_data(company_key):
         SELECT COUNT(*) AS n FROM sales_prospects WHERE deleted_at IS NULL AND converted_to_customer = FALSE
     """)
     pipeline_count = cur.fetchone()['n']
+    # Sales tips (D-115): did the week's tips get acted on?
+    cur.execute("""
+        SELECT COUNT(*) FILTER (WHERE created_at >= %s)                       AS sent,
+               COUNT(*) FILTER (WHERE status = 'done' AND closed_at >= %s)    AS visited,
+               COUNT(*) FILTER (WHERE status = 'open')                        AS still_open,
+               COUNT(*) FILTER (WHERE status = 'open' AND due_date < CURRENT_DATE) AS overdue
+        FROM sales_tips WHERE deleted_at IS NULL
+    """, (week_ago, week_ago))
+    tips = dict(cur.fetchone())
     cur.close(); conn.close()
     return {
         'total_visits': total_visits, 'new_prospects': new_prospects, 'contacts_touched': contacts_touched,
         'dormant': dormant, 'pending_approvals': pending_approvals, 'pipeline_count': pipeline_count,
+        'tips': tips,
     }
 
 
@@ -13288,6 +13607,12 @@ def _send_weekly_sales_report(company_key):
         f"Contacts created/updated: {data['contacts_touched']}<br>"
         f"Open pipeline (not yet converted): {data['pipeline_count']}<br>"
         f"Pending approvals: {data['pending_approvals']}</p>"
+        f"<h4>Sales Tips</h4>"
+        f"<p>Tips sent in (last 7 days): {data['tips']['sent']}<br>"
+        f"Tips visited (last 7 days): {data['tips']['visited']}<br>"
+        f"Still open: {data['tips']['still_open']}"
+        + (f" — <strong>{data['tips']['overdue']} overdue</strong>" if data['tips']['overdue'] else '') +
+        "</p>"
         f"<h4>Dormant Customer Intelligence</h4><ul>{dormant_html}</ul>"
     )
     _send_email_via_resend(recipients, f"[{branding.get('name', company_key)}] Weekly sales report",

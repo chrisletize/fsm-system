@@ -2143,6 +2143,35 @@ relights the LED until it's re-sent, the same logic as void.
 
 ---
 
+D-115 — Sales tips are their own table, closed by a visit (Chris, 2026-10-20).
+Follow-ups live on a visit row, so a tip (which comes *before* any visit, from
+someone who isn't the salesman) can't be one without a fake visit polluting the
+log managers read. Hence `sales_tips` (migration 039). Chris's answers:
+1. **Anyone can submit**, techs especially: the route has no role gate, and the
+   lists, dismiss and wizard stay sales-only.
+2. **A new tip emails** the office, Michael (`_sales_email_recipients`) and every
+   active salesperson with access to the company.
+3. **Property optional for now** (option b): free-text location allowed, with a
+   CHECK so a tip is never anchored to nothing. When the salesman logs the visit,
+   the wizard's step 1 picks or creates the property and the tip takes it
+   (`property_*` backfilled, `closed_visit_id` set).
+Other choices: any visit to a property closes every open tip on it (someone has
+been, so the tip is answered); tips list first within the follow-up lists; due
+date defaults to the next working day and rolls weekends to Monday like
+follow-ups (D-109); sales holds suppress tips with a property; "dismissed" is a
+separate status that needs a reason, so the sender can see why nothing came of
+it; the rehab flag stays the salesman's call in the wizard (D-110), not the
+tipster's.
+**Future, mobile app (Chris):** a location assistant using Google Maps/Places for
+property details when creating a tip, which auto-ties to an existing customer or
+prospect when the address matches. It extends this table (place_id, lat/lng,
+formatted address) rather than replacing it, and the address match can reuse the
+normalized-address SQL from the double-booking banner (FIELDKIT_REUSABLE_BRICKS).
+Also fixed here: the sales dashboard "All" tab returned a 500 on a follow-up ticked
+with no date (one real row, GAG visit 117). It now shows as "No date".
+
+---
+
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:
 #33 (OPS/VendorCafe export templates), #50 (SMS alerts via Twilio), and Stage 5.6
 (ServiceFusion price-list exports, company legal names/remit-to/reply-to/alert emails).

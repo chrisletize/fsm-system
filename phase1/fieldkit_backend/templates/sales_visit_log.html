@@ -83,6 +83,18 @@
 
 {% if error %}<div class="flash error">{{ error }}</div>{% endif %}
 
+{% if tip %}
+{# Launched from a sales tip (D-115): saving this visit closes it. #}
+<div style="background:#fff4e5; border:1px solid #f3c98b; border-radius:8px; padding:.85rem 1rem; margin-bottom:1rem;">
+    <div style="font-weight:700; color:#9a4d00;">🔥 Sales tip from {{ tip.created_by }}, {{ tip.created_at.strftime('%b %-d') }}</div>
+    {% if tip.location_text %}<div style="margin-top:.3rem;"><strong>Where:</strong> {{ tip.location_text }}</div>{% endif %}
+    <div style="margin-top:.3rem; white-space:pre-line;">{{ tip.notes }}</div>
+    {% if not tip.property_id %}
+    <div class="hint" style="margin-top:.4rem;">Pick or add the property in step 1. The tip gets tied to it when you log the visit.</div>
+    {% endif %}
+</div>
+{% endif %}
+
 <div class="steps">
     <div class="step-pip active" data-pip="1">1 · Property</div>
     <div class="step-pip" data-pip="2">2 · Who</div>
@@ -91,6 +103,7 @@
 </div>
 
 <form method="POST" class="card" id="visitForm" enctype="multipart/form-data">
+{% if tip %}<input type="hidden" name="tip_id" value="{{ tip.id }}">{% endif %}
 
 <!-- ===================== STEP 1 — property ===================== -->
 <div class="panel active" data-panel="1">
