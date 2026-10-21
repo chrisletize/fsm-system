@@ -206,7 +206,8 @@
         {% for f in followups %}
         <div class="row-item">
             <div>
-                <div class="row-name">{{ f.property_name or 'Unknown property' }}</div>
+                <div class="row-name"><a href="/{{ company_key }}/sales/{{ 'prospects' if f.property_type == 'prospect' else 'customers' }}/{{ f.property_id }}"
+                   style="color:{{ branding.color_primary }}; text-decoration:none;">{{ f.property_name or 'Unknown property' }}</a></div>
                 <div class="row-sub">{{ f.visit_tag or '' }} — last visit {{ f.visit_date.strftime('%b %-d, %Y') if f.visit_date else '—' }}</div>
             </div>
             <div style="display:flex; align-items:center; gap:.5rem;">
@@ -231,7 +232,8 @@
         {% for d in dormant %}
         <div class="row-item">
             <div>
-                <div class="row-name">{{ d.name }}</div>
+                <div class="row-name"><a href="/{{ company_key }}/sales/customers/{{ d.id }}"
+                   style="color:{{ branding.color_primary }}; text-decoration:none;">{{ d.name }}</a></div>
                 <div class="row-sub">
                     {% if d.last_service_date %}Last job: {{ d.last_service_date.strftime('%b %-d, %Y') }} ({{ d.days }} days ago)
                     {% else %}Never serviced{% endif %}
@@ -259,11 +261,9 @@
                     <a href="/{{ company_key }}/sales/prospects/{{ v.property_id }}"
                        style="color:{{ branding.color_primary }}; text-decoration:none;">{{ v.property_name or 'Unknown property' }}</a>
                     <span class="row-sub">○ prospect</span>
-                    {% elif session.user_role == 'salesperson' %}
-                    {{ v.property_name or 'Unknown property' }}
-                    <span class="row-sub">✓ customer</span>
                     {% else %}
-                    <a href="/{{ company_key }}/customers/{{ v.property_id }}"
+                    {# Sales view of the customer (D-116): open to the salesperson too. #}
+                    <a href="/{{ company_key }}/sales/customers/{{ v.property_id }}"
                        style="color:{{ branding.color_primary }}; text-decoration:none;">{{ v.property_name or 'Unknown property' }}</a>
                     <span class="row-sub">✓ customer</span>
                     {% endif %}

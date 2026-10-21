@@ -1783,3 +1783,30 @@ rejects geofencing). Findings along the way: SF's Mecklenburg tax on a real job
 ($27.64 on $335) matches FieldKit's 8.25% rate; 86 FieldKit customers still carry SF
 name-flag prefixes (open item 6a).
 **Migration:** none. **Code:** none.
+
+## 2026-10-21 — Sales customer page, price lists for existing customers (D-116)
+
+**What:** the salesman visits dormant customers but had no page for an existing
+customer (he's locked out of customer pages, D-101), and price-list requests only
+existed for prospects. New `/<company>/sales/customers/<id>`: read-only and
+sales-relevant (last service and dormancy, sales contacts plus customer contacts
+with billing ones labelled, visit history, open tips, sales hold), with Log Visit,
+Request Price List, Add Tip and Pause Sales. No invoices, balances, pricing or
+editing. Managers get a link to the full record. Price-list requests now share one
+code path for both property types (`_request_price_list`). The prospect page's
+button, status and the two modals moved into `_sales_property_modals.html`, and
+the prospect page rendered identically before and after (whitespace aside).
+Customer names on the sales dashboard (dormant card, recent visits, follow-ups),
+the follow-ups page and the visit log now link to the new page, and logging a
+customer visit lands there. The price-list email now HTML-escapes its fields.
+**Past-due warning, built but OFF:** `company_settings.sales_past_due_warning_enabled`
+(default false, admin switch in Company Settings → Sales). It stays off until beta,
+because 41 GAG customers are currently flagged delinquent only from imported SF
+invoices with no recorded payments.
+**Migration:** 040 (customers price-list columns, the switch, email_log kind
+`customer_price_list`; the first attempt used a 27-character kind, which the
+VARCHAR(20) column rejected, caught by the new test, renamed and re-applied).
+Backed up first (`2026-10-21T2029Z`); schemas still identical.
+**Tests:** new `tests/smoke_sales_customer_page.py` (44 checks). Full suite 28/31; the
+same 3 stale tests fail at the same assertions (`smoke_sales_crm` passed only
+because today + 5 days isn't a weekend; it's still stale).

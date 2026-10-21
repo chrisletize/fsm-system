@@ -146,11 +146,9 @@
                 <a href="/{{ company_key }}/sales/prospects/{{ v.property_id }}"
                    style="color:{{ branding.color_primary }}; text-decoration:none;">{{ v.property_name or 'Unknown property' }}</a>
                 <span class="visit-meta">○ prospect</span>
-                {% elif session.user_role == 'salesperson' %}
-                {# Chris O has no access to customer pages, so this stays plain text for him #}
-                {{ v.property_name or 'Unknown property' }} <span class="visit-meta">✓ customer</span>
                 {% else %}
-                <a href="/{{ company_key }}/customers/{{ v.property_id }}"
+                {# Sales view of the customer (D-116): open to the salesperson too. #}
+                <a href="/{{ company_key }}/sales/customers/{{ v.property_id }}"
                    style="color:{{ branding.color_primary }}; text-decoration:none;">{{ v.property_name or 'Unknown property' }}</a>
                 <span class="visit-meta">✓ customer</span>
                 {% endif %}

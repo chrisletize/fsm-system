@@ -1,0 +1,148 @@
+{#
+  Shared by the sales prospect page and the sales customer page (D-116), so the
+  price-list request and the sales pause behave identically for both kinds of
+  property. Import WITH CONTEXT (they read company_key, branding and session):
+
+      {% from "_sales_property_modals.html" import price_list_button,
+             price_list_modal, delay_modal, modal_script with context %}
+
+  The modals and their script must be emitted inside the content block, never a
+  head block. Until 2026-10-12 they sat inside an unclosed title block, which put
+  them -- and openPriceList/openDelay -- inside <title>, where a browser treats
+  the lot as text; the buttons silently did nothing (D-111).
+#}
+
+{% macro price_list_button(action_url, candidates, recent_request, requested_at) -%}
+{% if candidates|length == 1 %}
+<form method="POST" action="{{ action_url }}" style="display:inline;"
+      onsubmit="return confirm('Ask the office to email a price list to {{ candidates[0].email }}?{% if recent_request %}\n\nNote: one was already requested on {{ requested_at.strftime('%b %-d') }}.{% endif %}');">
+    <input type="hidden" name="send_to" value="{{ candidates[0].email }}">
+    <button type="submit" class="btn btn-outline">Request Price List</button>
+</form>
+{% else %}
+<button type="button" class="btn btn-outline" onclick="openPriceList()">Request Price List</button>
+{% endif %}
+{%- endmacro %}
+
+
+{% macro price_list_status(requested_at, requested_by, requested_to, price_email) -%}
+{% if requested_at %}
+{# Says whether the office actually got the email, not just that the button was
+   pressed. The two are different and only one matters. #}
+{% if price_email and price_email.status == 'failed' %}
+<div class="sub" style="color:#a32d2d; font-weight:600;">
+    ⚠ Price list request on {{ requested_at.strftime('%b %-d, %Y') }}
+    was NOT emailed — the office never got it. Tell them directly.
+    <div style="font-weight:400; font-size:.85em;">{{ price_email.error }}</div>
+</div>
+{% elif price_email %}
+<div class="sub" style="color:#3b6d11;">
+    ✓ Price list requested {{ requested_at.strftime('%b %-d, %Y') }} by {{ requested_by }}
+    {% if requested_to %} → to be sent to {{ requested_to }}{% endif %}
+    <div style="font-weight:400;">Office emailed: {{ price_email.to_emails }}</div>
+</div>
+{% else %}
+{# Requested before email_log covered price lists (pre-migration 038), so
+   there's no delivery record either way -- don't imply one. #}
+<div class="sub" style="color:#8a6100;">
+    Price list requested {{ requested_at.strftime('%b %-d, %Y') }} by {{ requested_by }}
+    {% if requested_to %} → {{ requested_to }}{% endif %}
+    — no delivery record for this one.
+</div>
+{% endif %}
+{% endif %}
+{%- endmacro %}
+
+
+{% macro price_list_modal(action_url, candidates, recent_request, requested_at, noun, saves_typed) -%}
+<div id="priceListModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45);
+     z-index:1000; align-items:center; justify-content:center;">
+  <div style="background:#fff; border-radius:8px; padding:1.5rem; width:100%; max-width:460px;
+              max-height:85vh; overflow-y:auto; box-shadow:0 4px 24px rgba(0,0,0,.2);">
+    <h3 style="font-size:1.1rem; color:{{ branding.color_primary }}; margin-bottom:.4rem;">
+        Request a price list</h3>
+    <p style="font-size:.86rem; color:#777; margin-bottom:1rem;">
+        This emails the office, not the {{ noun }}. They'll send the current pricing by hand.
+        {% if recent_request %}<br><strong style="color:#8a6100;">One was already requested
+        {{ requested_at.strftime('%b %-d') }}.</strong>{% endif %}
+    </p>
+    <form method="POST" action="{{ action_url }}">
+      {% if candidates %}
+      <div style="font-size:.82rem; font-weight:600; color:#555; margin-bottom:.4rem;">
+          Which address should it go to?</div>
+      {% for c in candidates %}
+      <label style="display:flex; gap:.5rem; align-items:flex-start; padding:.5rem;
+                    border:1px solid #eee; border-radius:6px; margin-bottom:.4rem; cursor:pointer;">
+        <input type="radio" name="send_to" value="{{ c.email }}" {% if loop.first %}checked{% endif %}
+               style="margin-top:.2rem;">
+        <span><strong style="font-size:.9rem;">{{ c.email }}</strong>
+          <br><span style="font-size:.78rem; color:#888;">{{ c.label }}</span></span>
+      </label>
+      {% endfor %}
+      <div style="font-size:.82rem; color:#888; margin:.6rem 0 .3rem;">…or a different address:</div>
+      {% else %}
+      <div style="font-size:.86rem; color:#8a6100; background:#fff8ef; border:1px solid #f0dcb0;
+                  border-radius:6px; padding:.6rem .8rem; margin-bottom:.8rem;">
+        No email on file for this {{ noun }} or its contacts.
+        {% if saves_typed %}Enter one and it'll be saved to the {{ noun }}.
+        {% else %}Enter one and the office will get it with the request.{% endif %}
+      </div>
+      {% endif %}
+      <input type="text" name="new_email" placeholder="name@property.com"
+             style="width:100%; padding:.6rem .75rem; border:1px solid #ddd; border-radius:4px;
+                    font-size:.95rem;">
+      <div style="display:flex; gap:.6rem; margin-top:1.1rem;">
+        <button type="submit" class="btn btn-primary" style="flex:1;">Send Request</button>
+        <button type="button" class="btn btn-outline" onclick="closePriceList()">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+{%- endmacro %}
+
+
+{% macro delay_modal(property_type, property_id, delay_months) -%}
+<div id="delayModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45);
+     z-index:1000; align-items:center; justify-content:center;">
+  <div style="background:#fff; border-radius:8px; padding:1.5rem; width:100%; max-width:440px;
+              box-shadow:0 4px 24px rgba(0,0,0,.2);">
+    <h3 style="font-size:1.1rem; color:#a32d2d; margin-bottom:.4rem;">Pause sales on this property</h3>
+    <p style="font-size:.86rem; color:#777; margin-bottom:1rem;">
+        Stops it appearing in follow-ups, the rehab list and the overview.
+        {% if session.user_role in ('admin','manager') %}You can apply this yourself.
+        {% else %}A manager has to approve it before it takes effect.{% endif %}
+    </p>
+    <form method="POST" action="/{{ company_key }}/sales/delay-request">
+      <input type="hidden" name="property_type" value="{{ property_type }}">
+      <input type="hidden" name="property_id" value="{{ property_id }}">
+      <div style="font-size:.82rem; font-weight:600; color:#555; margin-bottom:.4rem;">For how long?</div>
+      {% for m in delay_months %}
+      <label style="display:flex; gap:.5rem; align-items:center; padding:.5rem; border:1px solid #eee;
+                    border-radius:6px; margin-bottom:.4rem; cursor:pointer;">
+        <input type="radio" name="months" value="{{ m }}" {% if loop.first %}checked{% endif %}>
+        <span>{{ m }} months</span>
+      </label>
+      {% endfor %}
+      <div style="font-size:.82rem; font-weight:600; color:#555; margin:.7rem 0 .3rem;">
+          Reason <span style="font-weight:400; color:#999;">(required)</span></div>
+      <textarea name="reason" rows="3" required placeholder="e.g. non-payment, in litigation…"
+                style="width:100%; padding:.6rem .75rem; border:1px solid #ddd; border-radius:4px;
+                       font-size:.95rem; font-family:inherit;"></textarea>
+      <div style="display:flex; gap:.6rem; margin-top:1.1rem;">
+        <button type="submit" class="btn btn-primary" style="flex:1;">Request Pause</button>
+        <button type="button" class="btn btn-outline" onclick="closeDelay()">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+{%- endmacro %}
+
+
+{% macro modal_script() -%}
+<script>
+function openDelay() { document.getElementById('delayModal').style.display = 'flex'; }
+function closeDelay() { document.getElementById('delayModal').style.display = 'none'; }
+function openPriceList() { document.getElementById('priceListModal').style.display = 'flex'; }
+function closePriceList() { document.getElementById('priceListModal').style.display = 'none'; }
+</script>
+{%- endmacro %}

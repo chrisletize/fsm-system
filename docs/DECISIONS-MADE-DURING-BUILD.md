@@ -2174,6 +2174,35 @@ with no date (one real row, GAG visit 117). It now shows as "No date".
 
 ---
 
+D-116 — The salesman gets a sales-side customer page; past-due warning built but
+off (Chris, 2026-10-21). Dormant customers are a core sales target, but the
+salesperson can't see customer pages (D-101) and the price-list button was
+prospect-only. Rather than loosening D-101, a separate read-only page under
+`/sales/` shows only what a sales visit needs. Choices:
+- **Same shape as the prospect page**, with shared macros for the price-list
+  button, status and the price-list/pause modals, so the two can't drift.
+- **Price-list tracking on `customers`** (three columns mirroring migration 034)
+  rather than a new requests table: same behaviour as prospects (latest request,
+  one-week duplicate warning), smallest change. A typed address is **not** written
+  back to the customer record (the office owns customer data); it travels in the
+  request.
+- **Its own email_log kind** (`customer_price_list`), because `related_id` has no
+  type, so a shared kind would cross prospect and customer ids.
+- **Recipient choice:** sales contacts first, then customer contacts, with billing
+  contacts labelled. `customer_contacts.accepts_general` can't filter out
+  accounts-payable inboxes (it's TRUE on every contact with an email), so the
+  salesman picks and the office sees the address before anything reaches the
+  customer.
+- **Past-due warning:** "Account past due — check with the office before
+  pitching", no amount, from `customer_flags.is_delinquent` (90+ days, D-001).
+  **Built but off by default** (`company_settings.sales_past_due_warning_enabled`,
+  admin switch) until beta, per Chris: FieldKit has no reliable payment history
+  yet. **Turn it on per company once real payments are being recorded.**
+- `LAST_SERVICE_DATE_SQL` is now one shared expression used by the dormant list
+  and this page, so they can't disagree.
+
+---
+
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:
 #33 (OPS/VendorCafe export templates), #50 (SMS alerts via Twilio), and Stage 5.6
 (ServiceFusion price-list exports, company legal names/remit-to/reply-to/alert emails).

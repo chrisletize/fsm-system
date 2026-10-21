@@ -60,7 +60,8 @@
     {% for f in followups %}
     <div class="row-item">
         <div>
-            <div class="row-name">{{ f.property_name or 'Unknown property' }}</div>
+            <div class="row-name"><a href="/{{ company_key }}/sales/{{ 'prospects' if f.property_type == 'prospect' else 'customers' }}/{{ f.property_id }}"
+               style="color:{{ branding.color_primary }}; text-decoration:none;">{{ f.property_name or 'Unknown property' }}</a></div>
             <div class="row-sub">
                 {{ f.visit_tag or '' }}
                 {% if f.contact_first %} — met {{ f.contact_first }} {{ f.contact_last }}{% endif %}

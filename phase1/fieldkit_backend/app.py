@@ -10189,6 +10189,28 @@ def settings_scheduled_alerts_toggle(company_key):
     return redirect(f'/{company_key}/settings/company')
 
 
+@app.route('/<company_key>/settings/company/sales-past-due-warning', methods=['POST'])
+@login_required
+@company_access_required
+def settings_sales_past_due_warning_toggle(company_key):
+    """Master switch for the past-due warning on the sales customer page (D-116).
+    Off until beta: it reads customer_flags.is_delinquent, which isn't
+    trustworthy until FieldKit holds real payment history."""
+    if session.get('user_role') != 'admin':
+        abort(403)
+    enabled = request.form.get('sales_past_due_warning_enabled') == 'on'
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE company_settings SET sales_past_due_warning_enabled = %s,
+            updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE deleted_at IS NULL
+    """, (enabled, session.get('username')))
+    conn.commit(); cur.close(); conn.close()
+    flash(f"Past-due warning for sales {'enabled' if enabled else 'disabled'}.", 'success')
+    return redirect(f'/{company_key}/settings/company')
+
+
 # ============================================================================
 # Estimates  (admin + manager + salesperson; Increment 3.1)
 #
@@ -11041,6 +11063,24 @@ def _sales_dormancy_threshold_weeks(cur):
     return row['alert_after_weeks'] if row else None
 
 
+# A customer's last service date: the GREATEST of FieldKit work orders and the
+# imported ServiceFusion job history -- the recency report's formula (§4.3).
+# One expression, so the dormant list and the sales customer page (D-116) can
+# never disagree. Expects the customer row aliased as `c`.
+LAST_SERVICE_DATE_SQL = """GREATEST(
+    (SELECT MAX(wo.start_date) FROM work_orders wo
+     WHERE wo.customer_id = c.id AND wo.deleted_at IS NULL
+       AND wo.status IN ('Completed', 'Invoiced', 'Extraction Active')),
+    (SELECT MAX(cjd.job_date) FROM customer_job_dates cjd
+     WHERE cjd.customer_id = c.id AND cjd.deleted_at IS NULL))"""
+
+
+def _customer_last_service_date(cur, customer_id):
+    cur.execute(f"SELECT {LAST_SERVICE_DATE_SQL} AS d FROM customers c WHERE c.id = %s", (customer_id,))
+    row = cur.fetchone()
+    return row['d'] if row else None
+
+
 def _sales_dormant_customers(company_key):
     """Active customers whose last service date -- the SAME GREATEST(work_orders,
     customer_job_dates) formula the recency report uses (§4.3), so this list
@@ -11053,15 +11093,8 @@ def _sales_dormant_customers(company_key):
     if not weeks:
         cur.close(); conn.close()
         return []
-    cur.execute("""
-        SELECT c.id, c.property_name,
-               GREATEST(
-                   (SELECT MAX(wo.start_date) FROM work_orders wo
-                    WHERE wo.customer_id = c.id AND wo.deleted_at IS NULL
-                      AND wo.status IN ('Completed', 'Invoiced', 'Extraction Active')),
-                   (SELECT MAX(cjd.job_date) FROM customer_job_dates cjd
-                    WHERE cjd.customer_id = c.id AND cjd.deleted_at IS NULL)
-               ) AS last_service_date
+    cur.execute(f"""
+        SELECT c.id, c.property_name, {LAST_SERVICE_DATE_SQL} AS last_service_date
         FROM customers c
         WHERE c.deleted_at IS NULL AND c.status = 'Active'
           AND (c.sales_delayed_until IS NULL OR c.sales_delayed_until < CURRENT_DATE)
@@ -11548,32 +11581,79 @@ def _office_recipients(company_key, cur):
     return [m['email'] for m in _sales_company_managers(company_key) if m['email']]
 
 
-@app.route('/<company_key>/sales/prospects/<int:prospect_id>/request-price-list', methods=['POST'])
-@login_required
-@company_access_required
-def sales_request_price_list(company_key, prospect_id):
-    """One tap for the salesperson: email the OFFICE that this prospect wants a
-    price list. Never emails the prospect -- the office sends current pricing
+def _customer_price_list_candidates(cur, customer_id):
+    """Addresses a dormant customer's price list could go to (D-116): the sales
+    contacts the salesman has met there first, then the customer's own
+    contacts.
+
+    Billing contacts are labelled as billing because they're often an
+    accounts-payable inbox (an AvidBill address on one real customer) rather than
+    the person who wants pricing. customer_contacts.accepts_general can't tell
+    them apart, since it's TRUE on every contact with an email, so the salesman
+    chooses. The request goes to the office anyway, which sees the address before
+    anything reaches the customer."""
+    out, seen = [], set()
+
+    def add(email, label):
+        e = (email or '').strip()
+        if e and e.lower() not in seen:
+            seen.add(e.lower())
+            out.append({'email': e, 'label': label})
+
+    cur.execute("""
+        SELECT first_name, last_name, title, office_email, personal_email
+        FROM sales_contacts
+        WHERE current_property_id = %s AND current_property_type = 'customer' AND deleted_at IS NULL
+        ORDER BY last_name, first_name
+    """, (customer_id,))
+    for c in cur.fetchall():
+        who = f"{c['first_name']} {c['last_name']}".strip() or 'contact'
+        if c['title']:
+            who += f", {c['title']}"
+        add(c['office_email'], f'{who} (work)')
+        add(c['personal_email'], f'{who} (personal)')
+    cur.execute("""
+        SELECT first_name, last_name, title, office_email, accepts_billing
+        FROM customer_contacts
+        WHERE customer_id = %s AND deleted_at IS NULL
+        ORDER BY accepts_billing, is_primary DESC, last_name, first_name
+    """, (customer_id,))
+    for c in cur.fetchall():
+        who = f"{c['first_name'] or ''} {c['last_name'] or ''}".strip() or 'contact'
+        if c['title']:
+            who += f", {c['title']}"
+        add(c['office_email'], f"{who} (customer contact{' - billing' if c['accepts_billing'] else ''})")
+    return out
+
+
+def _request_price_list(company_key, property_type, property_id):
+    """One tap for the salesperson: email the OFFICE that this property wants a
+    price list. Never emails the property -- the office sends current pricing
     out by hand (Chris, 2026-10-11), which is the whole point: pricing changes,
-    and a stale list sent automatically would be worse than none."""
+    and a stale list sent automatically would be worse than none.
+
+    Shared by prospects (D-107) and existing customers (D-116, Chris
+    2026-10-21: the salesman visits dormant customers too)."""
     if session.get('user_role') not in SALES_ROLES:
         abort(403)
     username = session.get('username')
-    back = f'/{company_key}/sales/prospects/{prospect_id}'
+    is_customer = property_type == 'customer'
+    table = 'customers' if is_customer else 'sales_prospects'
+    back = (f'/{company_key}/sales/customers/{property_id}' if is_customer
+            else f'/{company_key}/sales/prospects/{property_id}')
 
     conn = get_db_connection(company_key)
     cur = conn.cursor()
-    cur.execute("""
-        SELECT * FROM sales_prospects WHERE id = %s AND deleted_at IS NULL
-    """, (prospect_id,))
-    prospect = cur.fetchone()
-    if not prospect:
+    cur.execute(f"SELECT * FROM {table} WHERE id = %s AND deleted_at IS NULL", (property_id,))
+    prop = cur.fetchone()
+    if not prop:
         cur.close(); conn.close(); abort(404)
-    prospect = dict(prospect)
+    prop = dict(prop)
 
     chosen = request.form.get('send_to', '').strip()
     typed  = request.form.get('new_email', '').strip()
-    candidates = _price_list_candidates(cur, prospect)
+    candidates = (_customer_price_list_candidates(cur, property_id) if is_customer
+                  else _price_list_candidates(cur, prop))
 
     # The address: whatever was picked, else the one typed into the popup, else
     # the only candidate there is. More than one and no choice made means the UI
@@ -11585,31 +11665,33 @@ def sales_request_price_list(company_key, prospect_id):
         else:
             cur.close(); conn.close()
             flash('Pick which address the price list should go to.' if candidates
-                  else 'Add an email address for this prospect first.', 'error')
+                  else 'Enter an email address for the price list.', 'error')
             return redirect(back)
     if '@' not in target or ' ' in target:
         cur.close(); conn.close()
         flash(f'"{target}" does not look like an email address.', 'error')
         return redirect(back)
 
-    # A typed address is worth keeping: the popup only appears when nothing is
-    # on file, so this is how the gap gets filled. Lands on the property rather
-    # than invented against a person we may not know.
+    # A typed address is worth keeping on a prospect: the popup only appears
+    # when nothing is on file, so this is how the gap gets filled. Customer
+    # records belong to the office (D-101), so nothing is written back there --
+    # the address still reaches the office in the request itself.
     saved_note = ''
-    if typed and not prospect.get('general_email'):
+    if typed and not is_customer and not prop.get('general_email'):
         cur.execute("""
             UPDATE sales_prospects SET general_email = %s,
                 updated_at = CURRENT_TIMESTAMP, updated_by = %s WHERE id = %s
-        """, (target, username, prospect_id))
+        """, (target, username, property_id))
         saved_note = ' Saved it to the prospect.'
 
-    cur.execute("""
-        UPDATE sales_prospects
+    cur.execute(f"""
+        UPDATE {table}
         SET price_list_requested_at = CURRENT_TIMESTAMP, price_list_requested_by = %s,
             price_list_requested_to = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
         WHERE id = %s
-    """, (username, target, username, prospect_id))
+    """, (username, target, username, property_id))
 
+    last_service = _customer_last_service_date(cur, property_id) if is_customer else None
     recipients = _sales_email_recipients(company_key, cur)
     conn.commit(); cur.close(); conn.close()
 
@@ -11619,50 +11701,70 @@ def sales_request_price_list(company_key, prospect_id):
         return redirect(back)
 
     branding_local = COMPANY_BRANDING.get(company_key, {})
-    site = ', '.join(x for x in [prospect.get('address'), prospect.get('city'),
-                                 prospect.get('state')] if x)
+    site = ', '.join(x for x in [prop.get('address'), prop.get('city'), prop.get('state')] if x)
+    esc = lambda v: str(html_escape(v or ''))
+    subject = (f"[{branding_local.get('name', company_key)}] Price list requested — "
+               f"{prop['property_name']}")
+    if is_customer:
+        who_line = (f"<p><strong>{esc(session.get('full_name') or username)}</strong> visited an "
+                    f"<strong>existing customer</strong> who is asking for a price list.</p>")
+        extra = (f"<p>Last service: {last_service.strftime('%b %-d, %Y')}</p>" if last_service
+                 else "<p>No service on record.</p>")
+    else:
+        who_line = (f"<p><strong>{esc(session.get('full_name') or username)}</strong> has a prospect "
+                    f"asking for a price list.</p>")
+        extra = (f"<p><strong>Rehab planned</strong> at this property — "
+                 f"treat as high priority.</p>" if prop.get('rehab_planned') else '')
     # The return value matters: this used to be discarded, so a rejected send
     # still flashed "sent to the office" and the salesperson had no way to know
     # the office never heard about it (Chris, 2026-10-12 -- requests weren't
     # landing and nothing surfaced it).
     message_id, send_error = _send_email_via_resend(
-        recipients,
-        f"[{branding_local.get('name', company_key)}] Price list requested — "
-        f"{prospect['property_name']}",
-        f"<p><strong>{session.get('full_name') or username}</strong> has a prospect asking "
-        f"for a price list.</p>"
-        f"<p><strong>Property:</strong> {prospect['property_name']}"
-        + (f"<br><strong>Address:</strong> {site}" if site else '') +
-        f"<br><strong>Send the price list to:</strong> {target}</p>"
-        + (f"<p><strong>Rehab planned</strong> at this property — "
-           f"treat as high priority.</p>" if prospect.get('rehab_planned') else '') +
-        f"<p>Please email the current price list to the address above. "
-        f"FieldKit has not contacted the prospect.</p>",
+        recipients, subject,
+        who_line
+        + f"<p><strong>Property:</strong> {esc(prop['property_name'])}"
+        + (f"<br><strong>Address:</strong> {esc(site)}" if site else '')
+        + f"<br><strong>Send the price list to:</strong> {esc(target)}</p>"
+        + extra
+        + "<p>Please email the current price list to the address above. "
+          "FieldKit has not contacted the property.</p>",
         from_name=branding_local.get('name'))
 
-    # Logged either way, into the same email_log the invoice sender uses. Until
-    # now no sales email was recorded anywhere, which is why "did the price list
-    # request actually send?" had no answer to look up.
-    subject = (f"[{branding_local.get('name', company_key)}] Price list requested — "
-               f"{prospect['property_name']}")
+    # Logged either way, into the same email_log the invoice sender uses. Each
+    # property type has its own kind, because related_id carries no type.
     conn3 = get_db_connection(company_key)
     cur3 = conn3.cursor()
-    _log_email(cur3, 'price_list_request', prospect_id, recipients, subject,
+    _log_email(cur3, 'customer_price_list' if is_customer else 'price_list_request',
+               property_id, recipients, subject,
                message_id, 'failed' if send_error else 'sent', send_error, username)
     conn3.commit(); cur3.close(); conn3.close()
 
     if send_error:
         # Say who it didn't reach and what to do instead. The request itself is
-        # still recorded on the prospect, so the office can find it -- but the
+        # still recorded on the property, so the office can find it -- but the
         # salesperson must not walk away believing an email went out.
         flash(f'Request recorded, but the email FAILED to send to '
               f'{", ".join(recipients)} — {send_error}. Tell the office directly.',
               'error')
     else:
         flash(f'Price list request sent to {", ".join(recipients)} for '
-              f'{prospect["property_name"]} (to be emailed to {target}).{saved_note}',
+              f'{prop["property_name"]} (to be emailed to {target}).{saved_note}',
               'success')
     return redirect(back)
+
+
+@app.route('/<company_key>/sales/prospects/<int:prospect_id>/request-price-list', methods=['POST'])
+@login_required
+@company_access_required
+def sales_request_price_list(company_key, prospect_id):
+    return _request_price_list(company_key, 'prospect', prospect_id)
+
+
+@app.route('/<company_key>/sales/customers/<int:customer_id>/request-price-list', methods=['POST'])
+@login_required
+@company_access_required
+def sales_customer_request_price_list(company_key, customer_id):
+    return _request_price_list(company_key, 'customer', customer_id)
 
 
 def _rehab_contact_days(cur):
@@ -12109,6 +12211,116 @@ def sales_prospect_detail(company_key, prospect_id, branding, all_companies, com
         prospect=prospect, visits=visits, contacts=contacts, map_query=map_query,
         pending_approval=pending_approval, cards=cards,
         max_photos=MAX_PHOTOS_PER_VISIT, price_email=price_email,
+    )
+
+
+@app.route('/<company_key>/sales/customers/<int:customer_id>')
+@login_required
+@company_access_required
+@with_branding
+def sales_customer_detail(company_key, customer_id, branding, all_companies, company_access):
+    """The salesman's view of an EXISTING customer (D-116, Chris 2026-10-21): he
+    visits dormant customers to win them back, but is locked out of customer
+    pages (D-101) and the price-list request only existed for prospects.
+
+    Read-only and sales-relevant only: where it is, when we last served it,
+    who to talk to, the visit history, and the actions he needs (log visit,
+    price list, tip, pause sales). Deliberately NOT here: invoices, balances,
+    ratings, job pricing, or any editing of the customer record -- that stays
+    with the office."""
+    if session.get('user_role') not in SALES_ROLES:
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT c.id, c.property_name, c.customer_type, c.address, c.address_2, c.city, c.state, c.zip,
+               c.status, c.price_list_requested_at, c.price_list_requested_by, c.price_list_requested_to,
+               mc.name AS management_company_name, {LAST_SERVICE_DATE_SQL} AS last_service_date
+        FROM customers c LEFT JOIN management_companies mc ON mc.id = c.management_company_id
+        WHERE c.id = %s AND c.deleted_at IS NULL
+    """, (customer_id,))
+    customer = cur.fetchone()
+    if not customer:
+        cur.close(); conn.close(); abort(404)
+    customer = dict(customer)
+    today = date.today()
+    customer['days_since_service'] = ((today - customer['last_service_date']).days
+                                      if customer['last_service_date'] else None)
+    weeks = _sales_dormancy_threshold_weeks(cur)
+    customer['is_dormant'] = bool(weeks) and (
+        customer['last_service_date'] is None
+        or customer['last_service_date'] < today - timedelta(weeks=weeks))
+
+    cur.execute("""
+        SELECT sv.*, sc.first_name AS contact_first, sc.last_name AS contact_last
+        FROM sales_visits sv LEFT JOIN sales_contacts sc ON sc.id = sv.contact_id
+        WHERE sv.property_id = %s AND sv.property_type = 'customer' AND sv.deleted_at IS NULL
+        ORDER BY sv.visit_date DESC, sv.id DESC
+    """, (customer_id,))
+    visits = [dict(v) for v in cur.fetchall()]
+    cur.execute("""
+        SELECT * FROM sales_contacts
+        WHERE current_property_id = %s AND current_property_type = 'customer' AND deleted_at IS NULL
+        ORDER BY last_name, first_name
+    """, (customer_id,))
+    sales_contacts = cur.fetchall()
+    # The customer's own contacts, read-only: name, title, phone and email are
+    # what he needs to know who to ask for. Billing flags are shown so an
+    # accounts-payable inbox isn't mistaken for a person.
+    cur.execute("""
+        SELECT first_name, last_name, title, office_phone, mobile_phone, office_email,
+               is_primary, accepts_billing
+        FROM customer_contacts WHERE customer_id = %s AND deleted_at IS NULL
+        ORDER BY is_primary DESC, accepts_billing, last_name, first_name
+    """, (customer_id,))
+    customer_contacts = cur.fetchall()
+    cur.execute("""
+        SELECT * FROM sales_tips
+        WHERE property_type = 'customer' AND property_id = %s AND status = 'open' AND deleted_at IS NULL
+        ORDER BY due_date
+    """, (customer_id,))
+    open_tips = cur.fetchall()
+    cur.execute("""
+        SELECT to_emails, status, error, sent_at, sent_by
+        FROM email_log WHERE kind = 'customer_price_list' AND related_id = %s
+        ORDER BY sent_at DESC LIMIT 1
+    """, (customer_id,))
+    price_email = cur.fetchone()
+    price_candidates = _customer_price_list_candidates(cur, customer_id)
+    held_until, held_reason = _sales_delay_state(cur, 'customer', customer_id)
+    cur.execute("""
+        SELECT id FROM approval_queue WHERE request_type = 'delay_sales'
+          AND target_type = 'customer' AND target_id = %s AND status = 'pending'
+          AND deleted_at IS NULL
+    """, (customer_id,))
+    delay_pending = cur.fetchone() is not None
+    # Past-due warning (D-116): BUILT BUT INACTIVE until beta. Chris,
+    # 2026-10-21: FieldKit has no reliable payment history yet (41 GAG
+    # customers are flagged delinquent purely from imported ServiceFusion
+    # invoices with no payments recorded), so an admin switches it on per company
+    # in Company Settings once the data is real. No amount is ever shown here.
+    cur.execute("SELECT sales_past_due_warning_enabled FROM company_settings WHERE deleted_at IS NULL LIMIT 1")
+    settings_row = cur.fetchone()
+    past_due = False
+    if settings_row and settings_row['sales_past_due_warning_enabled']:
+        cur.execute("SELECT is_delinquent FROM customer_flags WHERE customer_id = %s", (customer_id,))
+        flag = cur.fetchone()
+        past_due = bool(flag and flag['is_delinquent'])
+    cur.close(); conn.close()
+
+    recent_request = bool(
+        customer['price_list_requested_at']
+        and (datetime.now() - customer['price_list_requested_at']).days < PRICE_LIST_DUPLICATE_DAYS)
+    map_query = ', '.join(p for p in [customer['address'], customer['city'], customer['state']] if p)
+    return render_template('sales_customer_detail.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        customer=customer, visits=visits, sales_contacts=sales_contacts,
+        customer_contacts=customer_contacts, open_tips=open_tips,
+        price_candidates=price_candidates, price_email=price_email, recent_request=recent_request,
+        held_until=held_until, held_reason=held_reason, delay_pending=delay_pending,
+        delay_months=SALES_DELAY_MONTHS, past_due=past_due, map_query=map_query,
+        dormancy_weeks=weeks,
     )
 
 
@@ -12760,16 +12972,14 @@ def sales_visit_log(company_key, branding, all_companies, company_access):
             if tips_closed:
                 bits.append(f'Closed {tips_closed} sales tip{"s" if tips_closed != 1 else ""}.')
             flash(' '.join(bits), 'success')
+            # Both kinds of property have a sales page now (D-116). The customer
+            # one lives under /sales/, which also keeps the salesperson out of the
+            # office customer pages he's locked out of (sending him there used to
+            # 403 him straight after a successful save).
             if property_type == 'prospect':
                 dest = f'/{company_key}/sales/prospects/{property_id}'
-            elif session.get('user_role') == SALES_ONLY_ROLE:
-                # The salesperson role is confined to /sales/* pages, so sending
-                # him to the customer page would 403 him immediately after a
-                # successful save -- looking like the visit failed, and losing
-                # the confirmation flash with it.
-                dest = f'/{company_key}/sales'
             else:
-                dest = f'/{company_key}/customers/{property_id}'
+                dest = f'/{company_key}/sales/customers/{property_id}'
             return redirect(dest)
 
     # On a validation-error re-render (falls through from the POST branch

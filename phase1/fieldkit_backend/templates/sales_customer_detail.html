@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% from "_sales_property_modals.html" import price_list_button, price_list_status, price_list_modal, delay_modal, modal_script with context %}
+{% block title %}{{ customer.property_name }} — {{ branding.name }}{% endblock %}
+
+{#
+  Sales view of an EXISTING customer (D-116, Chris 2026-10-21). The salesman is
+  locked out of the office customer pages (D-101), so this shows only what he
+  needs on a dormant-customer visit. No invoices, balances, ratings or pricing,
+  and no editing of the customer record.
+#}
+
+{% block extra_css %}
+<style>
+    .page-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:1.25rem; flex-wrap:wrap; gap:.75rem; }
+    .page-header h1 { font-size:1.6rem; color:{{ branding.color_primary }}; }
+    .sub { color:#888; font-size:.9rem; margin-top:.25rem; }
+    .btn { display:inline-block; padding:.6rem 1.2rem; border-radius:4px; text-decoration:none;
+           font-weight:500; cursor:pointer; border:none; font-size:.9rem; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-outline { background:white; color:{{ branding.color_primary }}; border:1px solid {{ branding.color_primary }}; }
+    .sales-grid { display:grid; grid-template-columns:1fr 1fr; gap:1.25rem; }
+    @media (max-width:768px) { .sales-grid { grid-template-columns:1fr; } }
+    .card h2 { font-size:1rem; color:#444; margin-bottom:.9rem; }
+    .row-item { padding:.6rem 0; border-bottom:1px solid #f2f2f2; }
+    .row-item:last-child { border-bottom:none; }
+    .row-sub { font-size:.8rem; color:#888; }
+    .badge { display:inline-block; padding:.2rem .7rem; border-radius:10px; font-size:.76rem; font-weight:500; }
+    .badge-customer { background:#eaf3de; color:#3b6d11; }
+    .badge-dormant { background:#fcebeb; color:#a32d2d; }
+    .badge-billing { background:#f1efe8; color:#5f5e5a; }
+    .badge-tip { background:#ffe8d1; color:#9a4d00; }
+    .empty { color:#aaa; padding:1rem 0; text-align:center; font-size:.9rem; }
+    .quick-actions { display:flex; gap:.75rem; flex-wrap:wrap; }
+</style>
+{% endblock %}
+
+{% block content %}
+{% if past_due %}
+{# Off unless an admin enables it per company (Company Settings); see D-116. #}
+<div class="card" style="background:#fdecea; border:1px solid #f3b8b3; color:#a32d2d; margin-bottom:1.25rem;">
+    <strong>Account past due.</strong> Check with the office before pitching new work here.
+</div>
+{% endif %}
+
+{% if held_until %}
+<div class="card" style="background:#fdecea; border:1px solid #f3b8b3; color:#a32d2d; margin-bottom:1.25rem;">
+    <strong>Sales paused on this property</strong> until {{ held_until.strftime('%B %-d, %Y') }}.
+    {% if held_reason %}<br><span style="font-weight:400;">{{ held_reason }}</span>{% endif %}
+    <div style="font-weight:400; font-size:.85rem; margin-top:.4rem;">
+        It won't appear in follow-ups, the dormant list or the cross-company overview.
+    </div>
+    {% if session.user_role in ('admin','manager') %}
+    <form method="POST" action="/{{ company_key }}/sales/delay-lift" style="margin-top:.6rem;"
+          onsubmit="return confirm('Lift the sales hold on {{ customer.property_name }}?');">
+        <input type="hidden" name="property_type" value="customer">
+        <input type="hidden" name="property_id" value="{{ customer.id }}">
+        <button type="submit" class="btn btn-outline" style="padding:.35rem .8rem; font-size:.82rem;">Lift hold</button>
+    </form>
+    {% endif %}
+</div>
+{% elif delay_pending %}
+<div class="card" style="background:#fff8ef; border:1px solid #f0dcb0; color:#8a6100; margin-bottom:1.25rem;">
+    A request to pause sales on this property is waiting on a manager.
+</div>
+{% endif %}
+
+<div class="page-header">
+    <div>
+        <h1>{{ customer.property_name }}</h1>
+        <div class="sub">
+            <span class="badge badge-customer">✓ Existing customer</span>
+            {% if customer.is_dormant %}<span class="badge badge-dormant">Dormant</span>{% endif %}
+            {% if customer.customer_type %} · {{ customer.customer_type }}{% endif %}
+            {% if customer.management_company_name %} · {{ customer.management_company_name }}{% endif %}
+            {% if customer.status and customer.status != 'Active' %} · {{ customer.status }}{% endif %}
+        </div>
+        <div class="sub">
+            {% if customer.last_service_date %}
+            Last service {{ customer.last_service_date.strftime('%b %-d, %Y') }}
+            ({{ customer.days_since_service }} days ago)
+            {% else %}
+            No service on record
+            {% endif %}
+        </div>
+        {{ price_list_status(customer.price_list_requested_at, customer.price_list_requested_by,
+                             customer.price_list_requested_to, price_email) }}
+        {% if map_query %}
+        <div class="sub"><a href="https://www.google.com/maps/search/?api=1&query={{ map_query|urlencode }}" target="_blank" rel="noopener" style="color:{{ branding.color_primary }};">{{ customer.address }}{% if customer.city %}, {{ customer.city }}, {{ customer.state }}{% endif %} ↗</a></div>
+        {% endif %}
+    </div>
+    <div class="quick-actions">
+        <a href="/{{ company_key }}/sales/visits/log?property_type=customer&property_id={{ customer.id }}{% if customer.is_dormant %}&investigate=1{% endif %}"
+           class="btn btn-primary">Log Visit</a>
+        {{ price_list_button('/' ~ company_key ~ '/sales/customers/' ~ customer.id ~ '/request-price-list',
+                             price_candidates, recent_request, customer.price_list_requested_at) }}
+        <a href="/{{ company_key }}/sales/tips/new?property_type=customer&property_id={{ customer.id }}&return_to=/{{ company_key }}/sales/customers/{{ customer.id }}"
+           class="btn btn-outline">🔥 Add Tip</a>
+        {% if not held_until and not delay_pending %}
+        <button type="button" class="btn btn-outline" onclick="openDelay()">Pause Sales…</button>
+        {% endif %}
+        {% if session.user_role in ('admin','manager') %}
+        <a href="/{{ company_key }}/customers/{{ customer.id }}" class="btn btn-outline">Full customer record</a>
+        {% endif %}
+    </div>
+</div>
+
+{% if open_tips %}
+<div class="card" style="border:1px solid #f3c98b; background:#fffaf3; margin-bottom:1.25rem;">
+    <h2 style="color:#9a4d00;">Open sales tips ({{ open_tips|length }})</h2>
+    {% for t in open_tips %}
+    <div class="row-item">
+        <div><span class="badge badge-tip">🔥 TIP</span> due {{ t.due_date.strftime('%b %-d') }}
+            <span class="row-sub">· from {{ t.created_by }}</span></div>
+        <div style="white-space:pre-line; font-size:.88rem; margin-top:.2rem;">{{ t.notes }}</div>
+    </div>
+    {% endfor %}
+    <div class="row-sub" style="margin-top:.5rem;">Logging a visit here closes these.</div>
+</div>
+{% endif %}
+
+<div class="sales-grid">
+    <div class="card">
+        <h2>People you've met</h2>
+        {% for c in sales_contacts %}
+        <div class="row-item">
+            <div><strong>{{ c.first_name }} {{ c.last_name }}</strong>{% if c.title %} — {{ c.title }}{% endif %}</div>
+            <div class="row-sub">
+                {% if c.office_email or c.personal_email %}{{ c.office_email or c.personal_email }}{% endif %}
+                {% if c.office_phone or c.personal_phone %} · {{ c.office_phone or c.personal_phone }}{% endif %}
+            </div>
+            <a href="/{{ company_key }}/sales/contacts/{{ c.id }}/edit" style="font-size:.8rem; color:{{ branding.color_primary }};">Edit</a>
+        </div>
+        {% else %}
+        <div class="empty">No sales contacts yet.</div>
+        {% endfor %}
+        <div style="margin-top:.75rem;">
+            <a href="/{{ company_key }}/sales/contacts/new?property_type=customer&property_id={{ customer.id }}&return_to=/{{ company_key }}/sales/customers/{{ customer.id }}"
+               class="btn btn-outline" style="padding:.4rem .8rem; font-size:.82rem;">+ Add Contact</a>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Customer contacts on file</h2>
+        <div class="row-sub" style="margin-bottom:.4rem;">From the office's customer record. Read-only here.</div>
+        {% for c in customer_contacts %}
+        <div class="row-item">
+            <div><strong>{{ ((c.first_name or '') ~ ' ' ~ (c.last_name or ''))|trim or 'Contact' }}</strong>{% if c.title %} — {{ c.title }}{% endif %}
+                {% if c.is_primary %}<span class="row-sub">· primary</span>{% endif %}
+                {% if c.accepts_billing %}<span class="badge badge-billing">billing</span>{% endif %}</div>
+            <div class="row-sub">
+                {% if c.office_email %}{{ c.office_email }}{% endif %}
+                {% if c.office_phone or c.mobile_phone %} · {{ c.office_phone or c.mobile_phone }}{% endif %}
+            </div>
+        </div>
+        {% else %}
+        <div class="empty">No contacts on the customer record.</div>
+        {% endfor %}
+    </div>
+
+    <div class="card" style="grid-column:1 / -1;">
+        <h2>Visit History</h2>
+        {% for v in visits %}
+        <div class="row-item">
+            <div>
+                <strong>{{ v.visit_date.strftime('%b %-d, %Y') if v.visit_date else '—' }}</strong>
+                {% if v.visit_tag %} — {{ v.visit_tag }}{% endif %}
+                {% if v.is_dormant_investigation %}<span class="badge badge-dormant">Dormancy</span>{% endif %}
+                <span class="row-sub">· {{ v.created_by }}</span>
+            </div>
+            {% if v.contact_first %}<div class="row-sub">Met: {{ (v.contact_first ~ ' ' ~ (v.contact_last or ''))|trim }}</div>{% endif %}
+            {% if v.dormancy_reason %}<div class="row-sub">Why dormant: {{ v.dormancy_reason }}</div>{% endif %}
+            {% if v.notes %}<div class="row-sub">{{ v.notes }}</div>{% endif %}
+            {% if v.follow_up_needed %}
+            <div class="row-sub">Follow-up: {{ v.follow_up_date.strftime('%b %-d, %Y') if v.follow_up_date else '—' }}{% if v.follow_up_completed %} (done){% endif %}</div>
+            {% endif %}
+        </div>
+        {% else %}
+        <div class="empty">No sales visits logged yet.</div>
+        {% endfor %}
+    </div>
+</div>
+
+{# Modals at the end of the content block -- see _sales_property_modals.html. #}
+{{ delay_modal('customer', customer.id, delay_months) }}
+{{ price_list_modal('/' ~ company_key ~ '/sales/customers/' ~ customer.id ~ '/request-price-list',
+                    price_candidates, recent_request, customer.price_list_requested_at, 'customer', false) }}
+{{ modal_script() }}
+{% endblock %}

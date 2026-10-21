@@ -182,6 +182,29 @@
 </div>
 
 <div class="card" style="margin-top:1.5rem;">
+    <h3 style="margin-bottom:.75rem;">Sales</h3>
+    <p style="font-size:.85rem; color:#888; margin-bottom:1rem;">
+        When on, the salesperson's view of a customer warns "Account past due — check with
+        the office before pitching" for customers 90+ days delinquent. No amounts are shown.
+        Leave this <strong>off until FieldKit has real payment history</strong>: until then,
+        imported invoices with no recorded payments make customers look past due when they
+        may not be (D-116).
+    </p>
+    <form method="POST" action="/{{ company_key }}/settings/company/sales-past-due-warning">
+        <label style="display:flex; align-items:center; gap:.6rem; font-size:.92rem;">
+            <input type="checkbox" name="sales_past_due_warning_enabled" style="width:18px; height:18px;"
+                   {% if settings and settings.sales_past_due_warning_enabled %}checked{% endif %}
+                   {% if session.user_role != 'admin' %}disabled{% endif %}
+                   onchange="this.form.submit()">
+            Past-due warning on sales customer pages
+            <span style="font-size:.82rem; color:{{ '#2e7d32' if settings and settings.sales_past_due_warning_enabled else '#c33' }}; font-weight:600;">
+                ({{ 'ON' if settings and settings.sales_past_due_warning_enabled else 'OFF' }})
+            </span>
+        </label>
+    </form>
+</div>
+
+<div class="card" style="margin-top:1.5rem;">
     <h3 style="margin-bottom:.75rem;">Scheduled Jobs</h3>
     <p style="font-size:.85rem; color:#888; margin-bottom:1rem;">
         Host cron runs these on a schedule (§3.5). The master switch below controls
