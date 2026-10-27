@@ -1917,3 +1917,16 @@ browser.
 **Deferred to the mobile app (documented in MOBILE-APP-PLAN §5 H and the backlog):**
 "near me" (closest properties by distance), multi-stop route planning, and an even
 prettier app edition of the sales map.
+
+## 2026-10-27 — Sales map: tiny dots instead of cluster bubbles
+
+Chris found the count bubbles large and distracting. Of the options offered (dots,
+heat map, smaller bubbles, colour-mix rings) he chose plain dots: clustering is
+off, and every property is a dot in its colour that grows from a speck (zoom 5)
+to a full pin (zoom 15+). Dense areas show themselves, and the colour mix is
+visible at every zoom, which the bubbles hid. Prospects and active customers draw
+above the ~4,700 dormant dots (`circle-sort-key`). A tap picks the nearest dot
+within ~14 px, since a speck is too small to hit with a finger. The rehab ring and
+tip dot appear from zoom 11/12. Template-only; map test extended. Still not
+visually verified here: Chris confirmed the earlier version looks and works well
+on his device.

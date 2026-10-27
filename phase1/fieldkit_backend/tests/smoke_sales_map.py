@@ -209,6 +209,8 @@ def main():
         check("search box, last-visit filter and full screen on the map",
               'id="mapSearch"' in html and 'id="visitFilter"' in html and 'value="never"' in html
               and 'FullscreenControl' in html and 'maplibregl-pseudo-fullscreen' in html)
+        check("no clustering: every property is a dot that scales with zoom",
+              'cluster: true' not in html and "'circle-sort-key'" in html and "queryRenderedFeatures([[pt.x - r" in html)
         check("search and filter panel sits inside the full-screen area",
               html.index('class="map-wrap"') < html.index('class="map-panel"') < html.index('class="legend"'))
         check("rotation and tilt are locked (no compass to undo them)",
