@@ -204,6 +204,10 @@ def main():
         check("region buttons for all four areas",
               all(n in html for n in ('Charlotte', 'Triad', 'Raleigh', 'South Florida')))
         check("script is in the body", html.index('</title>') < html.index("import * as maplibregl"))
+        check("detail box closes on zoom, not on a stray tap",
+              "map.on('zoomstart'" in html and 'closeOnClick: false' in html)
+        check("rotation and tilt are locked (no compass to undo them)",
+              'touchZoomRotate.disableRotation()' in html and 'touchPitch.disable()' in html)
         for path in ('/static/vendor/maplibre-gl-6.12.0/maplibre-gl.mjs',
                      '/static/vendor/maplibre-gl-6.12.0/maplibre-gl-shared.mjs',
                      '/static/vendor/maplibre-gl-6.12.0/maplibre-gl-worker.mjs',

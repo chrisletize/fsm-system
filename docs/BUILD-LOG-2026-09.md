@@ -1890,3 +1890,12 @@ reviewed by hand. **Chris to open it on the tablet.**
 **Known:** 4,730 of 4,774 customer pins are orange (dormant) because most job
 history isn't imported yet. Only 24 of 70 prospects are placed; most have no
 address.
+
+## 2026-10-27 — Sales map: detail box closes on zoom; north locked
+
+Per Chris: the pin's detail box now closes on any zoom change (pinch, wheel, +/−,
+a cluster tap, a region button) but stays open while panning, and a stray tap on
+empty map no longer closes it (`closeOnClick: false`). It closes with its ✕, a
+zoom, or tapping another pin. Also fixed: rotation and tilt were still possible by
+two-finger gesture with no compass shown to undo them, so both are now disabled.
+Template-only; map test extended. Still not visually verified in a browser.

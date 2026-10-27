@@ -178,6 +178,12 @@ try {
     throw e;
 }
 map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+// North stays up. With no compass button there'd be no way to straighten a map
+// that a two-finger gesture had rotated or tilted, so neither is allowed.
+map.dragRotate.disable();
+map.keyboard.disableRotation();
+map.touchZoomRotate.disableRotation();
+map.touchPitch.disable();
 map.addControl(new maplibregl.GeolocateControl({ positionOptions: { enableHighAccuracy: true } }), 'top-right');
 map.addControl(new maplibregl.ScaleControl({ unit: 'imperial' }), 'bottom-right');
 map.on('moveend', () => {
@@ -313,10 +319,18 @@ map.on('load', async () => {
         const zoom = await map.getSource('props').getClusterExpansionZoom(f.properties.cluster_id);
         map.easeTo({ center: f.geometry.coordinates, zoom });
     });
+    // The detail box closes on any zoom change but survives panning, and a stray
+    // tap on empty map doesn't close it either (Chris, 2026-10-27: it shouldn't
+    // feel too easy to lose). Its ✕, a zoom, or tapping another pin close it.
+    let activePopup = null;
     map.on('click', 'pins', e => {
         const f = e.features[0];
-        new maplibregl.Popup({ maxWidth: '320px', offset: 10 })
+        if (activePopup) activePopup.remove();
+        activePopup = new maplibregl.Popup({ maxWidth: '320px', offset: 10, closeOnClick: false })
             .setLngLat(f.geometry.coordinates).setHTML(popupHtml(PROPS[f.properties.idx])).addTo(map);
+    });
+    map.on('zoomstart', () => {
+        if (activePopup) { activePopup.remove(); activePopup = null; }
     });
     ['clusters', 'pins'].forEach(id => {
         map.on('mouseenter', id, () => { map.getCanvas().style.cursor = 'pointer'; });
