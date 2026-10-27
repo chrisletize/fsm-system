@@ -1974,3 +1974,12 @@ review (GAG 85, KC 311, CTS 52, KSF 3).
 review page, permissions, forms). Full suite 33/33.
 **Next:** move the 395 Florida-address customers to Kleanit SF (CURRENT-STATUS 6f).
 
+## 2026-10-27 — Florida customers moved to Kleanit SF (D-120)
+
+**Asked by Chris:** move the customers with Florida addresses out of Kleanit
+Charlotte and Get a Grip into Kleanit SF. New `move_florida_customers.py`; dry run
+first, then `--commit` after backup 2026-10-27T0252Z. Moved 395 customers (392 KC,
+3 GAG) with 261 contacts and 3 service locations; none had jobs, invoices or
+payments. Kleanit SF: 61 → 456 customers. Category audit re-run: 12 more re-filed
+at Kleanit SF, 53 waiting for review there. Full suite 33/33 after the move.
+

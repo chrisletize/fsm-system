@@ -296,18 +296,18 @@ unclosed template block (D-111), not email delivery.
 4. Card payments: processor choice, plus the open items in D-104.
 5. Whether existing customers can be rehab-flagged (D-106/D-110).
 6. `import_job_dates.py --commit` still on hold (Increment 3.3).
-6c. **Customer categories: 451 left for the office to check** (D-119, migration
-    043). The audit re-filed 2,580 customers on 2026-10-27; the ones it wasn't sure
-    about wait on Settings → Customer Categories in each company (GAG 85, KC 311,
-    CTS 52, KSF 3). New category **Resident Pays**: the Kleanits use it instead of
+6c. **Customer categories: 445 left for the office to check** (D-119, migration
+    043). The audit re-filed 2,592 customers on 2026-10-27; the ones it wasn't sure
+    about wait on Settings → Customer Categories in each company (GAG 85, KC 255,
+    CTS 52, KSF 53 after the Florida move). New category **Resident Pays**: the Kleanits use it instead of
     Residential, GAG uses Residential only, **CTS uses both** (Resident Pays for
     tenants, Residential for homeowners) -- a call made during the build, easy to
     reverse in `COMPANY_CUSTOMER_TYPES`. Same-company duplicates at one address
     (e.g. GAG "Ava Southend" / "335 Apartments") are a separate cleanup.
-6f. **Florida customers filed in the wrong company** (Chris, 2026-10-27: move them
-    to Kleanit SF): 392 in Kleanit Charlotte and 3 in Get a Grip have a Florida
-    address. Next step: verify the list, back up, copy each customer with its
-    contacts/locations/notes into Kleanit SF and soft-delete the original.
+6f. **Florida customers moved to Kleanit SF — done 2026-10-27** (D-120): 392 from
+    Kleanit Charlotte and 3 from Get a Grip; Kleanit SF now has 456 customers. Nothing
+    left to do unless the office spots a customer that belongs back in Charlotte
+    (each moved customer has a note naming its old record, which is soft-deleted).
 6d. **519 customers can't be placed on the sales map** (PO boxes, property names in
     the street field, missing house numbers). `geocode_status` = no_match /
     incomplete identifies them; fixing addresses re-places them the next night.

@@ -2303,9 +2303,28 @@ cleaning".
 - **Sales lists:** the map still shows Multi Family + Contractors (D-118). The
   Dormant Customers list now leaves out individuals (Residential, Resident Pays):
   they aren't accounts the salesman works. Commercial and Contractors stay on it.
-- **Florida:** 395 customers with a Florida address are filed in Kleanit Charlotte
-  (392) and Get a Grip (3). Chris: move them to Kleanit SF. That move is a
-  separate step (CURRENT-STATUS 6f).
+- **Florida:** 395 customers with a Florida address were filed in Kleanit
+  Charlotte (392) and Get a Grip (3). Chris: move them to Kleanit SF (D-120).
+
+D-120 — Florida customers moved to Kleanit South Florida (Chris, 2026-10-27).
+The ServiceFusion import filed 392 Florida customers (state FL or ZIP 32–34) in
+Kleanit Charlotte and 3 Florida apartment complexes in Get a Grip. Chris: "move
+them to Kleanit SF". `move_florida_customers.py` (dry run by default, `--commit`
+after the 2026-10-27T0252Z backup):
+- copies each customer, its active contacts and service locations, and its notes
+  into `fieldkit_kleanit_sf` with new ids. Category is mapped to Kleanit SF's list
+  (Get a Grip Residential → Resident Pays).
+- leaves a note on both records naming the other, soft-deletes the original
+  (`deleted_by = 'florida_move'`), and writes record_audit rows on both sides.
+- does not copy customer_flags or customer_ratings (nightly caches; a
+  manager-adjusted rating would block the move). It retires pending category
+  reviews at the source; the audit re-queued them at Kleanit SF.
+- refuses any customer with rows in any other table that references customers
+  (work orders, invoices, payments, estimates...) or with a management company,
+  since moving financial history between company databases needs a person to
+  decide. None of the 395 had any, so all moved: 261 contacts, 3 locations.
+  Kleanit SF went from 61 to 456 customers. Destination commits before source, so
+  a failure can leave a customer in both places but never in neither.
 
 ---
 
