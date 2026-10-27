@@ -1832,3 +1832,26 @@ Invoices, statements, tax, compliance portals and billing contacts don't use it.
 **Migration:** 041 (email_log kind only). Backed up first (`2026-10-27T0002Z`).
 **Tests:** 24 checks added to `tests/smoke_sales_customer_page.py`. Full suite 27/31;
 the same 4 stale tests fail at the same assertions.
+
+## 2026-10-27 — Test suite green (31/31)
+
+**What:** updated the four stale tests to the behaviour they'd fallen behind.
+Nothing in the app changed.
+- `smoke_dashboard`: the salesperson is redirected from the dashboard to /sales
+  (D-101); his follow-ups are checked there, and the estimate quick-action check
+  moved to a manager.
+- `smoke_extraction`: the final pickup is now shown to be **refused** before dry
+  confirmation, then confirmed dry, then retrieved (D-103).
+- `smoke_permissions`: My Day status taps go to `/workorders/<id>/visit-status` and
+  leave the work order's own status alone (D-100). The test now proves that, plus
+  "can't log a visit on someone else's job" and "can't set another tech's status".
+  The salesperson checks now assert the D-101 lockdown (customer search, customer
+  detail, reports and estimates 403; the sales customer page is open).
+- `smoke_sales_crm`: the follow-up date expectation rolls weekends to Monday
+  (D-109). It had been passing or failing depending on the day of the week.
+Fixing the first failure in two of these exposed further stale checks that had
+never run; all were D-101 related.
+**Note for Chris:** under the D-101 lockdown the salesperson can't create estimates
+or open the recency/jobs reports, even though the September permission sweep had
+granted them. That's the lockdown working as designed; flagged in case he needs
+either.

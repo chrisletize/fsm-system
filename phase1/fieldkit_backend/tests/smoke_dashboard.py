@@ -156,11 +156,16 @@ def main():
         check("technician still sees Today's Jobs", "Today's Jobs" in html)
 
         print("smoke_dashboard: salesperson sees follow-ups but not approvals; admin sees both")
+        # The salesperson is locked to the Sales module (D-101), so the company
+        # dashboard sends him to /sales; his follow-ups live there.
         sales = client_as('salesperson')
-        r = sales.get('/getagrip/dashboard')
+        r = sales.get('/getagrip/dashboard', follow_redirects=False)
+        check(f"salesperson is redirected from the dashboard to Sales ({r.headers.get('Location')})",
+              r.status_code == 302 and r.headers.get('Location', '').endswith('/getagrip/sales'))
+        r = sales.get('/getagrip/sales')
         html = r.data.decode()
-        check("salesperson sees Follow-Ups Due", 'Follow-Ups Due' in html)
-        check("salesperson does NOT see Pending Approvals", 'Pending Approvals' not in html)
+        check("salesperson sees his Follow-Ups on the Sales page", r.status_code == 200 and 'Follow-Ups (' in html)
+        check("salesperson does NOT see the Approvals button", '/getagrip/sales/approvals' not in html)
 
         r = admin.get('/getagrip/dashboard')
         html = r.data.decode()
@@ -171,10 +176,11 @@ def main():
         r = tech.get('/getagrip/dashboard')
         html = r.data.decode()
         check("technician has no + New Estimate quick action", '+ New Estimate' not in html)
-        r = sales.get('/getagrip/dashboard')
+        # The salesperson never sees this dashboard now (D-101), so the
+        # estimate-role check moves to a manager, the other estimate role.
+        r = client_as('manager').get('/getagrip/dashboard')
         html = r.data.decode()
-        check("salesperson has + New Estimate quick action", '+ New Estimate' in html)
-        check("salesperson has no Record Payment quick action", 'Record Payment' not in html)
+        check("manager has + New Estimate quick action", '+ New Estimate' in html)
 
         print("ALL CHECKS PASSED")
 

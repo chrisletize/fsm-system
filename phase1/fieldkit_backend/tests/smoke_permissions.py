@@ -104,26 +104,43 @@ def main():
             r = client_as(role).get('/getagrip/myday')
             check(f"{role} blocked from myday (403) ({r.status_code})", r.status_code == 403)
 
-        print("smoke_permissions: My Day status update -- own job allowed, other tech's job rejected")
-        r = tech.post(f'/getagrip/myday/{own_wo_id}/status', data={'status': 'On The Way', 'date': TODAY}, follow_redirects=False)
-        check(f"tech marks own job On The Way ({r.status_code})", r.status_code == 302)
-        cur.execute("SELECT status FROM work_orders WHERE id = %s", (own_wo_id,))
-        check("status actually changed to On The Way", cur.fetchone()['status'] == 'On The Way')
+        # D-100: My Day's buttons log the tech's VISIT status (one row per tap in
+        # work_order_visit_status_log) and never change the work order's own
+        # status. The old /myday/<id>/status route that wrote work_orders.status
+        # was retired.
+        print("smoke_permissions: My Day visit status -- own job allowed, other tech's job rejected")
+        rt = f'/getagrip/myday?date={TODAY}'
 
-        r = tech.post(f'/getagrip/myday/{other_wo_id}/status', data={'status': 'Completed', 'date': TODAY}, follow_redirects=False)
-        check(f"tech CANNOT complete a job they're not assigned to (404) ({r.status_code})", r.status_code == 404)
+        def visit_rows(wid, user):
+            cur.execute("""SELECT status FROM work_order_visit_status_log
+                           WHERE work_order_id = %s AND username = %s ORDER BY id""", (wid, user))
+            return [r['status'] for r in cur.fetchall()]
+
+        r = tech.post(f'/getagrip/workorders/{own_wo_id}/visit-status',
+                      data={'status': 'On The Way', 'return_to': rt}, follow_redirects=False)
+        check(f"tech marks own visit On The Way ({r.status_code})", r.status_code == 302)
+        check("visit status logged", visit_rows(own_wo_id, TECH_USER) == ['On The Way'])
+        cur.execute("SELECT status FROM work_orders WHERE id = %s", (own_wo_id,))
+        check("the work order's own status is untouched", cur.fetchone()['status'] == 'Scheduled')
+
+        r = tech.post(f'/getagrip/workorders/{other_wo_id}/visit-status',
+                      data={'status': 'Completed', 'return_to': rt}, follow_redirects=False)
+        check(f"tech CANNOT log a visit on a job they're not assigned to ({r.status_code})",
+              r.status_code == 302 and visit_rows(other_wo_id, TECH_USER) == [])
         cur.execute("SELECT status FROM work_orders WHERE id = %s", (other_wo_id,))
         check("other tech's job status untouched", cur.fetchone()['status'] == 'Scheduled')
 
-        r = tech.post(f'/getagrip/myday/{own_wo_id}/status', data={'status': 'Completed', 'date': TODAY}, follow_redirects=False)
-        check(f"tech marks own job Completed ({r.status_code})", r.status_code == 302)
-        cur.execute("SELECT status FROM work_orders WHERE id = %s", (own_wo_id,))
-        check("status is now Completed", cur.fetchone()['status'] == 'Completed')
+        r = tech.post(f'/getagrip/workorders/{other_wo_id}/visit-status',
+                      data={'status': 'Started', 'username': OTHER_TECH, 'return_to': rt}, follow_redirects=False)
+        check(f"tech CANNOT set another tech's visit status (403) ({r.status_code})", r.status_code == 403)
 
-        r = tech.post(f'/getagrip/myday/{own_wo_id}/status', data={'status': 'On The Way', 'date': TODAY}, follow_redirects=False)
-        check(f"a Completed job can no longer be moved backward ({r.status_code})", r.status_code == 302)
+        r = tech.post(f'/getagrip/workorders/{own_wo_id}/visit-status',
+                      data={'status': 'Completed', 'return_to': rt}, follow_redirects=False)
+        check(f"tech marks own visit Completed ({r.status_code})", r.status_code == 302)
+        check("both taps logged in order", visit_rows(own_wo_id, TECH_USER) == ['On The Way', 'Completed'])
         cur.execute("SELECT status FROM work_orders WHERE id = %s", (own_wo_id,))
-        check("status stayed Completed (rejected silently with a flash, not an error)", cur.fetchone()['status'] == 'Completed')
+        check("completing the visit does NOT complete the job (office closes it out)",
+              cur.fetchone()['status'] == 'Scheduled')
 
         print("smoke_permissions: office WO form still rejects the mobile-reserved statuses")
         r = admin.post(f'/getagrip/workorders/{other_wo_id}/edit', data={
@@ -162,10 +179,16 @@ def main():
             r = tech.post(url, data=data) if method == 'POST' else tech.get(url)
             check(f"{method} {url} -> 403 for technician ({r.status_code})", r.status_code == 403)
 
-        print("smoke_permissions: salesperson CAN reach customer writes and search (unaffected by the tech scoping)")
+        # Since D-101 (2026-09-30) the salesperson is locked to /sales/* site-wide;
+        # he reaches customers only through the sales customer page (D-116).
+        print("smoke_permissions: salesperson is locked out of office customer pages (D-101)")
         sales = client_as('salesperson')
         r = sales.get('/getagrip/customers/search?search=SMOKE')
-        check(f"salesperson customer search 200 ({r.status_code})", r.status_code == 200)
+        check(f"salesperson customer search -> 403 ({r.status_code})", r.status_code == 403)
+        r = sales.get(f'/getagrip/customers/{own_customer_id}')
+        check(f"salesperson customer detail -> 403 ({r.status_code})", r.status_code == 403)
+        r = sales.get(f'/getagrip/sales/customers/{own_customer_id}')
+        check(f"...but the sales customer page is open to him ({r.status_code})", r.status_code == 200)
 
         print("smoke_permissions: field_settings is now admin-only (was admin+manager)")
         manager = client_as('manager')
@@ -174,18 +197,25 @@ def main():
         r = admin.get('/getagrip/settings/fields')
         check(f"admin still allowed ({r.status_code})", r.status_code == 200)
 
-        print("smoke_permissions: salesperson now has recency + jobs + reports-landing access")
-        for path in ('/getagrip/reports', '/getagrip/reports/jobs', '/getagrip/reports/recency'):
+        # The 5.4 sweep gave the salesperson recency/jobs/reports access; D-101's
+        # sales-only lockdown later superseded that. Reports and estimates are
+        # outside /sales, so they 403 for him regardless of the route's own roles.
+        print("smoke_permissions: salesperson's sales-only lockdown covers reports and estimates (D-101)")
+        for path in ('/getagrip/reports', '/getagrip/reports/jobs', '/getagrip/reports/recency',
+                     '/getagrip/reports/tax', '/getagrip/estimates'):
             r = sales.get(path)
-            check(f"salesperson GET {path} -> 200 ({r.status_code})", r.status_code == 200)
-        r = sales.get('/getagrip/reports/tax')
-        check(f"salesperson still blocked from tax report (403) ({r.status_code})", r.status_code == 403)
+            check(f"salesperson GET {path} -> 403 ({r.status_code})", r.status_code == 403)
+        r = client_as('manager').get('/getagrip/reports/recency')
+        check(f"manager still reaches the recency report ({r.status_code})", r.status_code == 200)
 
-        print("smoke_permissions: reports landing hides admin/manager-only cards from salesperson")
-        r = sales.get('/getagrip/reports')
+        # The landing page's role-gated cards used to be checked as the
+        # salesperson; he can't reach /reports any more (D-101), so check what a
+        # manager, who can, is shown.
+        print("smoke_permissions: reports landing shows a manager the job and tax cards")
+        r = client_as('manager').get('/getagrip/reports')
         html = r.data.decode()
-        check("salesperson reports landing shows Job Activity", 'Job Activity' in html)
-        check("salesperson reports landing hides Tax Report", 'NC Cash-Basis Tax Report' not in html)
+        check("manager reports landing shows Job Activity", 'Job Activity' in html)
+        check("manager reports landing shows Tax Report", 'NC Cash-Basis Tax Report' in html)
 
         print("smoke_permissions: billing_export now gated (was wide open)")
         r = sales.post('/getagrip/billing/export', data={'customer_ids': [str(own_customer_id)]})
@@ -207,6 +237,9 @@ def main():
 
     finally:
         for wid in wo_ids:
+            cur.execute("""DELETE FROM record_audit WHERE table_name = 'work_order_visit_status_log'
+                           AND record_id IN (SELECT id FROM work_order_visit_status_log WHERE work_order_id = %s)""", (wid,))
+            cur.execute("DELETE FROM work_order_visit_status_log WHERE work_order_id = %s", (wid,))
             cur.execute("DELETE FROM record_audit WHERE table_name='work_orders' AND record_id=%s", (wid,))
             cur.execute("DELETE FROM work_order_status_history WHERE work_order_id = %s", (wid,))
             cur.execute("DELETE FROM work_order_techs WHERE work_order_id = %s", (wid,))

@@ -25,6 +25,7 @@ from datetime import date, timedelta
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import app as app_module  # noqa: E402
 from app import (  # noqa: E402
+    _next_business_day,
     get_db_connection, app, job_weekly_sales_report, _sales_dormant_customers,
 )
 
@@ -153,8 +154,11 @@ def main():
         """, (prospect_id,))
         visit = cur.fetchone()
         visit_ids.append(visit['id'])
-        expected_followup = TODAY + timedelta(days=5)  # 'Hot lead' default_followup_days = 5
-        check(f"follow_up_date auto-set to +5 days ({visit['follow_up_date']} == {expected_followup})",
+        # 'Hot lead' default_followup_days = 5, rolled forward off a weekend
+        # (D-109). Without the roll this test failed on any day where +5 lands
+        # on a Saturday or Sunday.
+        expected_followup = _next_business_day(TODAY + timedelta(days=5))
+        check(f"follow_up_date auto-set to +5 days, weekday ({visit['follow_up_date']} == {expected_followup})",
               visit['follow_up_date'] == expected_followup)
 
         print("smoke_sales_crm: follow-ups list shows it, mark-complete works")

@@ -304,16 +304,11 @@ unclosed template block (D-111), not email delivery.
     `docs/sf-reference/SF_MOBILE_APP_ANALYSIS.md` (batch 2); needs Chris's go-ahead.
 
 **Engineering debt (no decision needed, just work):**
-7. Test suite (re-run 2026-10-19, 29 files): **25 pass, 4 fail, all stale tests
-   rather than bugs.** Each still expects behaviour that was later changed on
-   purpose, and each fails the same way on code from before D-114:
-   `smoke_dashboard` (expects the dashboard for the salesperson, who is now
-   locked to Sales, D-101); `smoke_extraction` (final retrieval without dry
-   confirmation, D-103); `smoke_permissions` (posts My Day status to the
-   pre-D-100 endpoint → 404); `smoke_sales_crm` (expects +5 calendar days;
-   follow-ups now roll weekends to Monday, D-109). Apart from the new
-   `smoke_dispatch_led_closeout.py`, nothing covers migrations 029–038; the
-   checks run in those sessions were never saved.
+7. Test suite: **31/31 green as of 2026-10-27.** The four stale tests were
+   updated to the behaviour they'd fallen behind (D-101 sales-only lockdown,
+   D-100 visit status, D-103 dry confirmation, D-109 business-day follow-ups); see
+   the build log. Migrations 029–038 still have little committed coverage beyond
+   the tests added since (LED close-out, sales tips, sales customer page).
 8. `docs/DATABASE-SCHEMA.md` (2026-02-10) is missing ~40 of the 54 live
    tables; `docs/SALES-SYSTEM.md` (2026-02-10) predates the whole October
    sales redesign. The migration files are the accurate schema record

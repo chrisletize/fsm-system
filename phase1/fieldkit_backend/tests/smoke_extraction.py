@@ -141,6 +141,23 @@ def main():
         """, (wo_id,))
         open_line = cur.fetchone()
         retrieve_date = date.today().isoformat()
+
+        # D-103: the retrieval that would empty the site is refused until the
+        # area is confirmed dry. Prove the gate, then confirm and retrieve.
+        r = client.post(f'/kleanit_charlotte/extraction/{wo_id}/retrieve', data={
+            f'retrieved_{open_line["id"]}': retrieve_date,
+        }, follow_redirects=False)
+        cur.execute("SELECT status, retrieved_at FROM work_orders wo JOIN work_order_line_items li ON li.work_order_id = wo.id WHERE li.id = %s",
+                    (open_line['id'],))
+        gated = cur.fetchone()
+        check("final pickup refused before dry confirmation (D-103)",
+              gated['status'] == 'Extraction Active' and gated['retrieved_at'] is None)
+        r = client.post(f'/kleanit_charlotte/extraction/{wo_id}/confirm-dry',
+                        data={'dry_confirmation_notes': 'smoke: meter reads dry'}, follow_redirects=False)
+        check(f"confirm dry responds 302 ({r.status_code})", r.status_code == 302)
+        cur.execute("SELECT dry_confirmed_at FROM work_orders WHERE id = %s", (wo_id,))
+        check("dry confirmation recorded", cur.fetchone()['dry_confirmed_at'] is not None)
+
         r = client.post(f'/kleanit_charlotte/extraction/{wo_id}/retrieve', data={
             f'retrieved_{open_line["id"]}': retrieve_date,
         }, follow_redirects=False)
