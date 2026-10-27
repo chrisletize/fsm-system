@@ -71,8 +71,13 @@
             <span class="badge badge-customer">✓ Existing customer</span>
             {% if customer.is_dormant %}<span class="badge badge-dormant">Dormant</span>{% endif %}
             {% if customer.customer_type %} · {{ customer.customer_type }}{% endif %}
-            {% if customer.management_company_name %} · {{ customer.management_company_name }}{% endif %}
             {% if customer.status and customer.status != 'Active' %} · {{ customer.status }}{% endif %}
+        </div>
+        {# The one customer field the sales side can change (D-117). #}
+        <div class="sub">
+            Management company: <strong style="color:#555;">{{ customer.management_company_name or 'None (independent)' }}</strong>
+            · <button type="button" onclick="openMc()" style="background:none; border:none; padding:0; cursor:pointer;
+                     color:{{ branding.color_primary }}; text-decoration:underline; font-size:inherit;">Change…</button>
         </div>
         <div class="sub">
             {% if customer.last_service_date %}
@@ -179,6 +184,90 @@
         {% endfor %}
     </div>
 </div>
+
+{# Management company change (D-117). Takes effect at once; when the
+   salesperson makes it, managers are emailed to confirm it with him. #}
+<div id="mcModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45);
+     z-index:1000; align-items:center; justify-content:center;">
+  <div style="background:#fff; border-radius:8px; padding:1.5rem; width:100%; max-width:460px;
+              max-height:85vh; overflow-y:auto; box-shadow:0 4px 24px rgba(0,0,0,.2);">
+    <h3 style="font-size:1.1rem; color:{{ branding.color_primary }}; margin-bottom:.6rem;">Change management company</h3>
+    {% if session.user_role not in ('admin', 'manager') %}
+    <div style="font-size:.86rem; color:#8a6100; background:#fff8ef; border:1px solid #f0dcb0;
+                border-radius:6px; padding:.65rem .8rem; margin-bottom:1rem;">
+        ⚠ This changes the office's customer record straight away. <strong>Check it with a manager</strong>.
+        They'll be emailed about the change so they can confirm it with you.
+        Billing and contact details aren't affected.
+    </div>
+    {% endif %}
+    <form method="POST" action="/{{ company_key }}/sales/customers/{{ customer.id }}/management-company"
+          onsubmit="return document.getElementById('mcSelect').value !== '{{ customer.management_company_id or '' }}' || (alert('That is already the management company.'), false);">
+      <div style="font-size:.82rem; font-weight:600; color:#555; margin-bottom:.4rem;">Management company</div>
+      <select name="management_company_id" id="mcSelect"
+              style="width:100%; padding:.6rem .75rem; border:1px solid #ddd; border-radius:4px; font-size:.95rem;">
+        <option value="">— None (independent) —</option>
+        {% for mc in management_companies %}
+        <option value="{{ mc.id }}" {% if mc.id == customer.management_company_id %}selected{% endif %}>{{ mc.name }}</option>
+        {% endfor %}
+      </select>
+      <div style="display:flex; gap:.5rem; margin-top:.5rem;">
+        <input type="text" id="newMcName" placeholder="+ Not listed? Add it"
+               style="flex:1; padding:.5rem .65rem; border:1px solid #ddd; border-radius:4px; font-size:.88rem;">
+        <button type="button" id="addMcBtn" class="btn btn-outline" style="padding:.45rem .8rem; font-size:.82rem;">Add</button>
+      </div>
+      <div id="mcError" style="display:none; color:#c33; font-size:.8rem; margin-top:.3rem;"></div>
+      <div style="font-size:.82rem; font-weight:600; color:#555; margin:.9rem 0 .3rem;">
+          How do you know? <span style="font-weight:400; color:#999;">(optional, goes to the managers)</span></div>
+      <textarea name="note" rows="2" placeholder="e.g. new manager said Greystar took over in September"
+                style="width:100%; padding:.6rem .75rem; border:1px solid #ddd; border-radius:4px;
+                       font-size:.95rem; font-family:inherit;"></textarea>
+      <div style="display:flex; gap:.6rem; margin-top:1.1rem;">
+        <button type="submit" class="btn btn-primary" style="flex:1;">Save Change</button>
+        <button type="button" class="btn btn-outline" onclick="closeMc()">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+<script>
+function openMc() { document.getElementById('mcModal').style.display = 'flex'; }
+function closeMc() { document.getElementById('mcModal').style.display = 'none'; }
+(function () {
+    var btn = document.getElementById('addMcBtn'), input = document.getElementById('newMcName');
+    var select = document.getElementById('mcSelect'), errEl = document.getElementById('mcError');
+    function addCompany() {
+        var name = input.value.trim();
+        if (!name) return;
+        errEl.style.display = 'none';
+        btn.disabled = true;
+        fetch('/{{ company_key }}/sales/management-companies/new', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: 'name=' + encodeURIComponent(name)
+        })
+        .then(function (r) { return r.json().then(function (d) { return {ok: r.ok, data: d}; }); })
+        .then(function (res) {
+            btn.disabled = false;
+            if (!res.ok) { errEl.textContent = res.data.error || 'Could not add company.'; errEl.style.display = 'block'; return; }
+            // An existing company comes back rather than a twin; select it.
+            var opt = select.querySelector('option[value="' + res.data.id + '"]');
+            if (!opt) {
+                opt = document.createElement('option');
+                opt.value = res.data.id; opt.textContent = res.data.name;
+                select.appendChild(opt);
+            }
+            opt.selected = true;
+            input.value = '';
+        })
+        .catch(function () {
+            btn.disabled = false;
+            errEl.textContent = 'Could not add company — check your connection.';
+            errEl.style.display = 'block';
+        });
+    }
+    btn.addEventListener('click', addCompany);
+    input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); addCompany(); } });
+})();
+</script>
 
 {# Modals at the end of the content block -- see _sales_property_modals.html. #}
 {{ delay_modal('customer', customer.id, delay_months) }}

@@ -176,11 +176,15 @@
                 errEl.style.display = 'block';
                 return;
             }
-            var opt = document.createElement('option');
-            opt.value = res.data.id;
-            opt.textContent = res.data.name;
+            // An existing company comes back rather than a twin (D-117); select it.
+            var opt = select.querySelector('option[value="' + res.data.id + '"]');
+            if (!opt) {
+                opt = document.createElement('option');
+                opt.value = res.data.id;
+                opt.textContent = res.data.name;
+                select.appendChild(opt);
+            }
             opt.selected = true;
-            select.appendChild(opt);
             input.value = '';
         })
         .catch(function() {

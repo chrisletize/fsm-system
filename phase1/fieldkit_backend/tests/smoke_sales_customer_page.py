@@ -67,6 +67,7 @@ def main():
     admin = client_as('admin', 'smokecustadmin')
     tech = client_as('technician', 'smokecusttech')
     cust_id = prospect_id = wo_id = None
+    mc_ids = []
 
     try:
         cur.execute("""INSERT INTO customers (property_name, customer_type, status, address, city, state,
@@ -195,6 +196,83 @@ def main():
         check("prospect page still renders its modals in the body",
               html.index('</title>') < html.index('id="priceListModal"') < html.index('function openPriceList'))
 
+        print("smoke_sales_customer_page: changing the management company (D-117)")
+        cur.execute("""INSERT INTO management_companies (name, created_by, updated_by)
+                       VALUES ('ZZZ Smoke MgmtCo <A>', 'smokecust', 'smokecust'),
+                              ('ZZZ Smoke MgmtCo B', 'smokecust', 'smokecust') RETURNING id""")
+        mc_ids += [r['id'] for r in cur.fetchall()]
+        mc_a, mc_b = mc_ids
+        cur.execute("UPDATE customers SET management_company_id = %s WHERE id = %s", (mc_a, cust_id))
+        conn.commit()
+        html = sales.get(f'/{CK}/sales/customers/{cust_id}').get_data(as_text=True)
+        check("page shows the management company and a Change button",
+              'ZZZ Smoke MgmtCo &lt;A&gt;' in html and 'openMc()' in html and 'id="mcModal"' in html)
+        check("salesperson sees the check-with-a-manager warning", 'Check it with a manager' in html)
+        check("the change modal is in the body", html.index('</title>') < html.index('id="mcModal"'))
+        check("managers don't get the warning",
+              'Check it with a manager' not in admin.get(f'/{CK}/sales/customers/{cust_id}').get_data(as_text=True))
+
+        n_sent = len(sent)
+        r = sales.post(f'/{CK}/sales/customers/{cust_id}/management-company',
+                       data={'management_company_id': mc_b, 'note': 'new PM said so <b>',
+                             'billing_email': 'hacked@evil.invalid', 'property_name': 'Hacked'},
+                       follow_redirects=True)
+        check(f"salesperson's change saved ({r.status_code})", r.status_code == 200
+              and 'The managers have been emailed' in r.get_data(as_text=True))
+        cur.execute("SELECT management_company_id, billing_email, property_name FROM customers WHERE id = %s", (cust_id,))
+        row = cur.fetchone()
+        check("management company changed", row['management_company_id'] == mc_b)
+        check("nothing else on the customer can be changed this way",
+              row['billing_email'] == 'ap@billing.invalid' and row['property_name'] == 'ZZZ Smoke Dormant <Tower>')
+        cur.execute("""SELECT changed_by, diff::text AS diff FROM record_audit WHERE table_name = 'customers'
+                       AND record_id = %s ORDER BY id DESC LIMIT 1""", (cust_id,))
+        aud = cur.fetchone()
+        check("recorded in the customer's audit trail", aud and aud['changed_by'] == 'smokecustsales'
+              and 'ZZZ Smoke MgmtCo B' in aud['diff'])
+        check("one email to the managers", len(sent) == n_sent + 1)
+        to, subject, body = sent[-1]
+        check(f"goes to the company's managers/admins ({to})", len(to) >= 1 and 'office@getagripofcharlotte.com' not in to)
+        check("subject asks them to confirm", 'Please confirm' in subject and 'ZZZ Smoke Dormant' in subject)
+        check("email shows was/now and the note, escaped",
+              'ZZZ Smoke MgmtCo &lt;A&gt;' in body and 'ZZZ Smoke MgmtCo B' in body
+              and 'new PM said so &lt;b&gt;' in body and '<b>' not in body.split('Their note')[1])
+        check("email links to the customer record", f'/{CK}/customers/{cust_id}' in body)
+        cur.execute("""SELECT status FROM email_log WHERE kind = 'mgmt_company_change' AND related_id = %s
+                       ORDER BY sent_at DESC LIMIT 1""", (cust_id,))
+        check("logged to email_log", cur.fetchone()['status'] == 'sent')
+
+        r = sales.post(f'/{CK}/sales/customers/{cust_id}/management-company',
+                       data={'management_company_id': mc_b}, follow_redirects=True)
+        check("same company again is a no-op, no email",
+              'unchanged' in r.get_data(as_text=True) and len(sent) == n_sent + 1)
+        r = sales.post(f'/{CK}/sales/customers/{cust_id}/management-company',
+                       data={'management_company_id': '999999999'}, follow_redirects=True)
+        cur.execute("SELECT management_company_id FROM customers WHERE id = %s", (cust_id,))
+        check("a nonexistent company is refused", cur.fetchone()['management_company_id'] == mc_b
+              and 'no longer exists' in r.get_data(as_text=True))
+        fail_next['on'] = True
+        r = sales.post(f'/{CK}/sales/customers/{cust_id}/management-company',
+                       data={'management_company_id': ''}, follow_redirects=True)
+        fail_next['on'] = False
+        cur.execute("SELECT management_company_id FROM customers WHERE id = %s", (cust_id,))
+        check("clearing it works (independent)", cur.fetchone()['management_company_id'] is None)
+        check("a failed manager email is surfaced, and the change still sticks",
+              'FAILED' in r.get_data(as_text=True))
+        n_sent = len(sent)
+        admin.post(f'/{CK}/sales/customers/{cust_id}/management-company', data={'management_company_id': mc_a})
+        cur.execute("SELECT management_company_id FROM customers WHERE id = %s", (cust_id,))
+        check("a manager's change needs no confirmation email",
+              cur.fetchone()['management_company_id'] == mc_a and len(sent) == n_sent)
+        check("a technician can't change it",
+              tech.post(f'/{CK}/sales/customers/{cust_id}/management-company',
+                        data={'management_company_id': mc_b}).status_code == 403)
+
+        r = sales.post(f'/{CK}/sales/management-companies/new', data={'name': '  zzz smoke mgmtco b '})
+        check("adding a name that already exists returns the existing company",
+              r.get_json()['id'] == mc_b and r.get_json().get('existing'))
+        cur.execute("SELECT COUNT(*) AS n FROM management_companies WHERE lower(name) = 'zzz smoke mgmtco b'")
+        check("no duplicate created", cur.fetchone()['n'] == 1)
+
         print("smoke_sales_customer_page: ways in")
         r = sales.post(f'/{CK}/sales/visits/log', data={
             'property_type': 'customer', 'property_id': cust_id, 'notes': 'Checking in',
@@ -217,7 +295,7 @@ def main():
         cur.execute("UPDATE company_settings SET sales_past_due_warning_enabled = %s WHERE deleted_at IS NULL",
                     (original_setting,))
         if cust_id:
-            cur.execute("DELETE FROM email_log WHERE kind = 'customer_price_list' AND related_id = %s", (cust_id,))
+            cur.execute("DELETE FROM email_log WHERE kind IN ('customer_price_list', 'mgmt_company_change') AND related_id = %s", (cust_id,))
             cur.execute("SELECT id FROM sales_visits WHERE property_type = 'customer' AND property_id = %s", (cust_id,))
             vids = [r['id'] for r in cur.fetchall()]
             if vids:
@@ -232,6 +310,8 @@ def main():
         if cust_id:
             cur.execute("DELETE FROM record_audit WHERE table_name = 'customers' AND record_id = %s", (cust_id,))
             cur.execute("DELETE FROM customers WHERE id = %s", (cust_id,))
+        if mc_ids:
+            cur.execute("DELETE FROM management_companies WHERE id = ANY(%s) OR name ILIKE 'ZZZ Smoke MgmtCo%%'", (mc_ids,))
         if prospect_id:
             cur.execute("DELETE FROM email_log WHERE kind = 'price_list_request' AND related_id = %s", (prospect_id,))
             cur.execute("DELETE FROM sales_prospects WHERE id = %s", (prospect_id,))

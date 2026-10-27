@@ -2203,6 +2203,29 @@ prospect-only. Rather than loosening D-101, a separate read-only page under
 
 ---
 
+D-117 — The salesman may change an existing customer's management company:
+change first, confirm afterwards (Chris, 2026-10-27). He hears about ownership and
+management changes before anyone in the office. Chris's call was no approval step:
+the change sticks, with a warning to check it with a manager and an email asking
+the managers to confirm it, because the field has no adverse effect. Verified
+before building: `customers.management_company_id` only labels and groups a
+customer (billing page, billing CSV, recency report); no billing, statement,
+tax, portal or contact logic reads it. Choices:
+- **Only this field.** The route updates `management_company_id` and nothing else.
+  Billing and contact details stay office-only, as Chris required.
+- **Audit, not approval:** `record_audit` captures was/now plus his note, so a
+  manager can see and reverse it from the customer's History panel. Contrast the
+  sales pause (D-108), which does go through `approval_queue` because it
+  suppresses a property from sales work.
+- **Who's emailed:** every admin/manager with access to the company and an email
+  on file (`_sales_company_managers`, the same list as approval notifications).
+  For Get a Grip on 2026-10-27 that's chris, mike and michele. Managers' own changes
+  aren't emailed; their change is the validation.
+- **No twin management companies:** the add endpoint returns an existing company on
+  a case/space-insensitive name match.
+
+---
+
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:
 #33 (OPS/VendorCafe export templates), #50 (SMS alerts via Twilio), and Stage 5.6
 (ServiceFusion price-list exports, company legal names/remit-to/reply-to/alert emails).

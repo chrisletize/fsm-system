@@ -11767,6 +11767,114 @@ def sales_customer_request_price_list(company_key, customer_id):
     return _request_price_list(company_key, 'customer', customer_id)
 
 
+@app.route('/<company_key>/sales/customers/<int:customer_id>/management-company', methods=['POST'])
+@login_required
+@company_access_required
+def sales_customer_management_company(company_key, customer_id):
+    """The salesman may change an existing customer's management company
+    (D-117, Chris 2026-10-27). He hears about it first: properties change hands
+    and management companies all the time.
+
+    The change sticks immediately. The management company only labels and
+    groups a customer (billing page, billing CSV, recency report); nothing in
+    invoicing, statements, tax, portals or billing contacts reads it. It's
+    recorded in record_audit so it shows in the customer's History panel, and
+    when the salesperson makes it, the company's managers are emailed to
+    confirm it with him. This is the ONLY customer field the sales side can
+    write; billing and contact details stay office-only."""
+    role = session.get('user_role')
+    if role not in SALES_ROLES:
+        abort(403)
+    username = session.get('username')
+    back = f'/{company_key}/sales/customers/{customer_id}'
+    raw = (request.form.get('management_company_id') or '').strip()
+    new_id = int(raw) if raw.isdigit() else None
+    note = (request.form.get('note') or '').strip() or None
+
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT c.id, c.property_name, c.management_company_id, mc.name AS mc_name
+        FROM customers c LEFT JOIN management_companies mc ON mc.id = c.management_company_id
+        WHERE c.id = %s AND c.deleted_at IS NULL
+    """, (customer_id,))
+    cust = cur.fetchone()
+    if not cust:
+        cur.close(); conn.close(); abort(404)
+    new_name = None
+    if new_id is not None:
+        cur.execute("SELECT name FROM management_companies WHERE id = %s AND deleted_at IS NULL", (new_id,))
+        row = cur.fetchone()
+        if not row:
+            cur.close(); conn.close()
+            flash('That management company no longer exists — pick another.', 'error')
+            return redirect(back)
+        new_name = row['name']
+    if new_id == cust['management_company_id']:
+        cur.close(); conn.close()
+        flash('Management company unchanged.', 'success')
+        return redirect(back)
+
+    old_label = cust['mc_name'] or 'none (independent)'
+    new_label = new_name or 'none (independent)'
+    cur.execute("""
+        UPDATE customers SET management_company_id = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s
+    """, (new_id, username, customer_id))
+    _record_audit(cur, 'customers', customer_id, 'update',
+                  before={'management_company_id': cust['management_company_id'], 'management_company': old_label},
+                  after={'management_company_id': new_id, 'management_company': new_label,
+                         **({'note': note} if note else {})},
+                  changed_by=username)
+    conn.commit()
+
+    # A manager or admin making the change IS the validation; only the
+    # salesperson's changes need confirming.
+    if role in SALES_APPROVAL_ROLES:
+        cur.close(); conn.close()
+        flash(f'Management company changed: {old_label} → {new_label}.', 'success')
+        return redirect(back)
+
+    recipients = []
+    for m in _sales_company_managers(company_key):
+        if m['email'] and m['email'].lower() not in {r.lower() for r in recipients}:
+            recipients.append(m['email'])
+    if not recipients:
+        cur.close(); conn.close()
+        flash(f'Management company changed: {old_label} → {new_label}. No manager email is on file, '
+              f'so tell a manager directly so they can confirm it.', 'error')
+        return redirect(back)
+    branding_local = COMPANY_BRANDING.get(company_key, {})
+    esc = lambda v: str(html_escape(v or ''))
+    subject = (f"[{branding_local.get('name', company_key)}] Please confirm: management company "
+               f"changed — {cust['property_name']}")
+    body = (
+        f"<p><strong>{esc(session.get('full_name') or username)}</strong> changed the management company "
+        f"of an existing customer from the sales page.</p>"
+        f"<p><strong>Customer:</strong> {esc(cust['property_name'])}<br>"
+        f"<strong>Was:</strong> {esc(old_label)}<br>"
+        f"<strong>Now:</strong> {esc(new_label)}</p>"
+        + (f"<p><strong>Their note:</strong> {esc(note)}</p>" if note else '') +
+        f"<p>The change is already in effect. Please confirm it with them; if it's wrong, change it "
+        f"back on the customer record (it's in the History panel): "
+        f"<a href=\"{APP_BASE_URL}/{company_key}/customers/{customer_id}\">"
+        f"{APP_BASE_URL}/{company_key}/customers/{customer_id}</a></p>"
+        f"<p>Billing and contact details were not changed. The sales side can't edit those.</p>"
+    )
+    message_id, send_error = _send_email_via_resend(recipients, subject, body,
+                                                    from_name=branding_local.get('name'))
+    _log_email(cur, 'mgmt_company_change', customer_id, recipients, subject, message_id,
+               'failed' if send_error else 'sent', send_error, username)
+    conn.commit(); cur.close(); conn.close()
+    if send_error:
+        flash(f'Management company changed: {old_label} → {new_label}, but the email to the managers '
+              f'FAILED ({send_error}). Tell a manager directly so they can confirm it.', 'error')
+    else:
+        flash(f'Management company changed: {old_label} → {new_label}. The managers have been emailed '
+              f'to confirm it with you.', 'success')
+    return redirect(back)
+
+
 def _rehab_contact_days(cur):
     cur.execute("""
         SELECT rehab_contact_days FROM dormancy_alerts_config
@@ -11959,6 +12067,18 @@ def sales_management_company_new(company_key):
     username = session.get('username')
     conn = get_db_connection(company_key)
     cur = conn.cursor()
+    # Typing a name that already exists picks the existing company rather than
+    # creating a twin (D-117): customers' management companies can now be set
+    # from the sales side too, and two "Greystar"s would split them.
+    cur.execute("""
+        SELECT id, name FROM management_companies
+        WHERE deleted_at IS NULL AND lower(btrim(name)) = lower(btrim(%s))
+        ORDER BY id LIMIT 1
+    """, (name,))
+    existing = cur.fetchone()
+    if existing:
+        cur.close(); conn.close()
+        return jsonify({'id': existing['id'], 'name': existing['name'], 'existing': True})
     cur.execute("""
         INSERT INTO management_companies (name, created_by, updated_by)
         VALUES (%s, %s, %s) RETURNING id
@@ -12234,7 +12354,8 @@ def sales_customer_detail(company_key, customer_id, branding, all_companies, com
     cur = conn.cursor()
     cur.execute(f"""
         SELECT c.id, c.property_name, c.customer_type, c.address, c.address_2, c.city, c.state, c.zip,
-               c.status, c.price_list_requested_at, c.price_list_requested_by, c.price_list_requested_to,
+               c.status, c.management_company_id,
+               c.price_list_requested_at, c.price_list_requested_by, c.price_list_requested_to,
                mc.name AS management_company_name, {LAST_SERVICE_DATE_SQL} AS last_service_date
         FROM customers c LEFT JOIN management_companies mc ON mc.id = c.management_company_id
         WHERE c.id = %s AND c.deleted_at IS NULL
@@ -12299,6 +12420,8 @@ def sales_customer_detail(company_key, customer_id, branding, all_companies, com
     # customers are flagged delinquent purely from imported ServiceFusion
     # invoices with no payments recorded), so an admin switches it on per company
     # in Company Settings once the data is real. No amount is ever shown here.
+    cur.execute("SELECT id, name FROM management_companies WHERE deleted_at IS NULL ORDER BY name")
+    management_companies = cur.fetchall()
     cur.execute("SELECT sales_past_due_warning_enabled FROM company_settings WHERE deleted_at IS NULL LIMIT 1")
     settings_row = cur.fetchone()
     past_due = False
@@ -12320,7 +12443,7 @@ def sales_customer_detail(company_key, customer_id, branding, all_companies, com
         price_candidates=price_candidates, price_email=price_email, recent_request=recent_request,
         held_until=held_until, held_reason=held_reason, delay_pending=delay_pending,
         delay_months=SALES_DELAY_MONTHS, past_due=past_due, map_query=map_query,
-        dormancy_weeks=weeks,
+        dormancy_weeks=weeks, management_companies=management_companies,
     )
 
 

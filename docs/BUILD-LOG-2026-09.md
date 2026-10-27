@@ -1810,3 +1810,25 @@ Backed up first (`2026-10-21T2029Z`); schemas still identical.
 **Tests:** new `tests/smoke_sales_customer_page.py` (44 checks). Full suite 28/31; the
 same 3 stale tests fail at the same assertions (`smoke_sales_crm` passed only
 because today + 5 days isn't a weekend; it's still stale).
+
+## 2026-10-27 — Salesman can change a customer's management company (D-117)
+
+**What:** on the sales customer page, "Management company: X · Change…" opens a
+picker (with "+ Not listed? Add it") and an optional "How do you know?" note. For
+the salesperson the pop-up warns that this changes the office's record straight
+away and to check it with a manager. The change sticks immediately, is recorded in
+`record_audit` (it shows in the customer's History panel), and when the salesperson
+makes it, the company's admins/managers are emailed to confirm it with him (was →
+now, his note, link to the customer record). The email is logged as
+`mgmt_company_change`; a failed send is surfaced. Managers' own changes send no
+email. It's the only customer field the sales route writes; the test posts billing
+email and property name alongside it and confirms they're ignored. The "+ Add new
+management company" endpoint now returns an existing company when the name
+matches (case and spaces ignored) instead of creating a twin; the prospect form's
+script handles that too.
+**Checked first:** `customers.management_company_id` is read only by the billing
+page label, the billing CSV export column and the recency report's grouping.
+Invoices, statements, tax, compliance portals and billing contacts don't use it.
+**Migration:** 041 (email_log kind only). Backed up first (`2026-10-27T0002Z`).
+**Tests:** 24 checks added to `tests/smoke_sales_customer_page.py`. Full suite 27/31;
+the same 4 stale tests fail at the same assertions.
