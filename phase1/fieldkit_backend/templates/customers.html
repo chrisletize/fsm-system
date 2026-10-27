@@ -174,10 +174,9 @@
             </select>
             <select name="type" class="filter-select" onchange="document.getElementById('filterForm').submit()">
                 <option value="">All Types</option>
-                <option value="Multi Family"  {% if type_filter == 'Multi Family'  %}selected{% endif %}>Multi Family</option>
-                <option value="Commercial"    {% if type_filter == 'Commercial'    %}selected{% endif %}>Commercial</option>
-                <option value="Residential"   {% if type_filter == 'Residential'   %}selected{% endif %}>Residential</option>
-                <option value="Contractors"   {% if type_filter == 'Contractors'   %}selected{% endif %}>Contractors</option>
+                {% for t in customer_types_for(company_key) %}
+                <option value="{{ t }}" {% if type_filter == t %}selected{% endif %}>{{ t }}</option>
+                {% endfor %}
             </select>
             <span class="result-count" id="resultCount">{{ total }} customer{{ 's' if total != 1 }}</span>
         </div>

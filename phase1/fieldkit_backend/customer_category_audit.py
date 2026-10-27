@@ -21,9 +21,19 @@ Evidence, strongest first:
   4. Contacts: a contact whose name is the customer's name, personal email
      domains (gmail, yahoo...) versus company domains.
 
+Which individual-customer category a company uses (Chris, 2026-10-27): the
+Kleanits file every individual as Resident Pays (no Residential), Get a Grip as
+Residential (no Resident Pays), and CTS, the umbrella company, uses both --
+Resident Pays for a tenant, Residential for a homeowner. COMPANY_CUSTOMER_TYPES
+in app.py is the source; company_type() below maps each proposal onto it.
+
 Run inside the app container:
     docker compose exec -T app python customer_category_audit.py            # report only
     docker compose exec -T app python customer_category_audit.py --csv DIR  # + one CSV per company
+    docker compose exec -T app python customer_category_audit.py --apply    # change high+medium,
+                                                                             # queue low for review
+Back up first (ops/backup/fieldkit-backup.sh). --apply is safe to re-run: it
+skips customers someone already decided on the review page.
 """
 import csv
 import os
@@ -33,7 +43,9 @@ from collections import Counter, defaultdict
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
 
-CATEGORIES = ('Multi Family', 'Contractors', 'Residential', 'Commercial')
+CATEGORIES = ('Multi Family', 'Contractors', 'Residential', 'Commercial', 'Resident Pays')
+INDIVIDUAL_TYPES = ('Residential', 'Resident Pays')
+APPLIED_BY = 'category_audit'
 
 
 def _load(name):
@@ -192,8 +204,21 @@ def _normalize_street(address):
     return ''.join(abbrev.get(x, x) for x in re.findall(r'[a-z0-9]+', line))
 
 
-def classify_company(conn, company_key):
-    """One proposal per active customer. Returns a list of dicts."""
+def company_type(allowed, proposed, subtype):
+    """Map a proposal onto the categories this company uses. `allowed` is
+    customer_types_for(company_key) from app.py."""
+    if proposed not in INDIVIDUAL_TYPES:
+        return proposed
+    if 'Residential' in allowed and 'Resident Pays' in allowed:      # CTS: both
+        if subtype:
+            return 'Resident Pays' if subtype == 'resident pays' else 'Residential'
+        return proposed
+    return 'Resident Pays' if 'Resident Pays' in allowed else 'Residential'
+
+
+def classify_company(conn, company_key, allowed=None):
+    """One proposal per active customer. Returns a list of dicts. `allowed` is
+    the company's category list (customer_types_for); None skips the mapping."""
     cur = conn.cursor()
     cur.execute("""
         SELECT c.id, c.property_name, c.customer_type, c.address, c.city, c.state, c.zip,
@@ -292,6 +317,14 @@ def classify_company(conn, company_key):
         if c['has_portal'] and proposed != 'Multi Family':
             reasons.append('enrolled in a compliance portal (usually a property)')
             confidence = 'low'
+        if allowed:
+            raw = proposed
+            proposed = company_type(allowed, proposed, subtype)
+            if raw == c['customer_type'] and proposed != raw:
+                # Same evidence-free answer, but the current category isn't one
+                # this company uses any more: a rename, not a judgement call.
+                reasons.append(f'{raw} is not a category at this company: renamed to {proposed}')
+                confidence = 'high'
         fl = (c['state'] or '').upper() == 'FL' or (c['zip'] or '')[:2] in ('32', '33', '34')
         out.append({
             'company': company_key, 'id': c['id'], 'name': c['property_name'], 'address': c['address'] or '',
@@ -304,6 +337,48 @@ def classify_company(conn, company_key):
     return out
 
 
+def apply_company(conn, company_key, rows, record_audit):
+    """Change high+medium proposals; queue low ones on the review page.
+    Customers someone already decided on (a non-pending review) are left alone.
+    `record_audit` is app._record_audit. Commits. Returns (changed, queued)."""
+    cur = conn.cursor()
+    cur.execute("""SELECT customer_id, status FROM customer_category_reviews
+                   WHERE deleted_at IS NULL""")
+    decided, pending = set(), set()
+    for r in cur.fetchall():
+        (pending if r['status'] == 'pending' else decided).add(r['customer_id'])
+    changed = queued = 0
+    for r in rows:
+        if not r['changes'] or r['id'] in decided:
+            continue
+        if r['confidence'] in ('high', 'medium'):
+            cur.execute("SELECT * FROM customers WHERE id = %s AND deleted_at IS NULL", (r['id'],))
+            before = cur.fetchone()
+            if not before or before['customer_type'] != r['current']:
+                continue                      # changed since the audit read it
+            cur.execute("""UPDATE customers SET customer_type = %s, updated_at = CURRENT_TIMESTAMP,
+                                  updated_by = %s
+                           WHERE id = %s RETURNING *""", (r['proposed'], APPLIED_BY, r['id']))
+            record_audit(cur, 'customers', r['id'], 'update', before, cur.fetchone(), changed_by=APPLIED_BY)
+            if r['id'] in pending:            # an older low-confidence question is now settled
+                cur.execute("""UPDATE customer_category_reviews
+                               SET deleted_at = CURRENT_TIMESTAMP, deleted_by = %s
+                               WHERE customer_id = %s AND status = 'pending' AND deleted_at IS NULL""",
+                            (APPLIED_BY, r['id']))
+            changed += 1
+        elif r['id'] not in pending:
+            cur.execute("""INSERT INTO customer_category_reviews
+                               (customer_id, current_type, proposed_type, confidence, reasons,
+                                created_by, updated_by)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                        (r['id'], r['current'], r['proposed'], r['confidence'], r['reasons'],
+                         APPLIED_BY, APPLIED_BY))
+            queued += 1
+    conn.commit()
+    cur.close()
+    return changed, queued
+
+
 def summarize(rows):
     s = Counter()
     for r in rows:
@@ -313,11 +388,14 @@ def summarize(rows):
 
 if __name__ == '__main__':
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from app import get_db_connection, ALL_COMPANY_KEYS
+    from app import get_db_connection, ALL_COMPANY_KEYS, customer_types_for, _record_audit
     csv_dir = sys.argv[sys.argv.index('--csv') + 1] if '--csv' in sys.argv else None
     for ck in ALL_COMPANY_KEYS:
         conn = get_db_connection(ck)
-        rows = classify_company(conn, ck)
+        rows = classify_company(conn, ck, customer_types_for(ck))
+        if '--apply' in sys.argv:
+            changed, queued = apply_company(conn, ck, rows, _record_audit)
+            print(f"\n=== {ck}: APPLIED {changed} changes, {queued} queued for review")
         conn.close()
         changes = [r for r in rows if r['changes']]
         print(f"\n=== {ck}: {len(rows)} active customers, {len(changes)} proposed changes")

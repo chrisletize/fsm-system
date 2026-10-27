@@ -1953,3 +1953,24 @@ pin. Added to the customer category audit (CURRENT-STATUS 6c).
 **Tests:** grouping cases added to `smoke_sales_map.py` (Alton's exact shape,
 Dr/Drive, same-point typo, neighbour stays separate, same street in another town).
 The test's fake geocoder now places by address, like a real one. Full suite 32/32.
+
+## 2026-10-27 — Customer category audit applied; Resident Pays category (D-119)
+
+**Asked by Chris:** sort the customers the ServiceFusion import filed as Multi
+Family into their real categories; add "resident pays" (tenants paying for their
+own carpet cleaning), used instead of Residential at the Kleanits; Get a Grip
+keeps Residential only.
+**Migration 043** (all four DBs, after backup 2026-10-27T0243Z): `Resident Pays`
+added to the customers CHECK; new `customer_category_reviews` table.
+**Code:** `COMPANY_CUSTOMER_TYPES` / `customer_types_for` / `normalize_customer_type`
+in app.py; customer form, customer list filter, public estimate request and
+prospect approval use the company's list. `customer_category_audit.py` gained the
+per-company mapping and `--apply`. New page `/<company>/settings/customer-categories`
+(admin/manager), linked from the Settings landing. The Dormant Customers list
+leaves out individuals.
+**Applied** after backup 2026-10-27T0249Z: 2,580 customers re-filed, 451 queued for
+review (GAG 85, KC 311, CTS 52, KSF 3).
+**Tests:** new `smoke_customer_categories.py` (company lists, name rules, apply,
+review page, permissions, forms). Full suite 33/33.
+**Next:** move the 395 Florida-address customers to Kleanit SF (CURRENT-STATUS 6f).
+

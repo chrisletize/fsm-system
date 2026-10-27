@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Customer Categories — {{ branding.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-header { margin-bottom:1rem; }
+    .page-header h1 { font-size:1.75rem; color:{{ branding.color_primary }}; }
+    .intro { font-size:.88rem; color:#666; margin-bottom:1.25rem; max-width:52rem; }
+    .review { background:white; border:1px solid #eee; border-radius:8px; padding:1rem 1.25rem; margin-bottom:.75rem; }
+    .review-top { display:flex; flex-wrap:wrap; justify-content:space-between; gap:.5rem 1rem; }
+    .review-name { font-weight:600; color:{{ branding.color_primary }}; text-decoration:none; }
+    .review-addr { font-size:.82rem; color:#888; }
+    .review-guess { font-size:.88rem; }
+    .review-why { font-size:.8rem; color:#777; margin:.4rem 0 .75rem; }
+    .review form { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; }
+    .review select { padding:.45rem .6rem; border:1px solid #ddd; border-radius:4px; font-size:.88rem; background:white; }
+    .btn { display:inline-block; padding:.45rem 1rem; border-radius:4px; font-weight:500; cursor:pointer;
+           border:none; font-size:.85rem; }
+    .btn-primary { background:{{ branding.color_primary }}; color:white; }
+    .btn-outline { background:white; color:{{ branding.color_primary }}; border:1px solid {{ branding.color_primary }}; }
+    .empty { background:white; border:1px solid #eee; border-radius:8px; padding:2rem; text-align:center; color:#888; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header"><h1>Customer Categories</h1></div>
+<p class="intro">
+    The category check sorted every customer by name, address and contacts. The confident
+    answers have already been made (they're in the <a href="/{{ company_key }}/settings/audit">Audit Log</a>
+    as <em>category_audit</em>). These {{ reviews|length }} it wasn't sure about. Pick the right
+    category and Save, or Keep as is.
+    {% if decided %}{{ decided }} already decided.{% endif %}
+</p>
+
+{% for r in reviews %}
+{% set next = reviews[loop.index] if not loop.last else none %}
+<div class="review" id="r{{ r.id }}">
+    <div class="review-top">
+        <div>
+            <a class="review-name" href="/{{ company_key }}/customers/{{ r.customer_id }}">{{ r.property_name }}</a>
+            <div class="review-addr">{{ r.address or '' }}{% if r.city %}, {{ r.city }}{% endif %} {{ r.state or '' }} {{ r.zip or '' }}</div>
+        </div>
+        <div class="review-guess">Now <strong>{{ r.customer_type }}</strong> → suggested <strong>{{ r.proposed_type }}</strong></div>
+    </div>
+    <div class="review-why">Why: {{ r.reasons or '—' }}</div>
+    <form method="POST" action="/{{ company_key }}/settings/customer-categories/{{ r.id }}">
+        <input type="hidden" name="next_id" value="{{ next.id if next else '' }}">
+        <select name="customer_type" aria-label="Category for {{ r.property_name }}">
+            {% for t in customer_types %}
+            <option value="{{ t }}" {% if t == r.proposed_type %}selected{% endif %}>{{ t }}</option>
+            {% endfor %}
+        </select>
+        <button class="btn btn-primary" type="submit" name="action" value="save">Save</button>
+        <button class="btn btn-outline" type="submit" name="action" value="keep">Keep as {{ r.customer_type }}</button>
+    </form>
+</div>
+{% else %}
+<div class="empty">Nothing waiting. Every customer's category has been decided.</div>
+{% endfor %}
+{% endblock %}

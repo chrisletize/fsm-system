@@ -157,7 +157,7 @@
             <div class="form-group">
                 <label>Customer Type</label>
                 <select name="customer_type">
-                    {% for t in ['Multi Family','Commercial','Residential','Contractors'] %}
+                    {% set _types = customer_types_for(company_key) %}{% for t in (_types if not customer or not customer.customer_type or customer.customer_type in _types else _types + (customer.customer_type,)) %}
                     <option value="{{ t }}"
                         {% if customer and customer.customer_type == t %}selected{% endif %}>
                         {{ t }}

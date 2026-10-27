@@ -24,6 +24,7 @@
     {% endif %}
     <a class="settings-card" href="/{{ company_key }}/settings/catalog"><h3>Service Catalog</h3><p>Billable line items, pricing, taxability.</p></a>
     <a class="settings-card" href="/{{ company_key }}/settings/equipment"><h3>Equipment Registry</h3><p>Per-day billable equipment units.</p></a>
+    <a class="settings-card" href="/{{ company_key }}/settings/customer-categories"><h3>Customer Categories</h3><p>Check the categories the audit wasn't sure about.</p></a>
     {% if session.user_role == 'admin' %}
     <a class="settings-card" href="/{{ company_key }}/settings/tax"><h3>Tax Rates</h3><p>Effective-dated county rates.</p></a>
     <a class="settings-card" href="/{{ company_key }}/settings/company"><h3>Company Settings</h3><p>Legal name, remit-to, email templates, alerts.</p></a>

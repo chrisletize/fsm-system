@@ -1060,7 +1060,7 @@ def customer_new(company_key, branding, all_companies, company_access):
                 RETURNING id
             """, (
                 request.form.get('property_name','').strip(),
-                request.form.get('customer_type','Multi Family'),
+                normalize_customer_type(company_key, request.form.get('customer_type', 'Multi Family')),
                 request.form.get('status','Active'),
                 request.form.get('address','').strip(),
                 request.form.get('address_2','').strip(),
@@ -1143,7 +1143,7 @@ def customer_edit(company_key, customer_id, branding, all_companies, company_acc
                 WHERE id = %s
             """, (
                 request.form.get('property_name','').strip(),
-                request.form.get('customer_type','Multi Family'),
+                normalize_customer_type(company_key, request.form.get('customer_type', 'Multi Family')),
                 request.form.get('status','Active'),
                 request.form.get('address','').strip(),
                 request.form.get('address_2','').strip(),
@@ -2314,6 +2314,90 @@ def settings_landing(company_key, branding, all_companies, company_access):
     )
 
 
+@app.route('/<company_key>/settings/customer-categories')
+@login_required
+@company_access_required
+@with_branding
+def customer_category_reviews(company_key, branding, all_companies, company_access):
+    """D-119: the customer category audit's low-confidence proposals, for the
+    office to accept, correct, or keep as they are. Confident proposals were
+    applied by customer_category_audit.py --apply and are in the audit log
+    under 'category_audit'."""
+    if session.get('user_role') not in ('admin', 'manager'):
+        abort(403)
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT r.id, r.customer_id, r.current_type, r.proposed_type, r.confidence, r.reasons,
+               c.property_name, c.address, c.city, c.state, c.zip, c.customer_type
+        FROM customer_category_reviews r
+        JOIN customers c ON c.id = r.customer_id AND c.deleted_at IS NULL
+        WHERE r.status = 'pending' AND r.deleted_at IS NULL
+        ORDER BY r.proposed_type, c.property_name
+    """)
+    reviews = cur.fetchall()
+    cur.execute("""
+        SELECT count(*) AS n FROM customer_category_reviews
+        WHERE status <> 'pending' AND deleted_at IS NULL
+    """)
+    decided = cur.fetchone()['n']
+    cur.close(); conn.close()
+    return render_template('customer_category_reviews.html',
+        branding=branding, company_key=company_key,
+        company_access=company_access, all_companies=all_companies,
+        reviews=reviews, decided=decided, customer_types=customer_types_for(company_key),
+    )
+
+
+@app.route('/<company_key>/settings/customer-categories/<int:review_id>', methods=['POST'])
+@login_required
+@company_access_required
+def customer_category_review_decide(company_key, review_id):
+    if session.get('user_role') not in ('admin', 'manager'):
+        abort(403)
+    username = session.get('username')
+    conn = get_db_connection(company_key)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT r.*, c.customer_type AS live_type
+        FROM customer_category_reviews r JOIN customers c ON c.id = r.customer_id
+        WHERE r.id = %s AND r.status = 'pending' AND r.deleted_at IS NULL AND c.deleted_at IS NULL
+    """, (review_id,))
+    review = cur.fetchone()
+    if not review:
+        cur.close(); conn.close()
+        flash('That customer was already decided.', 'info')
+        return redirect(f'/{company_key}/settings/customer-categories')
+    if request.form.get('action') == 'keep':
+        chosen = review['live_type']
+    else:
+        chosen = request.form.get('customer_type', '')
+        if chosen not in customer_types_for(company_key):
+            cur.close(); conn.close()
+            abort(400)
+    status = ('kept' if chosen == review['live_type']
+              else 'accepted' if chosen == review['proposed_type'] else 'changed')
+    if chosen != review['live_type']:
+        cur.execute("SELECT * FROM customers WHERE id = %s", (review['customer_id'],))
+        before = cur.fetchone()
+        cur.execute("""
+            UPDATE customers SET customer_type = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+            WHERE id = %s RETURNING *
+        """, (chosen, username, review['customer_id']))
+        _record_audit(cur, 'customers', review['customer_id'], 'update', before, cur.fetchone(),
+                      changed_by=username)
+    cur.execute("""
+        UPDATE customer_category_reviews
+        SET status = %s, decided_type = %s, decided_by = %s, decided_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP, updated_by = %s
+        WHERE id = %s
+    """, (status, chosen, username, username, review_id))
+    conn.commit(); cur.close(); conn.close()
+    next_id = request.form.get('next_id', '')
+    return redirect(f'/{company_key}/settings/customer-categories'
+                    + (f'#r{next_id}' if next_id.isdigit() else ''))
+
+
 @app.route('/<company_key>/settings/company', methods=['GET', 'POST'])
 @login_required
 @company_access_required
@@ -2376,11 +2460,47 @@ WO_ARRIVAL_SUGGESTIONS = [
 # customer_type -> (work-site field label, prefill from service location?)
 # Commercial and Contractors are interchangeable for this operation -> "Job Site".
 WORK_SITE_LABELS = {
-    'Multi Family': ('Unit Number', False),
-    'Residential':  ('Job Address', True),
-    'Commercial':   ('Job Site',    False),
-    'Contractors':  ('Job Site',    False),
+    'Multi Family':  ('Unit Number', False),
+    'Residential':   ('Job Address', True),
+    'Resident Pays': ('Job Address', True),
+    'Commercial':    ('Job Site',    False),
+    'Contractors':   ('Job Site',    False),
 }
+
+# Which customer types each company uses (D-119, Chris 2026-10-27). Resident
+# Pays -- a tenant paying directly for a cleaning the complex doesn't offer --
+# only exists with carpet cleaning, so the two Kleanits use it INSTEAD of
+# Residential; Get a Grip uses Residential only; CTS (Get a Grip franchise +
+# Kleanit) uses both. The DB CHECK allows all five so every schema stays the same.
+_BASE_CUSTOMER_TYPES = ('Multi Family', 'Contractors', 'Commercial')
+COMPANY_CUSTOMER_TYPES = {
+    'getagrip':          _BASE_CUSTOMER_TYPES + ('Residential',),
+    'kleanit_charlotte': _BASE_CUSTOMER_TYPES + ('Resident Pays',),
+    'kleanit_sf':        _BASE_CUSTOMER_TYPES + ('Resident Pays',),
+    'cts':               _BASE_CUSTOMER_TYPES + ('Residential', 'Resident Pays'),
+}
+
+
+def customer_types_for(company_key):
+    return COMPANY_CUSTOMER_TYPES.get(company_key, _BASE_CUSTOMER_TYPES + ('Residential',))
+
+
+def normalize_customer_type(company_key, value, default='Multi Family'):
+    """A customer type valid for this company. An individual is Residential at
+    Get a Grip and Resident Pays at the Kleanits, so the two map onto each other
+    rather than being refused (e.g. a public estimate request saying
+    'Residential' to Kleanit)."""
+    allowed = customer_types_for(company_key)
+    if value in allowed:
+        return value
+    if value == 'Residential' and 'Resident Pays' in allowed:
+        return 'Resident Pays'
+    if value == 'Resident Pays' and 'Residential' in allowed:
+        return 'Residential'
+    return default
+
+
+app.jinja_env.globals['customer_types_for'] = customer_types_for
 
 # Invoices reuse the same per-company prefixes as work orders (GAG/KC/CTS/KSF).
 # One number per RECEIVABLE, forever — a revision stays under the same number
@@ -10981,7 +11101,9 @@ def estimate_request_create_customer(company_key, request_id):
     if not req:
         cur.close(); conn.close(); abort(404)
 
-    customer_type = req['customer_type'] if req['customer_type'] in WORK_SITE_LABELS else 'Residential'
+    # Mapped to this company's types (D-119): 'Residential' becomes Resident Pays at the Kleanits.
+    customer_type = normalize_customer_type(company_key, req['customer_type'] or 'Residential',
+                                            default=normalize_customer_type(company_key, 'Residential'))
     cur.execute("""
         INSERT INTO customers (property_name, customer_type, address, city, state, zip, status,
             payment_terms, created_by, updated_by)
@@ -11103,8 +11225,9 @@ def _sales_dormant_customers(company_key):
         SELECT c.id, c.property_name, {LAST_SERVICE_DATE_SQL} AS last_service_date
         FROM customers c
         WHERE c.deleted_at IS NULL AND c.status = 'Active'
+          AND c.customer_type <> ALL(%s)
           AND (c.sales_delayed_until IS NULL OR c.sales_delayed_until < CURRENT_DATE)
-    """)
+    """, (list(INDIVIDUAL_CUSTOMER_TYPES),))
     rows = cur.fetchall()
     cur.close(); conn.close()
     today = date.today()
@@ -13778,7 +13901,9 @@ def sales_approval_approve(company_key, approval_id):
     details = approval['request_details']
     review_notes = request.form.get('review_notes', '').strip() or None
     property_name = request.form.get('property_name', '').strip() or details.get('prospect_name')
-    customer_type = request.form.get('customer_type', '').strip() or details.get('customer_type') or 'Commercial'
+    customer_type = normalize_customer_type(
+        company_key, request.form.get('customer_type', '').strip() or details.get('customer_type') or 'Commercial',
+        default='Commercial')
     address = request.form.get('address', '').strip() or details.get('address')
     city    = request.form.get('city', '').strip() or details.get('city')
     state   = (request.form.get('state', '').strip() or details.get('state') or '')[:2] or None
@@ -13876,11 +14001,13 @@ def sales_approval_reject(company_key, approval_id):
 CENSUS_BATCH_URL   = 'https://geocoding.geo.census.gov/geocoder/locations/addressbatch'
 GEOCODE_BATCH_SIZE = 1000          # Census allows 10,000; smaller batches fail cheaper
 GEOCODE_TIMEOUT_S  = 600
-# Customer types that belong on the sales map. Residential (private homes) are
-# left off (Chris, 2026-10-27) -- not sales targets, and no pinning of homes.
-# NB: many residential customers are still tagged Multi Family; the category
-# audit (CURRENT-STATUS) fixes the data, this list doesn't need to change.
+# Customer types on the sales map (Chris, 2026-10-27): Multi Family and
+# Contractors. Residential / Resident Pays (individual people) are not sales
+# targets and homes are never pinned; INDIVIDUAL_CUSTOMER_TYPES also keeps them
+# off the Dormant Customers list. Accurate since the category audit (D-119)
+# re-filed the people the import had filed as Multi Family.
 SALES_MAP_CUSTOMER_TYPES = ('Multi Family', 'Contractors')
+INDIVIDUAL_CUSTOMER_TYPES = ('Residential', 'Resident Pays')
 
 
 def _geocode_input(row):

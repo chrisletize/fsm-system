@@ -296,13 +296,18 @@ unclosed template block (D-111), not email delivery.
 4. Card payments: processor choice, plus the open items in D-104.
 5. Whether existing customers can be rehab-flagged (D-106/D-110).
 6. `import_job_dates.py --commit` still on hold (Increment 3.3).
-6c. **Customer category audit** (Chris, 2026-10-27): only 13 customers are tagged
-    Residential but there are many more; the sales map (and anything else
-    filtering on customer_type) is only as good as these tags.
-    The sales map makes them visible: individual residents tagged Multi Family
-    appear inside their apartment building's pin (e.g. "Alex Herold" at Alton
-    Optimist Park), and same-company duplicates at one address show up too
-    (e.g. GAG "Ava Southend" / "335 Apartments" at 335 Doggett St).
+6c. **Customer categories: 451 left for the office to check** (D-119, migration
+    043). The audit re-filed 2,580 customers on 2026-10-27; the ones it wasn't sure
+    about wait on Settings → Customer Categories in each company (GAG 85, KC 311,
+    CTS 52, KSF 3). New category **Resident Pays**: the Kleanits use it instead of
+    Residential, GAG uses Residential only, **CTS uses both** (Resident Pays for
+    tenants, Residential for homeowners) -- a call made during the build, easy to
+    reverse in `COMPANY_CUSTOMER_TYPES`. Same-company duplicates at one address
+    (e.g. GAG "Ava Southend" / "335 Apartments") are a separate cleanup.
+6f. **Florida customers filed in the wrong company** (Chris, 2026-10-27: move them
+    to Kleanit SF): 392 in Kleanit Charlotte and 3 in Get a Grip have a Florida
+    address. Next step: verify the list, back up, copy each customer with its
+    contacts/locations/notes into Kleanit SF and soft-delete the original.
 6d. **519 customers can't be placed on the sales map** (PO boxes, property names in
     the street field, missing house numbers). `geocode_status` = no_match /
     incomplete identifies them; fixing addresses re-places them the next night.
@@ -316,7 +321,7 @@ unclosed template block (D-111), not email delivery.
     `docs/sf-reference/SF_MOBILE_APP_ANALYSIS.md` (batch 2); needs Chris's go-ahead.
 
 **Engineering debt (no decision needed, just work):**
-7. Test suite: **31/31 green as of 2026-10-27.** The four stale tests were
+7. Test suite: **33/33 green as of 2026-10-27** (customer categories added). The four stale tests were
    updated to the behaviour they'd fallen behind (D-101 sales-only lockdown,
    D-100 visit status, D-103 dry confirmation, D-109 business-day follow-ups); see
    the build log. Migrations 029–038 still have little committed coverage beyond
@@ -363,5 +368,5 @@ is the authoritative work plan for this build; where it disagrees with an older 
 doc, the directive wins (disagreements are catalogued in
 `docs/FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md`).
 
-*Last updated 2026-10-19 (documentation audit, D-112). Last code commit covered:
+*Open items 6c/6f updated 2026-10-27 (category audit, D-119). Last full update 2026-10-19 (documentation audit, D-112). Last code commit covered:
 `71188cc` (2026-10-13).*

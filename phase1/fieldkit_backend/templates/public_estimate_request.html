@@ -79,10 +79,10 @@
         <div class="form-group">
             <label>Property Type</label>
             <select name="customer_type">
-                <option value="Residential">Residential</option>
-                <option value="Commercial">Commercial</option>
-                <option value="Multi Family">Multi Family</option>
-                <option value="Contractors">Contractors</option>
+                {# Per company (D-119): a member of the public at a Kleanit sees "Resident Pays". #}
+                {% for t in customer_types_for(company_key)|reverse %}
+                <option value="{{ t }}">{{ t }}</option>
+                {% endfor %}
             </select>
         </div>
         {% if catalog_categories %}

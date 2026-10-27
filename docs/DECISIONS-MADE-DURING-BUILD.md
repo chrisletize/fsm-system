@@ -2268,6 +2268,45 @@ prospects, open tips and sales-paused properties. Choices:
 - **Access:** sales roles only, the user's own `company_access`. Like
   `/sales-overview` it reads across company databases but never writes across them.
 
+D-119 — Customer category audit, and the Resident Pays category (Chris,
+2026-10-27). The June ServiceFusion import defaulted every unrecognised name to
+Multi Family, so ~2,500 individual people were filed as apartment complexes, and
+anything filtering on customer_type (the sales map, the Dormant Customers list)
+was wrong. Chris: tenants who pay for a carpet cleaning their complex doesn't
+cover are **"resident pays"**; that category "really only exists with carpet
+cleaning".
+- **Categories per company** (`COMPANY_CUSTOMER_TYPES` in app.py; the database
+  CHECK is the union, migration 043, so the schema stays identical): Kleanit
+  Charlotte and Kleanit SF use **Resident Pays instead of Residential**; Get a Grip
+  uses **Residential only**; **CTS uses both** (it does Get a Grip and Kleanit work:
+  Resident Pays for a tenant, Residential for a homeowner). The CTS choice was made
+  during the build and is a one-line change. `normalize_customer_type` maps
+  Residential and Resident Pays onto each other, so a public estimate request or
+  prospect conversion never fails on a category the company doesn't use. Forms and
+  filters show only the company's own list; a legacy value stays selectable on the
+  edit form. `sales_prospects` is not widened (a resident is never a prospect).
+- **How it decides** (`customer_category_audit.py`): the name first (property
+  words, "X at Y", brands, contractor and business words, or a person's name from
+  the US Census 1990 first-name and surname lists in `data/`), then the building
+  (a person at the same point or street address as a known property is a resident
+  pays tenant), an apartment/unit number, and contacts (self-named contact,
+  personal email domain versus a company domain). A compliance-portal enrolment
+  drops a non-property proposal to low. Each proposal carries its reasons.
+- **Applying** (Chris chose "auto high+medium, review low"): `--apply` changed
+  2,580 customers (GAG 347, KC 1,977, CTS 252, KSF 4), each with a record_audit row
+  by `category_audit`, after the 2026-10-27T0249Z backup. 451 low-confidence ones
+  went into `customer_category_reviews` for Settings → Customer Categories
+  (admin/manager), where the office picks a category or keeps the current one. A
+  re-run skips anyone already decided and never queues twice. Result: KC is now
+  1,952 Resident Pays / 1,035 Multi Family; GAG 293 Residential / 973 MF; CTS 157
+  Residential + 49 Resident Pays / 630 MF.
+- **Sales lists:** the map still shows Multi Family + Contractors (D-118). The
+  Dormant Customers list now leaves out individuals (Residential, Resident Pays):
+  they aren't accounts the salesman works. Commercial and Contractors stay on it.
+- **Florida:** 395 customers with a Florida address are filed in Kleanit Charlotte
+  (392) and Get a Grip (3). Chris: move them to Kleanit SF. That move is a
+  separate step (CURRENT-STATUS 6f).
+
 ---
 
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:
