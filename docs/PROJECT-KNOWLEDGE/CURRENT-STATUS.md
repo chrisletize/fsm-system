@@ -299,6 +299,10 @@ unclosed template block (D-111), not email delivery.
 6c. **Customer category audit** (Chris, 2026-10-27): only 13 customers are tagged
     Residential but there are many more; the sales map (and anything else
     filtering on customer_type) is only as good as these tags.
+    The sales map makes them visible: individual residents tagged Multi Family
+    appear inside their apartment building's pin (e.g. "Alex Herold" at Alton
+    Optimist Park), and same-company duplicates at one address show up too
+    (e.g. GAG "Ava Southend" / "335 Apartments" at 335 Doggett St).
 6d. **519 customers can't be placed on the sales map** (PO boxes, property names in
     the street field, missing house numbers). `geocode_status` = no_match /
     incomplete identifies them; fixing addresses re-places them the next night.

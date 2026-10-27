@@ -1930,3 +1930,26 @@ within ~14 px, since a speck is too small to hit with a finger. The rehab ring a
 tip dot appear from zoom 11/12. Template-only; map test extended. Still not
 visually verified here: Chris confirmed the earlier version looks and works well
 on his device.
+
+## 2026-10-27 — Sales map: same building in two companies now merges reliably
+
+**Reported by Chris:** Alton Optimist Park is a customer of both Get a Grip and
+Kleanit Charlotte, but its pop-up showed only Kleanit. Cause: GAG's record has no
+state/ZIP and KC's does (`28206-3581`), and the merge keyed on street + ZIP, so the
+two never matched even though they geocoded to the identical point. 408 locations
+were split the same way, from "Circle"/"Cir", "West 10th Street"/"W 10Th St",
+missing ZIPs, typos ("Cooke Way Drive"/"Cooks Way"), renamed complexes ("NOVA Lake
+Norman"/"150 West") and same-company duplicates ("Ava Southend"/"335 Apartments").
+**Fix:** `_sales_map_group` (union-find over a coordinate grid) merges records that
+geocoded within ~5 m, or that share a normalized street address (suffixes and
+directions abbreviated) within ~300 m. Nearby buildings on different streets stay
+separate (Alton Mill District, ~130 m away). Pins: 4,359 → 3,804; none split at the
+same point; 361 multi-company pins. The pin title is the most-used name at the
+address, or the street when every name differs. The pop-up shows each record's own
+name, so renames, duplicates and residents are visible.
+**Data finding:** individual residents tagged Multi Family (e.g. "Alex Herold" at
+Alton; 11 records at 9600 Perimeter Station Dr) now show up inside their building's
+pin. Added to the customer category audit (CURRENT-STATUS 6c).
+**Tests:** grouping cases added to `smoke_sales_map.py` (Alton's exact shape,
+Dr/Drive, same-point typo, neighbour stays separate, same street in another town).
+The test's fake geocoder now places by address, like a real one. Full suite 32/32.

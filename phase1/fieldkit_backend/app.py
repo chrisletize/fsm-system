@@ -14138,14 +14138,92 @@ def _sales_map_entry(company_key, kind, r, dormant=False, today=None):
     }
 
 
-def _sales_map_property_key(e):
-    """One pin per property across companies (Chris, 2026-10-27). Same
-    normalized street + ZIP is the same building; without a ZIP, coordinates
-    rounded to ~10 m."""
-    street = re.sub(r'[^a-z0-9]', '', (e['address'].split(',')[0] if e['address'] else '').lower())
-    if street and e['zip']:
-        return f'a:{street}:{e["zip"]}'
-    return f'g:{round(e["lat"], 4)}:{round(e["lng"], 4)}'
+# Street-word abbreviations, so "10410 Cooke Way Drive" and "10410 Cooke Way Dr",
+# or "415 West 10th Street" and "415 W 10th St", normalize to the same thing.
+_STREET_ABBREV = {
+    'street': 'st', 'drive': 'dr', 'avenue': 'ave', 'av': 'ave', 'road': 'rd', 'boulevard': 'blvd',
+    'lane': 'ln', 'court': 'ct', 'circle': 'cir', 'parkway': 'pkwy', 'place': 'pl', 'highway': 'hwy',
+    'terrace': 'ter', 'trail': 'trl', 'square': 'sq', 'crossing': 'xing', 'point': 'pt', 'pointe': 'pte',
+    'north': 'n', 'south': 's', 'east': 'e', 'west': 'w',
+    'northeast': 'ne', 'northwest': 'nw', 'southeast': 'se', 'southwest': 'sw',
+}
+
+
+def _normalize_street(address):
+    """'415 West 10th Street, Charlotte, NC' -> '415w10thst'. Street line only;
+    unit/suite tails are left in, since they rarely differ between companies."""
+    line = (address.split(',')[0] if address else '').lower()
+    words = re.findall(r'[a-z0-9]+', line)
+    return ''.join(_STREET_ABBREV.get(w, w) for w in words)
+
+
+def _approx_metres(a, b):
+    dlat = (a['lat'] - b['lat']) * 111_000
+    dlng = (a['lng'] - b['lng']) * 111_000 * math.cos(math.radians(a['lat']))
+    return math.hypot(dlat, dlng)
+
+
+def _sales_map_group(entries):
+    """One pin per property across companies (Chris, 2026-10-27). Two records are
+    the same building when
+      * they geocoded to essentially the same point (within ~5 m), which also
+        catches typos like "Cooke Way Drive" vs "Cooks Way"; or
+      * their normalized street address matches and they're within ~300 m, so a
+        missing ZIP on one side (Alton Optimist Park in GAG) or "Cir" vs
+        "Circle" doesn't split them.
+    Union-find over a coarse coordinate grid keeps it to near-neighbours. Nearby
+    buildings on different addresses (e.g. 1001 N Brevard vs 1009 N Caldwell,
+    ~130 m apart) stay separate pins."""
+    parent = list(range(len(entries)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    streets = [_normalize_street(e['address']) for e in entries]
+    cell = 0.004   # ~400 m; neighbours are checked in the 3x3 block around each cell
+    grid = {}
+    for i, e in enumerate(entries):
+        grid.setdefault((int(e['lat'] // cell), int(e['lng'] // cell)), []).append(i)
+    for (gy, gx), members in grid.items():
+        nearby = [j for dy in (-1, 0, 1) for dx in (-1, 0, 1) for j in grid.get((gy + dy, gx + dx), [])]
+        for i in members:
+            for j in nearby:
+                if j <= i or find(i) == find(j):
+                    continue
+                d = _approx_metres(entries[i], entries[j])
+                if d <= 5 or (d <= 300 and streets[i] and streets[i] == streets[j]):
+                    parent[find(j)] = find(i)
+    groups = {}
+    for i, e in enumerate(entries):
+        groups.setdefault(find(i), []).append(e)
+    props = []
+    for ents in groups.values():
+        first = ents[0]
+        props.append({'lat': first['lat'], 'lng': first['lng'], 'name': _sales_map_title(ents),
+                      'address': first['address'], 'entries': ents})
+    return props
+
+
+def _sales_map_title(ents):
+    """The pin's heading. Records at one address can disagree: a renamed complex
+    ("NOVA Lake Norman" / "150 West"), a duplicate customer, or individual
+    residents tagged Multi Family at their building (part of the category audit).
+    So: the name used most often, if any repeats; with one record, its name;
+    otherwise the street address. Every record's own name still shows in the
+    pop-up."""
+    if len(ents) == 1:
+        return ents[0]['name']
+    counts = {}
+    for e in ents:
+        key = re.sub(r'[^a-z0-9]', '', (e['name'] or '').lower())
+        counts.setdefault(key, [0, e['name']])[0] += 1
+    best = max(counts.values(), key=lambda c: c[0])
+    if best[0] > 1:
+        return best[1]
+    return (ents[0]['address'] or '').split(',')[0] or ents[0]['name']
 
 
 def _require_sales_map_access():
@@ -14181,16 +14259,13 @@ def sales_map():
 def sales_map_data():
     _require_sales_map_access()
     company_keys = [ck for ck in session.get('company_access', []) if ck in DB_CONFIG]
-    props, unplaced = {}, {}
+    entries, unplaced = [], {}
     for ck in company_keys:
-        entries, n = _sales_map_company_entries(ck)
+        ents, n = _sales_map_company_entries(ck)
         unplaced[ck] = n
-        for e in entries:
-            key = _sales_map_property_key(e)
-            p = props.setdefault(key, {'lat': e['lat'], 'lng': e['lng'], 'name': e['name'],
-                                       'address': e['address'], 'entries': []})
-            p['entries'].append(e)
-    body = json.dumps({'properties': list(props.values()), 'unplaced': unplaced,
+        entries += ents
+    props = _sales_map_group(entries)
+    body = json.dumps({'properties': props, 'unplaced': unplaced,
                        'generated_at': datetime.now().isoformat(timespec='seconds')},
                       separators=(',', ':')).encode()
     resp = Response(body, mimetype='application/json')

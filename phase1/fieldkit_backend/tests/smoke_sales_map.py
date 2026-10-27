@@ -18,11 +18,12 @@ the app container:
 """
 import sys
 import os
+import zlib
 from datetime import date, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import app as appmod  # noqa: E402
-from app import get_db_connection, app, geocode_company, _sales_map_property_key  # noqa: E402
+from app import get_db_connection, app, geocode_company, _sales_map_group, _normalize_street  # noqa: E402
 
 
 def check(label, condition, extra=""):
@@ -62,10 +63,14 @@ def main():
             if street.startswith('999 '):
                 out[rid] = ('no_match', None, None)
             else:
-                out[rid] = ('matched', 35.2 + int(rid) % 100 / 10000, -80.8)
+                # Same street -> same point, like a real geocoder; different
+                # streets land a few hundred metres apart.
+                h = zlib.crc32(_normalize_street(street).encode()) % 4999
+                # Out in the Atlantic, so fixtures can never merge with a real property.
+                out[rid] = ('matched', 31.0 + (h % 70) * 0.01, -70.0 - (h // 70) * 0.01)
         return out
     appmod._census_batch_geocode = fake_batch
-    appmod._fallback_geocode = lambda r: (35.31, -80.71, 'osm') if r['address'].startswith('999 New') else None
+    appmod._fallback_geocode = lambda r: (31.9, -70.5, 'osm') if r['address'].startswith('999 New') else None
 
     g_ids, k_ids, p_ids, wo_ids, v_ids, tip_ids = [], [], [], [], [], []
     sales = client_as('salesperson', 'smokemapsales')
@@ -170,8 +175,10 @@ def main():
         r = sales.get('/sales-map/data')
         check(f"salesperson gets the data ({r.status_code})", r.status_code == 200)
         data = r.get_json()
-        props = {p['name']: p for p in data['properties'] if p['name'].startswith('ZZZ Map')}
-        ent = lambda name: props[name]['entries'][0]
+        # Look records up by their own name; a pin's title can be the street.
+        by_entry = {e['name']: (p, e) for p in data['properties'] for e in p['entries']}
+        props = {e['name']: p for p in data['properties'] for e in p['entries'] if e['name'].startswith('ZZZ Map')}
+        ent = lambda name: by_entry[name][1]
         check("active customer is 'customer' with its last visit",
               ent('ZZZ Map Active')['status'] == 'customer'
               and ent('ZZZ Map Active')['last_visit']['tag'] == 'Hot lead'
@@ -185,12 +192,34 @@ def main():
         check("OSM-placed customer is on the map", 'ZZZ Map New Build' in props)
         check("unplaced properties aren't, and are counted",
               'ZZZ Map Nowhere' not in props and 'ZZZ Map No Street' not in props and data['unplaced']['getagrip'] >= 2)
-        shared = [p for p in data['properties'] if p['name'].startswith('ZZZ Map Shared')]
+        shared = [p for p in data['properties'] if any(e['name'].startswith('ZZZ Map Shared') for e in p['entries'])]
         check("same building in two companies is ONE pin with two entries",
               len(shared) == 1 and sorted(e['company'] for e in shared[0]['entries']) == ['getagrip', 'kleanit_charlotte'])
-        check("address keys ignore spacing and ZIP+4",
-              _sales_map_property_key({'address': '200 Shared Way, Charlotte', 'zip': '28203', 'lat': 0, 'lng': 0})
-              == _sales_map_property_key({'address': '200  Shared  Way, Charlotte', 'zip': '28203', 'lat': 1, 'lng': 1}))
+        e = lambda co, name, addr, zip_, lat, lng: {'company': co, 'name': name, 'address': addr, 'zip': zip_,
+                                                    'lat': lat, 'lng': lng}
+        g = _sales_map_group([
+            e('getagrip', 'Alton Optimist Park', '1009 N Caldwell St, Charlotte', '', 35.23145, -80.82821),
+            e('kleanit_charlotte', 'Alton Optimist Park', '1009 N Caldwell St, Charlotte, NC', '28206', 35.23145, -80.82821),
+            e('kleanit_charlotte', 'Alton Mill District', '1001 N Brevard St, Charlotte, NC', '28206', 35.23208, -80.82947),
+            e('getagrip', 'Townhomes at 49 North', '10035 Dabney Drive, Charlotte', '28262', 35.30000, -80.74000),
+            e('kleanit_charlotte', '49 North', '10035 Dabney Dr, Charlotte', '28262', 35.30080, -80.74050),
+            e('getagrip', 'Mountain Island Lake', '10410 Cooke Way Drive, Charlotte', '28216', 35.33, -80.95),
+            e('kleanit_charlotte', 'The Atlantic Mountain Island', '10410 Cooks Way, Charlotte', '28216', 35.33001, -80.95001),
+            e('getagrip', 'Far Away Same Street', '1009 N Caldwell St, Concord', '', 35.40, -80.60),
+        ])
+        by = {frozenset(x['name'] for x in p['entries']): p for p in g}
+        check("Alton: no ZIP in GAG, ZIP in Kleanit -> one pin, both companies (Chris's report)",
+              frozenset(['Alton Optimist Park']) in by
+              and sorted(x['company'] for x in by[frozenset(['Alton Optimist Park'])]['entries']) == ['getagrip', 'kleanit_charlotte'])
+        check("neighbour on a different street ~130 m away stays its own pin", frozenset(['Alton Mill District']) in by)
+        check("'Drive' vs 'Dr' within 300 m merges", frozenset(['Townhomes at 49 North', '49 North']) in by)
+        check("a typo at the same geocoded point merges", frozenset(['Mountain Island Lake', 'The Atlantic Mountain Island']) in by)
+        check("same street name in another town doesn't merge", frozenset(['Far Away Same Street']) in by)
+        check("title is the repeated name when there is one",
+              by[frozenset(['Alton Optimist Park'])]['name'] == 'Alton Optimist Park')
+        check("title falls back to the street when every name differs",
+              by[frozenset(['Townhomes at 49 North', '49 North'])]['name'] == '10035 Dabney Drive')
+        check("street normalization", _normalize_street('415 West 10th Street, Charlotte') == _normalize_street('415 W 10Th St'))
         only_gag = client_as('salesperson', 'smokemapsales', companies=('getagrip',)).get('/sales-map/data').get_json()
         check("only companies the user can access",
               all(e['company'] == 'getagrip' for p in only_gag['properties'] for e in p['entries']))

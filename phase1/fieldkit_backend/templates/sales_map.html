@@ -308,6 +308,9 @@ function popupHtml(p) {
         const label = e.status === 'prospect' ? 'Prospect' : e.status === 'dormant' ? 'Dormant customer' : 'Customer';
         h += `<div class="pp-entry"><span class="pp-co" style="color:${co.color};">● ${esc(co.name)}</span>
               <span class="pp-badge" style="background:${COLORS[e.status]};">${label}</span>`;
+        // Each record's own name: a pin can hold a renamed complex, a duplicate,
+        // or residents at the building, and the title alone would hide that.
+        h += `<div class="pp-line" style="font-weight:600; color:#333;">${esc(e.name)}</div>`;
         if (e.kind === 'customer') {
             h += `<div class="pp-line">${e.last_service
                 ? 'Last service ' + fmtDate(e.last_service) + ' (' + daysSince(e.last_service) + ' days ago)'
