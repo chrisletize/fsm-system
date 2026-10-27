@@ -35,7 +35,11 @@
 {% endblock %}
 
 {% block content %}
-<div class="page-header"><h1>Sales Overview</h1></div>
+<div class="page-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:.5rem;">
+    <h1>Sales Overview</h1>
+    <a href="/sales-map" style="padding:.5rem 1rem; border-radius:6px; background:#2563eb; color:#fff;
+       text-decoration:none; font-weight:600; font-size:.9rem;">🗺️ Sales Map</a>
+</div>
 <div class="page-sub">Overdue and the next 5 days of follow-ups, across every company you have access to.</div>
 
 <div class="company-pills">

@@ -3,7 +3,8 @@ FieldKit Flask Application
 Phase 1: Authentication & Company-in-URL Architecture
 """
 
-from flask import Flask, request, session, jsonify, render_template, redirect, url_for, abort, flash, Response
+from flask import (Flask, request, session, jsonify, render_template, redirect, url_for, abort, flash,
+                   Response, send_file, send_from_directory)
 from markupsafe import escape as html_escape
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -92,6 +93,11 @@ app.jinja_env.globals['has_occupied_release'] = lambda company_key: company_key 
 UPLOAD_DIR            = os.environ.get('UPLOAD_DIR', '/data/uploads')
 MAX_UPLOAD_BYTES      = 20 * 1024 * 1024
 RELEASE_DESC_TOKEN    = 'RELEASE ON FILE'
+# Self-hosted basemap for the sales map (D-118): built by
+# ops/maps/refresh-basemap.sh into ~/docker/fieldkit-prod/maps, mounted here
+# read-only (docker-compose.yml). Outside the checkout and not backed up -- it's
+# rebuilt from OpenStreetMap on demand.
+MAP_DIR               = os.environ.get('MAP_DIR', '/data/maps')
 app.jinja_env.globals['release_token'] = RELEASE_DESC_TOKEN
 
 # Business-card photos off a phone or tablet (migration 032). Sniffed by magic
@@ -13852,6 +13858,374 @@ def sales_approval_reject(company_key, approval_id):
     conn.commit(); cur.close(); conn.close()
     flash('Request rejected.', 'success')
     return redirect(f'/{company_key}/sales/approvals')
+
+
+# ----------------------------------------------------------------------------
+# Geocoding + sales map (migration 042, D-118)
+#
+# Chris, 2026-10-27, for the salesman: a separate map page with every prospect
+# and customer pinned, coloured by prospect / customer / dormant customer, with
+# rehab prospects, open tips and sales-paused properties marked. Tap a pin for
+# the details and the most recent visit.
+#
+# Coordinates come from the US Census Bureau batch geocoder (free, no key,
+# public-domain results, so storable). The basemap is self-hosted: see
+# ops/maps/refresh-basemap.sh.
+# ----------------------------------------------------------------------------
+
+CENSUS_BATCH_URL   = 'https://geocoding.geo.census.gov/geocoder/locations/addressbatch'
+GEOCODE_BATCH_SIZE = 1000          # Census allows 10,000; smaller batches fail cheaper
+GEOCODE_TIMEOUT_S  = 600
+# Customer types that belong on the sales map. Residential (private homes) are
+# left off (Chris, 2026-10-27) -- not sales targets, and no pinning of homes.
+# NB: many residential customers are still tagged Multi Family; the category
+# audit (CURRENT-STATUS) fixes the data, this list doesn't need to change.
+SALES_MAP_CUSTOMER_TYPES = ('Multi Family', 'Contractors')
+
+
+def _geocode_input(row):
+    """The address exactly as it's sent to the geocoder, also stored as
+    geocoded_address so a later edit to the address is detectable."""
+    parts = [(row.get(k) or '').strip() for k in ('address', 'city', 'state', 'zip')]
+    return ' | '.join(parts)
+
+
+def _census_batch_geocode(rows):
+    """rows: [(id, street, city, state, zip)] -> {id: (status, lat, lng)}.
+
+    One multipart POST of a CSV to the Census batch endpoint, stdlib only (no
+    requests dependency in the image). The reply is a CSV of
+    id, input, Match|No_Match|Tie, Exact|Non_Exact, matched address, "lon,lat", ..."""
+    import csv
+    import urllib.request
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    for r in rows:
+        w.writerow(r)
+    boundary = '----fieldkit' + secrets.token_hex(8)
+    body = (
+        f'--{boundary}\r\nContent-Disposition: form-data; name="benchmark"\r\n\r\nPublic_AR_Current\r\n'
+        f'--{boundary}\r\nContent-Disposition: form-data; name="addressFile"; filename="addresses.csv"\r\n'
+        f'Content-Type: text/csv\r\n\r\n'
+    ).encode() + buf.getvalue().encode() + f'\r\n--{boundary}--\r\n'.encode()
+    req = urllib.request.Request(CENSUS_BATCH_URL, data=body, method='POST',
+                                 headers={'Content-Type': f'multipart/form-data; boundary={boundary}'})
+    with urllib.request.urlopen(req, timeout=GEOCODE_TIMEOUT_S) as resp:
+        text = resp.read().decode('utf-8', errors='replace')
+    out = {}
+    for rec in csv.reader(io.StringIO(text)):
+        if len(rec) < 3:
+            continue
+        rid, match = rec[0], rec[2]
+        if match == 'Match' and len(rec) >= 6 and ',' in rec[5]:
+            lng, lat = rec[5].split(',', 1)
+            out[rid] = ('matched', float(lat), float(lng))
+        elif match == 'Tie':
+            out[rid] = ('tie', None, None)
+        else:
+            out[rid] = ('no_match', None, None)
+    return out
+
+
+PHOTON_URL = 'https://photon.komoot.io/api/'
+CENSUS_ONELINE_URL = 'https://geocoding.geo.census.gov/geocoder/locations/onelineaddress'
+
+
+def _http_json(url, timeout=30):
+    import urllib.request
+    req = urllib.request.Request(url, headers={'User-Agent': 'FieldKit geocoder (fieldkit.cletize.com)'})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode('utf-8', errors='replace'))
+
+
+def _fallback_geocode(r):
+    """Second chance for an address the Census batch couldn't place -> (lat, lng,
+    source) or None. Strict on purpose: a pin on the wrong building is worse
+    than no pin.
+
+    * Census ties: the one-line endpoint returns every candidate with
+      coordinates; accept the first only if all of them sit within ~300 m.
+    * OpenStreetMap (Photon): usually catches complexes newer than Census's
+      street files. Accepted only when the house number matches exactly AND the
+      ZIP (or, with no ZIP, the city) matches."""
+    street = (r['address'] or '').strip()
+    city, state, zip5 = (r['city'] or '').strip(), (r['state'] or '').strip(), (r['zip'] or '').strip()[:5]
+    number = re.match(r'\s*(\d+[A-Za-z]?)\b', street)
+    if not number:
+        return None
+    number = number.group(1).lower()
+    one_line = ', '.join(x for x in [street, city, ' '.join(x for x in [state, zip5] if x)] if x)
+    try:
+        d = _http_json(f"{CENSUS_ONELINE_URL}?{urlencode({'address': one_line, 'benchmark': 'Public_AR_Current', 'format': 'json'})}")
+        cands = [(m['coordinates']['y'], m['coordinates']['x']) for m in d['result']['addressMatches']]
+        if cands and all(math.dist(cands[0], c) < 0.003 for c in cands):
+            return cands[0][0], cands[0][1], 'census'
+    except Exception:
+        pass
+    try:
+        # The public Photon instance is a shared, free service; stay well under
+        # its fair-use rate. Only misses ever get here, so this is a handful a night.
+        import time
+        time.sleep(0.6)
+        d = _http_json(f"{PHOTON_URL}?{urlencode({'q': one_line, 'limit': 5, 'lang': 'en'})}")
+        for f in d.get('features', []):
+            p = f.get('properties', {})
+            if (p.get('housenumber') or '').strip().lower() != number:
+                continue
+            if zip5 and (p.get('postcode') or '')[:5] != zip5:
+                continue
+            if not zip5 and (p.get('city') or '').strip().lower() != city.lower():
+                continue
+            lng, lat = f['geometry']['coordinates'][:2]
+            return lat, lng, 'osm'
+    except Exception:
+        pass
+    return None
+
+
+def geocode_company(company_key, limit=None, retry_failed=False, only_ids=None):
+    """Geocode every customer and prospect whose current address differs from
+    the one last geocoded (new rows, edited addresses). Returns counts.
+    retry_failed=True also re-tries rows that previously came back no_match or
+    tie (used once to backfill after the fallback geocoder was added).
+    only_ids={'customers': [...], 'sales_prospects': [...]} restricts the run to
+    those rows (tests; re-placing one property by hand).
+
+    Incomplete addresses (no street, or neither city nor ZIP) aren't sent; they
+    are marked 'incomplete' so the office can see they need fixing."""
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    counts = {'matched': 0, 'tie': 0, 'no_match': 0, 'incomplete': 0, 'error': 0}
+    for table in ('customers', 'sales_prospects'):
+        cur.execute(f"""SELECT id, address, city, state, zip, geocoded_address, geocode_status FROM {table}
+                        WHERE deleted_at IS NULL ORDER BY id""")
+        pending = []
+        for r in cur.fetchall():
+            key = _geocode_input(r)
+            if key != (r['geocoded_address'] or None) or (retry_failed and r['geocode_status'] in ('no_match', 'tie')):
+                pending.append((r, key))
+        if only_ids is not None:
+            wanted = set(only_ids.get(table, []))
+            pending = [(r, k) for r, k in pending if r['id'] in wanted]
+        if limit:
+            pending = pending[:limit]
+        sendable = []
+        for r, key in pending:
+            if not (r['address'] or '').strip() or not ((r['city'] or '').strip() or (r['zip'] or '').strip()):
+                cur.execute(f"""UPDATE {table} SET latitude = NULL, longitude = NULL, geocode_status = 'incomplete',
+                                geocoded_at = CURRENT_TIMESTAMP, geocoded_address = %s WHERE id = %s""", (key, r['id']))
+                counts['incomplete'] += 1
+            else:
+                sendable.append((r, key))
+        conn.commit()
+        for i in range(0, len(sendable), GEOCODE_BATCH_SIZE):
+            chunk = sendable[i:i + GEOCODE_BATCH_SIZE]
+            try:
+                results = _census_batch_geocode([
+                    (str(r['id']), (r['address'] or '').strip(), (r['city'] or '').strip(),
+                     (r['state'] or '').strip(), (r['zip'] or '').strip()[:5]) for r, _ in chunk])
+            except Exception:
+                # Leave these for tomorrow's run rather than marking them bad:
+                # a timeout says nothing about the address.
+                counts['error'] += len(chunk)
+                continue
+            for r, key in chunk:
+                status, lat, lng = results.get(str(r['id']), ('no_match', None, None))
+                source = 'census' if status == 'matched' else None
+                if status != 'matched':
+                    hit = _fallback_geocode(r)
+                    if hit:
+                        lat, lng, source = hit
+                        status = 'matched'
+                        counts['fallback'] = counts.get('fallback', 0) + 1
+                cur.execute(f"""UPDATE {table} SET latitude = %s, longitude = %s, geocode_status = %s,
+                                geocode_source = %s, geocoded_at = CURRENT_TIMESTAMP, geocoded_address = %s
+                                WHERE id = %s""",
+                            (lat, lng, status, source, key, r['id']))
+                counts[status] += 1
+            conn.commit()
+    cur.close(); conn.close()
+    return counts
+
+
+def job_geocode(company_key):
+    """Nightly (jobs.py geocode): keeps map pins in step with address edits."""
+    run_id = _job_run_start(company_key, 'geocode')
+    try:
+        c = geocode_company(company_key)
+        summary = ', '.join(f'{v} {k}' for k, v in c.items() if v) or 'nothing to geocode'
+        _job_run_finish(company_key, run_id, 'partial' if c['error'] else 'success', summary)
+        return summary
+    except Exception as e:
+        _job_run_finish(company_key, run_id, 'failed', f'{type(e).__name__}: {e}')
+        raise
+
+
+def _sales_map_company_entries(company_key):
+    """Everything the map needs from one company's database: one entry per
+    in-scope customer or open prospect that has coordinates, plus a count of
+    those that couldn't be placed."""
+    conn = get_db_connection(company_key)
+    cur = conn.cursor()
+    weeks = _sales_dormancy_threshold_weeks(cur)
+    today = date.today()
+    cutoff = today - timedelta(weeks=weeks) if weeks else None
+    last_visit = """
+        LEFT JOIN LATERAL (
+            SELECT sv.visit_date, sv.visit_tag, sv.created_by, left(sv.notes, 180) AS notes
+            FROM sales_visits sv
+            WHERE sv.property_type = '{t}' AND sv.property_id = x.id AND sv.deleted_at IS NULL
+            ORDER BY sv.visit_date DESC, sv.id DESC LIMIT 1) lv ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS n FROM sales_tips st
+            WHERE st.property_type = '{t}' AND st.property_id = x.id
+              AND st.status = 'open' AND st.deleted_at IS NULL) tp ON TRUE"""
+    cur.execute(f"""
+        SELECT x.id, x.property_name, x.address, x.city, x.state, x.zip, x.latitude, x.longitude,
+               x.customer_type, x.sales_delayed_until, {LAST_SERVICE_DATE_SQL.replace('c.id', 'x.id')} AS last_service,
+               lv.visit_date, lv.visit_tag, lv.created_by AS visit_by, lv.notes AS visit_notes, tp.n AS tips
+        FROM customers x {last_visit.format(t='customer')}
+        WHERE x.deleted_at IS NULL AND x.status = 'Active' AND x.customer_type = ANY(%s)
+          AND x.latitude IS NOT NULL
+    """, (list(SALES_MAP_CUSTOMER_TYPES),))
+    entries = []
+    for r in cur.fetchall():
+        dormant = bool(cutoff) and (r['last_service'] is None or r['last_service'] < cutoff)
+        entries.append(_sales_map_entry(company_key, 'customer', r, dormant=dormant, today=today))
+    cur.execute(f"""
+        SELECT x.id, x.property_name, x.address, x.city, x.state, x.zip, x.latitude, x.longitude,
+               x.rehab_planned, x.sales_delayed_until,
+               lv.visit_date, lv.visit_tag, lv.created_by AS visit_by, lv.notes AS visit_notes, tp.n AS tips
+        FROM sales_prospects x {last_visit.format(t='prospect')}
+        WHERE x.deleted_at IS NULL AND x.converted_to_customer = FALSE AND x.latitude IS NOT NULL
+    """)
+    for r in cur.fetchall():
+        entries.append(_sales_map_entry(company_key, 'prospect', r, today=today))
+    cur.execute("""
+        SELECT COUNT(*) AS n FROM customers WHERE deleted_at IS NULL AND status = 'Active'
+          AND customer_type = ANY(%s) AND latitude IS NULL
+    """, (list(SALES_MAP_CUSTOMER_TYPES),))
+    unplaced = cur.fetchone()['n']
+    cur.execute("""SELECT COUNT(*) AS n FROM sales_prospects
+                   WHERE deleted_at IS NULL AND converted_to_customer = FALSE AND latitude IS NULL""")
+    unplaced += cur.fetchone()['n']
+    cur.close(); conn.close()
+    return entries, unplaced
+
+
+def _sales_map_entry(company_key, kind, r, dormant=False, today=None):
+    held = r['sales_delayed_until'] if r['sales_delayed_until'] and r['sales_delayed_until'] >= today else None
+    if kind == 'customer':
+        status = 'dormant' if dormant else 'customer'
+        url = f'/{company_key}/sales/customers/{r["id"]}'
+    else:
+        status = 'prospect'
+        url = f'/{company_key}/sales/prospects/{r["id"]}'
+    return {
+        'company': company_key, 'kind': kind, 'id': r['id'], 'status': status,
+        'name': r['property_name'],
+        'address': ', '.join(p for p in [r['address'], r['city'], r['state']] if p),
+        'zip': (r['zip'] or '')[:5],
+        'lat': float(r['latitude']), 'lng': float(r['longitude']),
+        'last_service': r['last_service'].isoformat() if kind == 'customer' and r['last_service'] else None,
+        'rehab': bool(kind == 'prospect' and r['rehab_planned']),
+        'paused_until': held.isoformat() if held else None,
+        'tips': int(r['tips'] or 0),
+        'last_visit': ({'date': r['visit_date'].isoformat(), 'tag': r['visit_tag'], 'by': r['visit_by'],
+                        'notes': r['visit_notes']} if r['visit_date'] else None),
+        'url': url,
+        'log_url': f'/{company_key}/sales/visits/log?property_type={kind}&property_id={r["id"]}',
+    }
+
+
+def _sales_map_property_key(e):
+    """One pin per property across companies (Chris, 2026-10-27). Same
+    normalized street + ZIP is the same building; without a ZIP, coordinates
+    rounded to ~10 m."""
+    street = re.sub(r'[^a-z0-9]', '', (e['address'].split(',')[0] if e['address'] else '').lower())
+    if street and e['zip']:
+        return f'a:{street}:{e["zip"]}'
+    return f'g:{round(e["lat"], 4)}:{round(e["lng"], 4)}'
+
+
+def _require_sales_map_access():
+    if session.get('user_role') not in SALES_ROLES:
+        abort(403)
+
+
+@app.route('/sales-map')
+@login_required
+def sales_map():
+    _require_sales_map_access()
+    company_keys = [ck for ck in session.get('company_access', []) if ck in DB_CONFIG]
+    companies = [{'key': ck, 'name': COMPANY_BRANDING.get(ck, {}).get('short_name', ck),
+                  'color': COMPANY_BRANDING.get(ck, {}).get('color_primary', '#888')} for ck in company_keys]
+    try:
+        # Copied beside the tiles by refresh-basemap.sh, so the coverage the
+        # page offers is always the coverage the tiles were cut to.
+        with open(os.path.join(MAP_DIR, 'regions.geojson')) as fh:
+            regions = json.load(fh)
+    except (OSError, ValueError):
+        regions = {'features': []}
+    try:
+        with open(os.path.join(MAP_DIR, 'VERSION')) as fh:
+            map_version = fh.read().strip().replace('.pmtiles', '')
+    except OSError:
+        map_version = None
+    return render_template('sales_map.html', companies=companies, regions=regions,
+                           map_version=map_version, full_name=session.get('full_name'))
+
+
+@app.route('/sales-map/data')
+@login_required
+def sales_map_data():
+    _require_sales_map_access()
+    company_keys = [ck for ck in session.get('company_access', []) if ck in DB_CONFIG]
+    props, unplaced = {}, {}
+    for ck in company_keys:
+        entries, n = _sales_map_company_entries(ck)
+        unplaced[ck] = n
+        for e in entries:
+            key = _sales_map_property_key(e)
+            p = props.setdefault(key, {'lat': e['lat'], 'lng': e['lng'], 'name': e['name'],
+                                       'address': e['address'], 'entries': []})
+            p['entries'].append(e)
+    body = json.dumps({'properties': list(props.values()), 'unplaced': unplaced,
+                       'generated_at': datetime.now().isoformat(timespec='seconds')},
+                      separators=(',', ':')).encode()
+    resp = Response(body, mimetype='application/json')
+    # ~2.6 MB of JSON for every property in four companies; gzip takes it to
+    # a few hundred KB, which matters on a tablet on cellular. Flask doesn't
+    # compress on its own.
+    if 'gzip' in (request.headers.get('Accept-Encoding') or ''):
+        import gzip
+        resp.set_data(gzip.compress(body, compresslevel=6))
+        resp.headers['Content-Encoding'] = 'gzip'
+        resp.headers['Vary'] = 'Accept-Encoding'
+    return resp
+
+
+@app.route('/sales-map/tiles/<name>.pmtiles')
+@login_required
+def sales_map_tiles(name):
+    """The basemap archives. MapLibre (via the pmtiles protocol) reads them in
+    HTTP Range requests, which send_file(conditional=True) answers."""
+    _require_sales_map_access()
+    if name not in ('overview', 'detail'):
+        abort(404)
+    path = os.path.join(MAP_DIR, f'{name}.pmtiles')
+    if not os.path.exists(path):
+        abort(404)
+    return send_file(path, mimetype='application/octet-stream', conditional=True, max_age=86400)
+
+
+@app.route('/sales-map/assets/<path:asset>')
+@login_required
+def sales_map_assets(asset):
+    """Label fonts (.pbf glyph ranges) and map icons (sprites)."""
+    _require_sales_map_access()
+    mimetype = 'application/x-protobuf' if asset.endswith('.pbf') else None
+    return send_from_directory(os.path.join(MAP_DIR, 'assets'), asset, mimetype=mimetype, max_age=30 * 86400)
 
 
 # ----------------------------------------------------------------------------

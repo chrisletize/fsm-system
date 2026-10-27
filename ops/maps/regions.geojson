@@ -1,0 +1,38 @@
+{
+  "type": "FeatureCollection",
+  "_comment": "Street-level coverage for the sales map (D-118). Each box encloses the named county and every county touching it (Chris, 2026-10-27). Boxes are deliberately a little generous: a box is cheap, a missing road isn't. Edit here and re-run ops/maps/refresh-basemap.sh to change coverage.",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Charlotte",
+        "counties": "Mecklenburg NC + Cabarrus, Union, Gaston, Lincoln, Iredell (NC); York, Lancaster (SC)"
+      },
+      "geometry": {"type": "Polygon", "coordinates": [[[-81.62, 34.42], [-80.15, 34.42], [-80.15, 36.12], [-81.62, 36.12], [-81.62, 34.42]]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Triad (Greensboro / Winston-Salem)",
+        "counties": "Guilford + Forsyth, and every county touching either: Rockingham, Caswell, Alamance, Chatham, Randolph, Davidson, Stokes, Davie, Yadkin, Surry"
+      },
+      "geometry": {"type": "Polygon", "coordinates": [[[-81.05, 35.40], [-78.85, 35.40], [-78.85, 36.62], [-81.05, 36.62], [-81.05, 35.40]]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Raleigh",
+        "counties": "Wake + Durham, Granville, Franklin, Nash, Johnston, Harnett, Chatham"
+      },
+      "geometry": {"type": "Polygon", "coordinates": [[[-79.60, 35.10], [-77.65, 35.10], [-77.65, 36.62], [-79.60, 36.62], [-79.60, 35.10]]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "South Florida",
+        "counties": "Broward + Palm Beach, Miami-Dade, Collier, Hendry"
+      },
+      "geometry": {"type": "Polygon", "coordinates": [[[-81.90, 25.10], [-79.95, 25.10], [-79.95, 27.00], [-81.90, 27.00], [-81.90, 25.10]]]}
+    }
+  ]
+}

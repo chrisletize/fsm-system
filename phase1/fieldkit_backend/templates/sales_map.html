@@ -1,0 +1,327 @@
+{% extends "base.html" %}
+{% block title %}Sales Map{% endblock %}
+
+{#
+  Sales map (D-118, Chris 2026-10-27). One pin per property across every company
+  the user can access: blue prospect, green customer, orange dormant customer,
+  grey sales-paused; a pink ring marks a rehab prospect and a red dot an open
+  sales tip. Pins cluster when zoomed out; tap a cluster to zoom in, tap a pin
+  for details and the last visit.
+
+  The basemap is self-hosted (ops/maps/refresh-basemap.sh): an SE-US overview
+  below zoom 9 and full street detail for the coverage regions from zoom 9 up.
+  Libraries are vendored under /static/vendor (see VENDOR.md).
+#}
+
+{% block extra_css %}
+<link rel="stylesheet" href="/static/vendor/maplibre-gl-6.12.0/maplibre-gl.css">
+<style>
+    .container { max-width: 98vw; padding: 0 1rem; }
+    .map-head { display:flex; justify-content:space-between; align-items:flex-end; flex-wrap:wrap; gap:.6rem; margin-bottom:.6rem; }
+    .map-head h1 { font-size:1.5rem; color:#2C2C2C; }
+    .map-sub { color:#888; font-size:.85rem; }
+    .toolbar { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; margin-bottom:.6rem; }
+    .chip { display:inline-flex; align-items:center; gap:.35rem; padding:.4rem .75rem; border-radius:16px;
+            border:1px solid #ddd; background:#fff; font-size:.82rem; font-weight:600; cursor:pointer;
+            user-select:none; color:#444; }
+    .chip input { display:none; }
+    .chip.off { opacity:.45; text-decoration:line-through; }
+    .dot { width:11px; height:11px; border-radius:50%; display:inline-block; border:2px solid #fff;
+           box-shadow:0 0 0 1px rgba(0,0,0,.18); }
+    .sep { width:1px; height:22px; background:#e3e3e3; margin:0 .2rem; }
+    .region-btn { padding:.4rem .75rem; border-radius:6px; border:1px solid #cfd6de; background:#f7f9fb;
+                  font-size:.82rem; font-weight:600; color:#334; cursor:pointer; }
+    .region-btn:hover { background:#eef3f8; }
+    #map { width:100%; height:calc(100vh - 230px); min-height:460px; border-radius:10px;
+           border:1px solid #e3e3e3; box-shadow:0 2px 10px rgba(0,0,0,.06); }
+    .map-foot { display:flex; justify-content:space-between; flex-wrap:wrap; gap:.5rem;
+                color:#999; font-size:.76rem; margin-top:.45rem; }
+    .legend { position:absolute; left:10px; bottom:30px; background:rgba(255,255,255,.94); border-radius:8px;
+              padding:.5rem .7rem; font-size:.76rem; box-shadow:0 1px 6px rgba(0,0,0,.15); line-height:1.65; z-index:2; }
+    .legend .ring { width:11px; height:11px; border-radius:50%; display:inline-block; border:3px solid #c026d3; }
+    .map-wrap { position:relative; }
+    .maplibregl-popup-content { border-radius:10px; padding:.75rem .85rem; font-family:inherit; max-width:320px; }
+    .pp-name { font-weight:700; font-size:.95rem; color:#222; margin-right:1rem; }
+    .pp-addr { color:#888; font-size:.78rem; margin:.1rem 0 .35rem; }
+    .pp-entry { border-top:1px solid #f0f0f0; padding:.45rem 0 .2rem; font-size:.8rem; color:#444; }
+    .pp-co { font-weight:700; font-size:.78rem; }
+    .pp-badge { display:inline-block; padding:.05rem .45rem; border-radius:8px; font-size:.72rem; font-weight:700; color:#fff; margin-left:.3rem; }
+    .pp-line { margin-top:.15rem; }
+    .pp-missing { color:#b45309; font-weight:600; }
+    .pp-links a { font-weight:700; font-size:.78rem; margin-right:.75rem; text-decoration:none; }
+    .no-webgl { padding:2rem; text-align:center; color:#a32d2d; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="map-head">
+    <div>
+        <h1>Sales Map</h1>
+        <div class="map-sub" id="summary">Loading properties…</div>
+    </div>
+    <a href="/sales-overview" class="region-btn" style="text-decoration:none;">← Sales Overview</a>
+</div>
+
+<div class="toolbar">
+    {% for co in companies %}
+    <label class="chip" data-company="{{ co.key }}">
+        <input type="checkbox" checked><span class="dot" style="background:{{ co.color }};"></span>{{ co.name }}
+    </label>
+    {% endfor %}
+    <span class="sep"></span>
+    <label class="chip" data-status="prospect"><input type="checkbox" checked><span class="dot" style="background:#2563eb;"></span>Prospects</label>
+    <label class="chip" data-status="customer"><input type="checkbox" checked><span class="dot" style="background:#16a34a;"></span>Customers</label>
+    <label class="chip" data-status="dormant"><input type="checkbox" checked><span class="dot" style="background:#ea580c;"></span>Dormant</label>
+    <label class="chip" data-status="paused"><input type="checkbox" checked><span class="dot" style="background:#6b7280;"></span>Paused</label>
+    <span class="sep"></span>
+    {% for f in regions.features %}
+    <button type="button" class="region-btn" data-region="{{ loop.index0 }}">{{ f.properties.name.split(' (')[0] }}</button>
+    {% endfor %}
+</div>
+
+<div class="map-wrap">
+    <div id="map"></div>
+    <div class="legend">
+        <div><span class="dot" style="background:#2563eb;"></span> Prospect</div>
+        <div><span class="dot" style="background:#16a34a;"></span> Customer</div>
+        <div><span class="dot" style="background:#ea580c;"></span> Dormant customer</div>
+        <div><span class="dot" style="background:#6b7280;"></span> Sales paused</div>
+        <div><span class="ring"></span> Rehab prospect</div>
+        <div><span class="dot" style="background:#dc2626; width:8px; height:8px;"></span> Open sales tip</div>
+    </div>
+</div>
+<div class="map-foot">
+    <span id="unplaced"></span>
+    <span>Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>
+        contributors{% if map_version %} · map updated {{ map_version[:4] }}-{{ map_version[4:6] }}-{{ map_version[6:8] }}{% endif %}</span>
+</div>
+
+<script src="/static/vendor/pmtiles-4.5.0/pmtiles.js"></script>
+<script src="/static/vendor/protomaps-basemaps-5.7.2/basemaps.js"></script>
+<script type="module">
+import * as maplibregl from '/static/vendor/maplibre-gl-6.12.0/maplibre-gl.mjs';
+
+const COMPANIES = {{ companies|tojson }};
+const REGIONS = {{ regions.features|tojson }};
+const COLORS = { prospect: '#2563eb', customer: '#16a34a', dormant: '#ea580c', paused: '#6b7280' };
+const VIEW_KEY = 'fk-sales-map-view';
+
+function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+        ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+}
+function fmtDate(iso) {
+    if (!iso) return '';
+    const d = new Date(iso + 'T12:00:00');
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+function daysSince(iso) {
+    return Math.round((Date.now() - new Date(iso + 'T12:00:00').getTime()) / 86400000);
+}
+function bboxOf(feature) {
+    const ring = feature.geometry.coordinates[0];
+    const xs = ring.map(p => p[0]), ys = ring.map(p => p[1]);
+    return [[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]];
+}
+
+// ---- basemap: a little livelier than the stock "light" flavour ----
+const flavor = Object.assign({}, basemaps.namedFlavor('light'), {
+    earth: '#f4f0e6', background: '#f4f0e6',
+    park_a: '#c3e6b5', park_b: '#b2dca3', wood_a: '#b5dcaa', wood_b: '#a6d39a',
+    water: '#86cdf5', school: '#f6e3cb', hospital: '#f8d4d4',
+    highway: '#ffd27a', highway_casing_early: '#e9a94a', highway_casing_late: '#e9a94a',
+    major: '#fff4cc', buildings: '#e6ded2',
+});
+const origin = window.location.origin;
+// Overview (SE US, z0-9) underneath everywhere; its labels hand over to the
+// street-detail tiles at zoom 9, where detail takes over inside the regions.
+const ovLayers = basemaps.layers('overview', flavor, { lang: 'en' }).map(l => {
+    const c = Object.assign({}, l, { id: 'ov-' + l.id });
+    if (l.type === 'symbol') c.maxzoom = 9;
+    return c;
+});
+const dtLayers = basemaps.layers('detail', flavor, { lang: 'en' })
+    .filter(l => l.type !== 'background')
+    .map(l => Object.assign({}, l, { id: 'dt-' + l.id, minzoom: Math.max(l.minzoom || 0, 9) }));
+
+const protocol = new pmtiles.Protocol();
+maplibregl.addProtocol('pmtiles', protocol.tile);
+
+let savedView = null;
+try { savedView = JSON.parse(localStorage.getItem(VIEW_KEY) || 'null'); } catch (e) { savedView = null; }
+const charlotte = REGIONS.length ? bboxOf(REGIONS[0]) : [[-81.6, 34.4], [-80.1, 36.1]];
+
+let map;
+try {
+    map = new maplibregl.Map({
+        container: 'map',
+        style: {
+            version: 8,
+            glyphs: origin + '/sales-map/assets/fonts/{fontstack}/{range}.pbf',
+            sprite: origin + '/sales-map/assets/sprites/v4/light',
+            sources: {
+                overview: { type: 'vector', url: 'pmtiles://' + origin + '/sales-map/tiles/overview.pmtiles',
+                            attribution: '© OpenStreetMap' },
+                detail: { type: 'vector', url: 'pmtiles://' + origin + '/sales-map/tiles/detail.pmtiles' },
+            },
+            layers: ovLayers.concat(dtLayers),
+        },
+        bounds: savedView ? undefined : charlotte,
+        center: savedView ? savedView.center : undefined,
+        zoom: savedView ? savedView.zoom : undefined,
+        maxZoom: 18,
+        attributionControl: { compact: true },
+    });
+} catch (e) {
+    document.getElementById('map').innerHTML =
+        '<div class="no-webgl">This browser can\'t draw the map (WebGL is off or unsupported).</div>';
+    throw e;
+}
+map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+map.addControl(new maplibregl.GeolocateControl({ positionOptions: { enableHighAccuracy: true } }), 'top-right');
+map.addControl(new maplibregl.ScaleControl({ unit: 'imperial' }), 'bottom-right');
+map.on('moveend', () => {
+    try { localStorage.setItem(VIEW_KEY, JSON.stringify({ center: map.getCenter(), zoom: map.getZoom() })); }
+    catch (e) { /* private mode etc. -- just don't remember */ }
+});
+
+document.querySelectorAll('[data-region]').forEach(btn => btn.addEventListener('click', () => {
+    map.fitBounds(bboxOf(REGIONS[+btn.dataset.region]), { padding: 20, duration: 900 });
+}));
+
+// ---- data + filters ----
+let PROPS = [];
+const filters = {
+    companies: new Set(COMPANIES.map(c => c.key)),
+    status: new Set(['prospect', 'customer', 'dormant', 'paused']),
+};
+document.querySelectorAll('.chip').forEach(chip => chip.addEventListener('click', e => {
+    e.preventDefault();
+    const box = chip.querySelector('input');
+    box.checked = !box.checked;
+    chip.classList.toggle('off', !box.checked);
+    const set = chip.dataset.company ? filters.companies : filters.status;
+    const val = chip.dataset.company || chip.dataset.status;
+    box.checked ? set.add(val) : set.delete(val);
+    refresh();
+}));
+
+// One pin per property; its colour comes from the visible companies'
+// relationships: any active customer > dormant customer > prospect. Grey only
+// when every visible relationship is on a sales hold.
+function pinFor(p) {
+    const ents = p.entries.filter(e => filters.companies.has(e.company));
+    if (!ents.length) return null;
+    let status = ents.some(e => e.status === 'customer') ? 'customer'
+               : ents.some(e => e.status === 'dormant') ? 'dormant' : 'prospect';
+    if (ents.every(e => e.paused_until)) status = 'paused';
+    if (!filters.status.has(status)) return null;
+    return {
+        status,
+        rehab: ents.some(e => e.rehab),
+        tips: ents.reduce((n, e) => n + e.tips, 0),
+    };
+}
+
+function geojson() {
+    const features = [];
+    PROPS.forEach((p, i) => {
+        const pin = pinFor(p);
+        if (!pin) return;
+        features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [p.lng, p.lat] },
+                        properties: Object.assign({ idx: i }, pin) });
+    });
+    return { type: 'FeatureCollection', features };
+}
+
+function refresh() {
+    const src = map.getSource('props');
+    if (src) src.setData(geojson());
+}
+
+function popupHtml(p) {
+    const byCo = Object.fromEntries(COMPANIES.map(c => [c.key, c]));
+    let h = `<div class="pp-name">${esc(p.name)}</div><div class="pp-addr">${esc(p.address)}</div>`;
+    p.entries.filter(e => filters.companies.has(e.company)).forEach(e => {
+        const co = byCo[e.company] || { name: e.company, color: '#888' };
+        const label = e.status === 'prospect' ? 'Prospect' : e.status === 'dormant' ? 'Dormant customer' : 'Customer';
+        h += `<div class="pp-entry"><span class="pp-co" style="color:${co.color};">● ${esc(co.name)}</span>
+              <span class="pp-badge" style="background:${COLORS[e.status]};">${label}</span>`;
+        if (e.kind === 'customer') {
+            h += `<div class="pp-line">${e.last_service
+                ? 'Last service ' + fmtDate(e.last_service) + ' (' + daysSince(e.last_service) + ' days ago)'
+                : 'No service on record'}</div>`;
+        }
+        if (e.rehab) h += `<div class="pp-line" style="color:#c026d3;font-weight:700;">Rehab planned</div>`;
+        if (e.paused_until) h += `<div class="pp-line" style="color:#6b7280;font-weight:700;">Sales paused until ${fmtDate(e.paused_until)}</div>`;
+        if (e.tips) h += `<div class="pp-line" style="color:#dc2626;font-weight:700;">🔥 ${e.tips} open sales tip${e.tips > 1 ? 's' : ''}</div>`;
+        if (e.last_visit) {
+            const v = e.last_visit;
+            h += `<div class="pp-line"><b>Last visit</b> ${fmtDate(v.date)}${v.tag ? ' · ' + esc(v.tag) : ''}${v.by ? ' · ' + esc(v.by) : ''}</div>`;
+            if (v.notes) h += `<div class="pp-line" style="color:#777;">${esc(v.notes)}${v.notes.length >= 180 ? '…' : ''}</div>`;
+        } else {
+            h += `<div class="pp-line pp-missing">No visits logged yet</div>`;
+        }
+        h += `<div class="pp-line pp-links"><a href="${esc(e.url)}" style="color:${co.color};">Open</a>
+              <a href="${esc(e.log_url)}" style="color:${co.color};">Log Visit</a></div></div>`;
+    });
+    return h;
+}
+
+map.on('load', async () => {
+    const resp = await fetch('/sales-map/data', { credentials: 'same-origin' });
+    const data = await resp.json();
+    PROPS = data.properties;
+    const unplaced = Object.entries(data.unplaced).filter(([, n]) => n > 0);
+    document.getElementById('summary').textContent =
+        `${PROPS.length.toLocaleString()} properties across ${COMPANIES.length} compan${COMPANIES.length === 1 ? 'y' : 'ies'}`
+        + ' · tap a cluster to zoom in, tap a pin for details';
+    if (unplaced.length) {
+        const byCo = Object.fromEntries(COMPANIES.map(c => [c.key, c.name]));
+        document.getElementById('unplaced').textContent = 'Not on the map (address not found or incomplete): '
+            + unplaced.map(([k, n]) => `${byCo[k] || k} ${n}`).join(', ');
+    }
+
+    map.addSource('props', { type: 'geojson', data: geojson(), cluster: true, clusterMaxZoom: 12, clusterRadius: 42 });
+    map.addLayer({ id: 'clusters', type: 'circle', source: 'props', filter: ['has', 'point_count'],
+        paint: {
+            'circle-color': ['step', ['get', 'point_count'], '#38bdf8', 25, '#6366f1', 100, '#a855f7', 400, '#db2777'],
+            'circle-radius': ['step', ['get', 'point_count'], 15, 25, 19, 100, 24, 400, 30],
+            'circle-stroke-width': 3, 'circle-stroke-color': '#ffffff', 'circle-opacity': 0.92,
+        } });
+    map.addLayer({ id: 'cluster-count', type: 'symbol', source: 'props', filter: ['has', 'point_count'],
+        layout: { 'text-field': ['get', 'point_count_abbreviated'], 'text-font': ['Noto Sans Medium'], 'text-size': 12 },
+        paint: { 'text-color': '#ffffff' } });
+    map.addLayer({ id: 'rehab-ring', type: 'circle', source: 'props',
+        filter: ['all', ['!', ['has', 'point_count']], ['==', ['get', 'rehab'], true]],
+        paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 9, 15, 14, 18, 18],
+                 'circle-color': 'rgba(0,0,0,0)', 'circle-stroke-width': 3, 'circle-stroke-color': '#c026d3' } });
+    map.addLayer({ id: 'pins', type: 'circle', source: 'props', filter: ['!', ['has', 'point_count']],
+        paint: {
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 5, 15, 9, 18, 12],
+            'circle-color': ['match', ['get', 'status'], 'prospect', COLORS.prospect, 'customer', COLORS.customer,
+                             'dormant', COLORS.dormant, COLORS.paused],
+            'circle-stroke-width': 2, 'circle-stroke-color': '#ffffff',
+        } });
+    map.addLayer({ id: 'tip-dot', type: 'circle', source: 'props',
+        filter: ['all', ['!', ['has', 'point_count']], ['>', ['get', 'tips'], 0]],
+        paint: { 'circle-radius': 4.5, 'circle-color': '#dc2626', 'circle-stroke-width': 1.5,
+                 'circle-stroke-color': '#ffffff', 'circle-translate': [8, -8] } });
+
+    map.on('click', 'clusters', async e => {
+        const f = map.queryRenderedFeatures(e.point, { layers: ['clusters'] })[0];
+        const zoom = await map.getSource('props').getClusterExpansionZoom(f.properties.cluster_id);
+        map.easeTo({ center: f.geometry.coordinates, zoom });
+    });
+    map.on('click', 'pins', e => {
+        const f = e.features[0];
+        new maplibregl.Popup({ maxWidth: '320px', offset: 10 })
+            .setLngLat(f.geometry.coordinates).setHTML(popupHtml(PROPS[f.properties.idx])).addTo(map);
+    });
+    ['clusters', 'pins'].forEach(id => {
+        map.on('mouseenter', id, () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', id, () => { map.getCanvas().style.cursor = ''; });
+    });
+});
+</script>
+{% endblock %}

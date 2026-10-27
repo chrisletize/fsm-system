@@ -2226,6 +2226,50 @@ tax, portal or contact logic reads it. Choices:
 
 ---
 
+D-118 — Sales map: self-hosted OpenStreetMap basemap, Census geocoding, one pin
+per property (Chris, 2026-10-27, for Chris O). Chris asked for "a nice
+occasionally updated map" rather than a live Google Maps, covering every county
+touching Mecklenburg and the Greensboro/Winston-Salem counties. When asked, he
+added Raleigh (CTS) and South Florida (Kleanit SF), chose one pin per property
+across companies, Multi Family + Contractors only, and markers for rehab
+prospects, open tips and sales-paused properties. Choices:
+- **Basemap: self-hosted PMTiles cut from the Protomaps OpenStreetMap planet
+  build** (`ops/maps/refresh-basemap.sh`): an SE-US overview to zoom 9 plus full
+  street detail for four coverage boxes (`ops/maps/regions.geojson`). No API key,
+  no per-view cost, nothing sent to a third party when the map is used; refreshed
+  quarterly by cron. 570 MB, outside git, not backed up (regenerable).
+  Alternatives rejected: Google Maps (paid per load, terms limit storing
+  coordinates) and openstreetmap.org's public tile servers (their usage policy
+  discourages app use).
+- **Geocoding: US Census batch geocoder first** (free, public-domain results that
+  can be stored), then a **strict OpenStreetMap (Photon) fallback** for complexes
+  too new for Census street files, accepted only on an exact house number + ZIP
+  (or city) match. A pin on the wrong building is worse than none. Ties are
+  placed only if every Census candidate is within ~300 m. `geocode_source`
+  records which placed it. A nightly `jobs.py geocode` re-places any row whose
+  address changed (compared with `geocoded_address`), so pins follow edits with no
+  hook in every save path.
+- **One pin per property:** entries are merged across companies on normalized
+  street + ZIP-5 (coordinates to ~10 m when there's no ZIP). Pin colour comes
+  from the visible companies: active customer > dormant customer > prospect;
+  grey only if every visible relationship is on a sales hold. The pop-up lists
+  each company's relationship, last service, rehab, hold, open tips and the most
+  recent visit (or "No visits logged yet").
+- **Dormant** uses the same `LAST_SERVICE_DATE_SQL` and per-company threshold as
+  the Dormant Customers card, so the map and the list agree. Until the full job
+  history is imported, most customers read as dormant.
+- **Residential** customers are left off (not sales targets, and homes shouldn't
+  be pinned). Only 13 are *tagged* Residential, though Chris says there are many
+  more, so the customer-category audit (CURRENT-STATUS) is what makes this filter
+  accurate.
+- **Front-end libraries vendored** (`static/vendor/`, integrity-checked against
+  npm: maplibre-gl 6.12.0, pmtiles 4.5.0, @protomaps/basemaps 5.7.2), so the page
+  has no CDN dependency.
+- **Access:** sales roles only, the user's own `company_access`. Like
+  `/sales-overview` it reads across company databases but never writes across them.
+
+---
+
 *Questions from `FIELDKIT_DECISIONS_FOR_REVIEW_2026-09.md` not yet answered by Chris:
 #33 (OPS/VendorCafe export templates), #50 (SMS alerts via Twilio), and Stage 5.6
 (ServiceFusion price-list exports, company legal names/remit-to/reply-to/alert emails).

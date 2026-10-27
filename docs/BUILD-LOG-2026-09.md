@@ -1855,3 +1855,38 @@ never run; all were D-101 related.
 or open the recency/jobs reports, even though the September permission sweep had
 granted them. That's the lockdown working as designed; flagged in case he needs
 either.
+
+## 2026-10-27 — Sales map (D-118)
+
+**What:** `/sales-map` for the salesman (sales roles), linked from every company's
+Sales page and the Sales Overview. One pin per property across his companies, coloured
+prospect (blue) / customer (green) / dormant customer (orange) / sales-paused
+(grey), with a pink ring for rehab prospects and a red dot for an open tip. Pins
+cluster when zoomed out (tap to zoom in); tapping a pin opens a pop-up with each
+company's relationship, last service, hold, tips and the most recent visit (or "No
+visits logged yet"), with Open / Log Visit links. Company and status filter chips,
+jump buttons for Charlotte / Triad / Raleigh / South Florida, "my location", and it
+remembers the last view per device.
+- **Basemap:** `ops/maps/refresh-basemap.sh` cuts the Protomaps OpenStreetMap
+  planet build (`20261026`) into `~/docker/fieldkit-prod/maps/`: overview 28 MB
+  (SE US, z0–9) plus detail 473 MB for `ops/maps/regions.geojson` (Charlotte +
+  touching counties incl. York/Lancaster SC; Guilford + Forsyth + touching;
+  Wake + touching; Broward + touching). Tiles verified present in all four regions
+  and absent outside them. Mounted read-only into the app (`docker-compose.yml`,
+  mirror updated, container recreated). Quarterly cron refresh.
+- **Geocoding (migration 042):** Census batch geocoder plus a strict OSM fallback.
+  First run: 4,774 of 5,293 in-scope customers placed (90%; 168 by the fallback,
+  all new complexes). 519 unplaced (PO boxes, property names in the address field,
+  missing house numbers, incomplete addresses), counted on the map footer. Nightly
+  `jobs.py geocode` (06:30 UTC) handles new and edited addresses.
+- **Data:** 4,359 pins (359 shared by more than one company). The JSON is gzipped
+  (2.4 MB → 267 KB). Libraries vendored in `static/vendor/` (see `VENDOR.md`).
+**Tests:** new `tests/smoke_sales_map.py` (geocoders monkey-patched; fixtures only).
+Full suite 32/32.
+**Not verified:** the map has not been drawn in a real browser. This server has
+no browser, and the test client can't run JavaScript/WebGL. Every file the page
+fetches was checked through the real routes, and the layer expressions were
+reviewed by hand. **Chris to open it on the tablet.**
+**Known:** 4,730 of 4,774 customer pins are orange (dormant) because most job
+history isn't imported yet. Only 24 of 70 prospects are placed; most have no
+address.

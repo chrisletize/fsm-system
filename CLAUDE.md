@@ -125,7 +125,7 @@ to production without their file ever being committed, and had to be rebuilt fro
 
 ## Server-only files and uploads
 
-`docker-compose.yml`, `Dockerfile`, `.env`, `init/` and `uploads/` sit in
+`docker-compose.yml`, `Dockerfile`, `.env`, `init/`, `uploads/` and `maps/` sit in
 `~/docker/fieldkit-prod/`, one level above this checkout, outside git. The compose
 file is mirrored at `phase1/fieldkit_backend/docker-compose.yml`; keep the mirror in
 sync. `uploads/` holds real customer documents (signed release forms, business-card

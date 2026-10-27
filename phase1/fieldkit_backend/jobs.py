@@ -3,7 +3,7 @@
 FieldKit scheduled jobs (directive §3.5, Increment 2.5).
 
 A thin CLI wrapper: the actual work lives in app.py (job_nightly,
-job_uninvoiced, job_eod_escalation, job_weekly_sales_report) so the same
+job_uninvoiced, job_eod_escalation, job_weekly_sales_report, job_geocode) so the same
 functions are importable and testable from the smoke suite without shelling
 out to this file. This file just loops over all four companies and dispatches
 by subcommand, matching how host cron invokes it:
@@ -12,6 +12,7 @@ by subcommand, matching how host cron invokes it:
     docker compose exec -T app python jobs.py uninvoiced
     docker compose exec -T app python jobs.py eod_escalation
     docker compose exec -T app python jobs.py weekly_sales_report
+    docker compose exec -T app python jobs.py geocode   # map pins (D-118)
 
 Each company's failure is isolated -- one company erroring doesn't stop the
 others (job_runs records the failure for whichever company hit it; see
@@ -25,6 +26,7 @@ from app import (
     job_uninvoiced,
     job_eod_escalation,
     job_weekly_sales_report,
+    job_geocode,
 )
 
 JOBS = {
@@ -32,6 +34,7 @@ JOBS = {
     'uninvoiced': job_uninvoiced,
     'eod_escalation': job_eod_escalation,
     'weekly_sales_report': job_weekly_sales_report,
+    'geocode': job_geocode,
 }
 
 

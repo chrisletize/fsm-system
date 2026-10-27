@@ -15,6 +15,7 @@ in the same sitting.*
 ├── .env                 secrets — NEVER copy into the repo
 ├── init/                postgres first-boot scripts (01_create_databases.sql, 02_apply_schema.sh, schema/)
 ├── uploads/             customer documents written by the app (see "Uploads" below)
+├── maps/                sales-map basemap (tiles, fonts, icons); see "Maps" below
 └── fsm-system/          this git checkout (bind-mounted into the app container)
 ```
 
@@ -64,6 +65,18 @@ or photo is a soft delete that leaves the file on disk, by design. As of
 
 Included in the nightly backup since 2026-10-19 (see below).
 
+## Maps
+
+`maps/` holds the self-hosted basemap for the sales map (D-118), mounted read-only
+into the app at `/data/maps` (`MAP_DIR`). It's built from OpenStreetMap by
+`fsm-system/ops/maps/refresh-basemap.sh`: `overview.pmtiles` (SE US, zoom 0–9),
+`detail.pmtiles` (the regions in `ops/maps/regions.geojson`, full street detail),
+`assets/` (label fonts and icons), `regions.geojson` (copied for the app),
+`VERSION` (the planet build date) and `bin/pmtiles` (the cutting tool, checksum-pinned).
+About 570 MB. Cron refreshes it quarterly (log: `~/logs/fieldkit-basemap.log`).
+**Not backed up**: it's entirely regenerable by re-running the script (about a
+minute). To change coverage, edit `regions.geojson` and re-run.
+
 ## Backups
 
 Nightly since 2026-10-19: all four DBs, uploads and server config go to
@@ -76,3 +89,6 @@ The older manual dumps under `~/db-backups/` are left as they are.
 Four `jobs.py` entries under the `letize` user's crontab, logging to
 `~/logs/fieldkit-jobs.log`; full detail in `cron-jobs.md`. A fifth entry
 (07:15 UTC) runs the nightly backup, logging to `~/logs/fieldkit-backup.log`.
+Two more (D-118): `jobs.py geocode` nightly at 06:30 UTC, placing map pins for new
+or edited addresses (log: `fieldkit-jobs.log`), and the basemap refresh at 05:10
+UTC on the 1st of January, April, July and October.

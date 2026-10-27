@@ -2,7 +2,7 @@
 # The live file is ~/docker/fieldkit-prod/docker-compose.yml on ubuntu-business,
 # one level ABOVE this git checkout, so it isn't under version control. This copy
 # mirrors it so the repo records the real production config; if you change the
-# live file, update this one in the same sitting. Last synced 2026-10-19.
+# live file, update this one in the same sitting. Last synced 2026-10-27.
 # See docs/DEPLOYMENT/fieldkit-prod-server.md for the other server-only files.
 services:
   db:
@@ -35,6 +35,7 @@ services:
       APP_BASE_URL: ${APP_BASE_URL}
       FLASK_SECRET_KEY: ${FLASK_SECRET_KEY}
       UPLOAD_DIR: /data/uploads
+      MAP_DIR: /data/maps
     volumes:
       - ./fsm-system/phase1/fieldkit_backend:/app
       # Uploaded documents (signed occupied-release PDFs). Deliberately
@@ -42,6 +43,10 @@ services:
       # land in the repo working tree, and a host folder rather than a named
       # volume so they stay browsable/backup-able with ordinary file tools.
       - ./uploads:/data/uploads
+      # Self-hosted basemap for the sales map (tiles, fonts, icons), built by
+      # fsm-system/ops/maps/refresh-basemap.sh. Read-only; regenerable, so not
+      # backed up.
+      - ./maps:/data/maps:ro
     depends_on:
       db:
         condition: service_healthy

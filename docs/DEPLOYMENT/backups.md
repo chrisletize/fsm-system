@@ -39,6 +39,9 @@ Each run checks every dump with `pg_restore --list` before the snapshot is moved
 `daily/`, so **anything under `daily/` is complete**. About 8.5 MB per snapshot as of
 2026-10-19 (mostly uploads).
 
+**`maps/` (the sales-map basemap, ~570 MB) is excluded too**: it's rebuilt from
+OpenStreetMap by `ops/maps/refresh-basemap.sh` in about a minute.
+
 **`.env` is deliberately excluded** (DB password, Flask secret key, Resend API key).
 Keep a copy in your password manager. Without it, a restore means generating a new
 DB password and Flask key (which logs everyone out) and fetching the Resend key from
