@@ -28,6 +28,9 @@ are what the app should talk to.
 | **After-hours water extraction capture** (one button, iOS visit monitoring, retroactive draft WO for office review) | `FIELDKIT_DESIGN_ADDENDUM_mobile-afterhours-extraction.md` | None; the office reconstructs it next morning |
 | **GPS visit-status automation**: auto "On The Way" from the maps link, arrival nudge for "Started", departure nudge to close the visit | `FIELDKIT_DESIGN_ADDENDUM_visit-status-tracking.md` ("What's explicitly deferred to the native mobile app") | Manual buttons on My Day; data model live (migration 029) |
 | **Damage-area reporting**: Where × What multi-select composed into notes | `FIELDKIT_DESIGN_ADDENDUM_visit-status-tracking.md` ("Damage-area reporting") | Free-text extraction notes |
+| **Sales map, app edition**: a richer, prettier native version of the web sales map (Chris, 2026-10-27) | `MOBILE-APP-PLAN.md` §5 H, D-118 | Web `/sales-map` |
+| **Near me**: closest properties to his current location, with distance and last visit (Chris, 2026-10-27) | `MOBILE-APP-PLAN.md` §5 H | — (web map has "my location" only) |
+| **Plan a route**: tick pins, open as a multi-stop route in Apple/Google Maps (Chris, 2026-10-27) | `MOBILE-APP-PLAN.md` §5 H | — |
 | **Sales tip location assistant**: Google Maps finds the property, auto-ties to an existing customer/prospect by address, pre-fills new prospects (Chris, 2026-10-20) | `FIELDKIT_DESIGN_ADDENDUM_sales-tip-location-assistant.md` | Tip form with free-text location (migration 039, D-115) |
 | GPS reminders with a 10-minute grace window | `FIELDKIT_COMPLETE_SYSTEM_DESIGN_v2.md` (Phase 6) | |
 | Extraction queue mobile view | `FIELDKIT_COMPLETE_SYSTEM_DESIGN_v2.md` (Phase 6) | Extraction section of My Day |

@@ -50,6 +50,28 @@
     .pp-missing { color:#b45309; font-weight:600; }
     .pp-links a { font-weight:700; font-size:.78rem; margin-right:.75rem; text-decoration:none; }
     .no-webgl { padding:2rem; text-align:center; color:#a32d2d; }
+    /* Search + "not visited" panel sits ON the map so it survives full screen. */
+    .map-panel { position:absolute; top:10px; left:10px; z-index:3; width:min(340px, calc(100% - 70px));
+                 display:flex; flex-direction:column; gap:.4rem; }
+    .map-panel input, .map-panel select { width:100%; padding:.6rem .75rem; border:1px solid #d5dbe1; border-radius:8px;
+                 font-size:.95rem; font-family:inherit; background:#fff; box-shadow:0 1px 6px rgba(0,0,0,.12); }
+    .search-results { background:#fff; border-radius:8px; box-shadow:0 4px 14px rgba(0,0,0,.18);
+                      overflow:hidden; display:none; max-height:50vh; overflow-y:auto; }
+    .search-results.open { display:block; }
+    .sr-item { padding:.55rem .75rem; cursor:pointer; border-bottom:1px solid #f2f2f2; font-size:.86rem; }
+    .sr-item:last-child { border-bottom:none; }
+    .sr-item:hover, .sr-item.active { background:#f2f7ff; }
+    .sr-name { font-weight:700; color:#222; }
+    .sr-addr { color:#888; font-size:.76rem; }
+    .sr-none { padding:.6rem .75rem; color:#999; font-size:.85rem; }
+    .map-wrap:fullscreen { background:#fff; }
+    .map-wrap:fullscreen #map { height:100vh; border-radius:0; border:none; }
+    .map-wrap:-webkit-full-screen { background:#fff; width:100%; height:100%; }
+    .map-wrap:-webkit-full-screen #map { height:100vh; border-radius:0; border:none; }
+    /* Fallback where the browser has no fullscreen API (iPhone Safari): MapLibre
+       fills the window with CSS instead, so the map must follow. */
+    .map-wrap.maplibregl-pseudo-fullscreen { background:#fff; }
+    .map-wrap.maplibregl-pseudo-fullscreen #map { height:100%; border-radius:0; border:none; }
 </style>
 {% endblock %}
 
@@ -81,6 +103,18 @@
 
 <div class="map-wrap">
     <div id="map"></div>
+    <div class="map-panel">
+        <input type="search" id="mapSearch" placeholder="🔍 Search a property or address…" autocomplete="off"
+               aria-label="Search properties">
+        <div id="searchResults" class="search-results"></div>
+        <select id="visitFilter" aria-label="Filter by last visit">
+            <option value="">All properties</option>
+            <option value="30">Not visited in 30+ days</option>
+            <option value="60">Not visited in 60+ days</option>
+            <option value="90">Not visited in 90+ days</option>
+            <option value="never">Never visited</option>
+        </select>
+    </div>
     <div class="legend">
         <div><span class="dot" style="background:#2563eb;"></span> Prospect</div>
         <div><span class="dot" style="background:#16a34a;"></span> Customer</div>
@@ -186,6 +220,10 @@ map.touchZoomRotate.disableRotation();
 map.touchPitch.disable();
 map.addControl(new maplibregl.GeolocateControl({ positionOptions: { enableHighAccuracy: true } }), 'top-right');
 map.addControl(new maplibregl.ScaleControl({ unit: 'imperial' }), 'bottom-right');
+// Full screen takes the whole map area -- search panel and legend included --
+// not just the canvas. Where the browser has no fullscreen API (iPhone Safari)
+// MapLibre falls back to filling the window with CSS.
+map.addControl(new maplibregl.FullscreenControl({ container: document.querySelector('.map-wrap') }), 'top-right');
 map.on('moveend', () => {
     try { localStorage.setItem(VIEW_KEY, JSON.stringify({ center: map.getCenter(), zoom: map.getZoom() })); }
     catch (e) { /* private mode etc. -- just don't remember */ }
@@ -200,7 +238,12 @@ let PROPS = [];
 const filters = {
     companies: new Set(COMPANIES.map(c => c.key)),
     status: new Set(['prospect', 'customer', 'dormant', 'paused']),
+    visit: '',      // '' | '30' | '60' | '90' | 'never'
 };
+document.getElementById('visitFilter').addEventListener('change', e => {
+    filters.visit = e.target.value;
+    refresh();
+});
 document.querySelectorAll('.chip').forEach(chip => chip.addEventListener('click', e => {
     e.preventDefault();
     const box = chip.querySelector('input');
@@ -222,6 +265,11 @@ function pinFor(p) {
                : ents.some(e => e.status === 'dormant') ? 'dormant' : 'prospect';
     if (ents.every(e => e.paused_until)) status = 'paused';
     if (!filters.status.has(status)) return null;
+    // "Not visited in N days": the most recent visit by ANY visible company
+    // counts, since someone has been there. Never visited always qualifies.
+    const lastVisit = ents.reduce((m, e) => (e.last_visit && (!m || e.last_visit.date > m)) ? e.last_visit.date : m, null);
+    if (filters.visit === 'never' && lastVisit) return null;
+    if (filters.visit && filters.visit !== 'never' && lastVisit && daysSince(lastVisit) < +filters.visit) return null;
     return {
         status,
         rehab: ents.some(e => e.rehab),
@@ -242,7 +290,12 @@ function geojson() {
 
 function refresh() {
     const src = map.getSource('props');
-    if (src) src.setData(geojson());
+    if (!src) return;
+    const data = geojson();
+    src.setData(data);
+    document.getElementById('summary').textContent =
+        `Showing ${data.features.length.toLocaleString()} of ${PROPS.length.toLocaleString()} properties`
+        + ' · tap a cluster to zoom in, tap a pin for details';
 }
 
 function popupHtml(p) {
@@ -279,9 +332,6 @@ map.on('load', async () => {
     const data = await resp.json();
     PROPS = data.properties;
     const unplaced = Object.entries(data.unplaced).filter(([, n]) => n > 0);
-    document.getElementById('summary').textContent =
-        `${PROPS.length.toLocaleString()} properties across ${COMPANIES.length} compan${COMPANIES.length === 1 ? 'y' : 'ies'}`
-        + ' · tap a cluster to zoom in, tap a pin for details';
     if (unplaced.length) {
         const byCo = Object.fromEntries(COMPANIES.map(c => [c.key, c.name]));
         document.getElementById('unplaced').textContent = 'Not on the map (address not found or incomplete): '
@@ -289,6 +339,7 @@ map.on('load', async () => {
     }
 
     map.addSource('props', { type: 'geojson', data: geojson(), cluster: true, clusterMaxZoom: 12, clusterRadius: 42 });
+    refresh();   // fills in the "Showing N of M" line
     map.addLayer({ id: 'clusters', type: 'circle', source: 'props', filter: ['has', 'point_count'],
         paint: {
             'circle-color': ['step', ['get', 'point_count'], '#38bdf8', 25, '#6366f1', 100, '#a855f7', 400, '#db2777'],
@@ -323,15 +374,83 @@ map.on('load', async () => {
     // tap on empty map doesn't close it either (Chris, 2026-10-27: it shouldn't
     // feel too easy to lose). Its ✕, a zoom, or tapping another pin close it.
     let activePopup = null;
-    map.on('click', 'pins', e => {
-        const f = e.features[0];
+    function openPopup(i) {
         if (activePopup) activePopup.remove();
         activePopup = new maplibregl.Popup({ maxWidth: '320px', offset: 10, closeOnClick: false })
-            .setLngLat(f.geometry.coordinates).setHTML(popupHtml(PROPS[f.properties.idx])).addTo(map);
-    });
+            .setLngLat([PROPS[i].lng, PROPS[i].lat]).setHTML(popupHtml(PROPS[i])).addTo(map);
+    }
+    map.on('click', 'pins', e => openPopup(e.features[0].properties.idx));
     map.on('zoomstart', () => {
         if (activePopup) { activePopup.remove(); activePopup = null; }
     });
+
+    // ---- search: name or address, within the companies shown ----
+    // Client-side over the data already loaded, so it's instant and works the
+    // same offline-ish on a patchy connection. Picking a result flies there and
+    // opens its details once the flight ends (the box closes on zoom, so it
+    // must open after, not before).
+    const searchIndex = PROPS.map((p, i) => ({
+        i, hay: [p.name, p.address].concat(p.entries.map(e => e.name)).join(' ').toLowerCase(),
+        name: p.name.toLowerCase(),
+    }));
+    const box = document.getElementById('mapSearch');
+    const results = document.getElementById('searchResults');
+    let hits = [], cursor = -1, timer = null;
+
+    function goTo(i) {
+        const p = PROPS[i];
+        results.classList.remove('open');
+        box.value = p.name;
+        box.blur();
+        const target = Math.max(map.getZoom(), 16);
+        const here = map.getCenter();
+        if (Math.abs(map.getZoom() - target) < 0.01 && Math.abs(here.lng - p.lng) < 1e-6 && Math.abs(here.lat - p.lat) < 1e-6) {
+            openPopup(i);           // already there: no move, so no moveend to wait for
+            return;
+        }
+        map.once('moveend', () => openPopup(i));
+        map.flyTo({ center: [p.lng, p.lat], zoom: target, speed: 1.6 });
+    }
+    function render() {
+        if (!hits.length) {
+            results.innerHTML = '<div class="sr-none">No matching property on the map.</div>';
+        } else {
+            results.innerHTML = hits.map((h, n) => {
+                const p = PROPS[h.i];
+                const ents = p.entries.filter(e => filters.companies.has(e.company));
+                const st = ents.some(e => e.status === 'customer') ? 'customer'
+                         : ents.some(e => e.status === 'dormant') ? 'dormant' : 'prospect';
+                return `<div class="sr-item${n === cursor ? ' active' : ''}" data-i="${h.i}">
+                    <div class="sr-name"><span class="dot" style="background:${COLORS[st]};"></span> ${esc(p.name)}</div>
+                    <div class="sr-addr">${esc(p.address)}</div></div>`;
+            }).join('');
+        }
+        results.classList.add('open');
+    }
+    function search() {
+        const terms = box.value.toLowerCase().split(/\s+/).filter(Boolean);
+        if (!terms.length || box.value.trim().length < 2) { results.classList.remove('open'); hits = []; return; }
+        hits = searchIndex
+            .filter(h => PROPS[h.i].entries.some(e => filters.companies.has(e.company)))
+            .filter(h => terms.every(t => h.hay.includes(t)))
+            .sort((a, b) => (b.name.startsWith(terms[0]) - a.name.startsWith(terms[0])) || a.name.localeCompare(b.name))
+            .slice(0, 8);
+        cursor = hits.length ? 0 : -1;
+        render();
+    }
+    box.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 120); });
+    box.addEventListener('focus', () => { if (hits.length) results.classList.add('open'); });
+    box.addEventListener('keydown', e => {
+        if (e.key === 'ArrowDown' && hits.length) { cursor = (cursor + 1) % hits.length; render(); e.preventDefault(); }
+        else if (e.key === 'ArrowUp' && hits.length) { cursor = (cursor - 1 + hits.length) % hits.length; render(); e.preventDefault(); }
+        else if (e.key === 'Enter' && cursor >= 0) { goTo(hits[cursor].i); e.preventDefault(); }
+        else if (e.key === 'Escape') { results.classList.remove('open'); box.blur(); }
+    });
+    results.addEventListener('click', e => {
+        const item = e.target.closest('.sr-item');
+        if (item) goTo(+item.dataset.i);
+    });
+    map.on('movestart', () => results.classList.remove('open'));
     ['clusters', 'pins'].forEach(id => {
         map.on('mouseenter', id, () => { map.getCanvas().style.cursor = 'pointer'; });
         map.on('mouseleave', id, () => { map.getCanvas().style.cursor = ''; });

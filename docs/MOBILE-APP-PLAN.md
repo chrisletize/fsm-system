@@ -215,6 +215,9 @@ that · **decide** = needs Chris · **skip** = deliberately not building.
 | **Send a sales tip** (from a job or anywhere) | D-115 | Live on web | v1 | Free text to start |
 | Sales tip location assistant (Google Maps, auto-tie) | tip addendum | — | v2 | Chris, 2026-10-20 |
 | Salesperson's full Sales module (visit wizard, card photos, follow-ups, intake wizard) | live web | Live on tablet web | decide | §9 F1: keep on web, or bring into the app |
+| **Sales map, app edition**: a richer, prettier version of the web sales map (D-118) | Chris, 2026-10-27 | Web `/sales-map` (pins, clusters, search, last-visit filter, full screen) | v1 if Sales comes into the app | Native map rendering (smoother pinch/zoom, nicer pin icons and animations, offline basemap for the coverage regions), the same `/sales-map/data` feed and self-hosted tiles. "Even prettier" was Chris's brief. Ties into §9 F1 |
+| **Near me** list: the closest properties to where he's standing, with distance, type and last visit, nearest first | Chris, 2026-10-27 | — (web map has a "my location" button only) | v1 with the map | One foreground location reading (fits the location principles, §2.5). Sort the existing map data by distance on the phone, no server change. Filters as on the map (type, not visited in N days). For "I'm in this area, who else should I stop by?" |
+| **Plan a route**: tick several pins and send them to Apple/Google Maps as one multi-stop route | Chris, 2026-10-27 | — | v2 | Builds the directions link on the phone (Apple Maps and Google Maps URLs both take several stops). Optional "best order" via a routing service, which costs per request; the simple version is the order he ticked them |
 
 ### I. Manager / office-lite
 | Feature | Source | FieldKit today | Phase | Notes |
@@ -340,7 +343,11 @@ All migrations to all four databases, as always.
 
 **F. Sales**
 1. Does Chris O's Sales module move into the app, or stay on the tablet web?
+   (The app edition of the sales map, "near me" and route planning all
+   assume it does.)
 2. When to build the tip location assistant (v1 or v2)?
+3. Route planning: is "the order he ticked them" enough, or does it need
+   automatic best-order routing (a paid routing service)?
 
 **G. Content and data**
 1. Reference library: build on the web now, ahead of the app?

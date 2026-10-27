@@ -1899,3 +1899,21 @@ empty map no longer closes it (`closeOnClick: false`). It closes with its ✕, a
 zoom, or tapping another pin. Also fixed: rotation and tilt were still possible by
 two-finger gesture with no compass shown to undo them, so both are now disabled.
 Template-only; map test extended. Still not visually verified in a browser.
+
+## 2026-10-27 — Sales map: search, last-visit filter, full screen
+
+**What:** per Chris's pick of the suggested tools (1, 3, 5):
+- **Search** by property name or address (within the shown companies). Picking a
+  result flies there and opens its details when the flight ends (the box closes on
+  zoom, so it must open after). Arrow keys/Enter work; instant and client-side.
+- **Last-visit filter:** All / not visited in 30+, 60+, 90+ days / never visited.
+  The most recent visit by any shown company counts. A "Showing N of M" line
+  reflects every filter.
+- **Full screen:** covers the whole map area including the search panel and legend
+  (both now sit on the map). Native fullscreen where supported, otherwise MapLibre's
+  CSS fallback fills the window (iPhone Safari), with the map sized for both.
+Template-only. Test extended; full suite green. Still not visually verified in a
+browser.
+**Deferred to the mobile app (documented in MOBILE-APP-PLAN §5 H and the backlog):**
+"near me" (closest properties by distance), multi-stop route planning, and an even
+prettier app edition of the sales map.

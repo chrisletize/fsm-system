@@ -206,6 +206,11 @@ def main():
         check("script is in the body", html.index('</title>') < html.index("import * as maplibregl"))
         check("detail box closes on zoom, not on a stray tap",
               "map.on('zoomstart'" in html and 'closeOnClick: false' in html)
+        check("search box, last-visit filter and full screen on the map",
+              'id="mapSearch"' in html and 'id="visitFilter"' in html and 'value="never"' in html
+              and 'FullscreenControl' in html and 'maplibregl-pseudo-fullscreen' in html)
+        check("search and filter panel sits inside the full-screen area",
+              html.index('class="map-wrap"') < html.index('class="map-panel"') < html.index('class="legend"'))
         check("rotation and tilt are locked (no compass to undo them)",
               'touchZoomRotate.disableRotation()' in html and 'touchPitch.disable()' in html)
         for path in ('/static/vendor/maplibre-gl-6.12.0/maplibre-gl.mjs',
