@@ -4,6 +4,12 @@ FieldKit is a custom Field Service Management (FSM) platform replacing ServiceFu
 for four service companies. This file orients any Claude session working in this repo.
 Deeper reference material lives in `docs/` — see the pointer table at the bottom.
 
+**Start of every session:** before starting work, read
+`docs/PROJECT-KNOWLEDGE/CURRENT-STATUS.md` (what's built, the numbered open items)
+and the last few entries of `docs/BUILD-LOG-2026-09.md`. Run `git status` and
+`git log --oneline -5` to check nothing is uncommitted from a previous session.
+Decisions and their reasoning are in `docs/DECISIONS-MADE-DURING-BUILD.md` (D-###).
+
 ## Architecture: one database per company, no `company_id` column
 
 Each company gets a fully separate PostgreSQL database. There is no shared `customers`
