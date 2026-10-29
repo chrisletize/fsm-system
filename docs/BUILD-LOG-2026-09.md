@@ -2011,3 +2011,23 @@ step-by-step migration plan (current setup verified live, decisions made, known 
 the required plan format). Removed the unrestricted `ubuntu-services-backup` key from
 `~/.ssh/authorized_keys` at Chris's say-so. The NAS pull uses its own restricted key
 and was re-tested by Chris straight after.
+
+## 2026-10-29 — Hetzner migration plan, revision 1 (docs only)
+
+Fable's plan is now in the repo as `docs/DEPLOYMENT/HETZNER-MIGRATION-PLAN.md`, with
+Chris's decisions edited in (marked [R1]). Main changes:
+- **Server:** CPX21 instead of CPX11, sized for 30–50 users, in a new FieldKit-only
+  Hetzner account, with no backups add-on and no extra volume.
+- **Photos:** go to R2 through a switchable S3 layer.
+- **Locked practice site:** Cloudflare Access required on `fieldkit-new`.
+- **Pinned `cloudflared`** version.
+- **Graceful reload** on deploys.
+- **Friday-night cutover.**
+- **Statements backups** approved.
+- **Answers** to all of Fable's questions.
+- **New §17:** go-live work outside the migration (app tuning, photo storage, the LLC
+  and moving the accounts).
+
+Hetzner's 2026 price rises were checked independently: April hit running servers,
+June only new orders and resizes. The latency to Hetzner Germany was measured
+(128 ms).

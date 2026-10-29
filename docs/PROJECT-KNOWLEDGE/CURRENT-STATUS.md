@@ -349,9 +349,15 @@ builds.
 
 ## Decisions 2026-10-29 (hosting and what comes next)
 
-- **Production moves to Hetzner** (cloud VM, at most €30/month), behind a Cloudflare
-  Tunnel (no open inbound ports), cutover rehearsed first. Fable writes the
-  step-by-step migration plan for a Claude session to carry out.
+- **Production moves to Hetzner**, behind a Cloudflare Tunnel (no open inbound ports),
+  cutover rehearsed first. **Plan to execute: `DEPLOYMENT/HETZNER-MIGRATION-PLAN.md`
+  (Fable's plan, revision 1 with Chris's decisions).** Server: **Ashburn CPX21**
+  (~€32.5/mo, no backups add-on), in a new FieldKit-only Hetzner account, sized for
+  ~30 users at office go-live and up to ~50. Off-site backups and future job photos go
+  to Cloudflare R2. Photos use a switchable S3-compatible layer and never touch the
+  server disk. Cutover on a Friday night. Costs are tracked in Chris's Firefly III
+  (tag `fieldkit`) until an LLC exists. App tuning (more workers, connection pool) is
+  needed before office go-live (plan §17).
 - **ubuntu-business becomes the build VM:** development stays here, deploys go to
   Hetzner through git. No more editing production directly. A separate dev/test
   address is needed.
