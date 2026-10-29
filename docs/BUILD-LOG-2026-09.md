@@ -1983,3 +1983,14 @@ first, then `--commit` after backup 2026-10-27T0252Z. Moved 395 customers (392 K
 payments. Kleanit SF: 61 → 456 customers. Category audit re-run: 12 more re-filed
 at Kleanit SF, 53 waiting for review there. Full suite 33/33 after the move.
 
+
+## 2026-10-29 — Customer Categories missing from the Settings menu (out of sequence)
+
+**Reported by Chris:** Customer Categories wasn't under Settings, even after a fresh
+login and hard refresh. **Cause:** D-119 added its card to the Settings landing page
+but not to the Settings ▾ dropdown in `base.html`, which is how people actually get
+around. Added it there, beside Service Catalog and Equipment Registry, with the same
+admin/manager gate as the page itself (office users would get a 403). Checked every
+`/settings/*` page against the dropdown: this was the only one missing. Verified with
+the Flask test client in all four companies: admin and manager see the link, office
+doesn't. No migration.
