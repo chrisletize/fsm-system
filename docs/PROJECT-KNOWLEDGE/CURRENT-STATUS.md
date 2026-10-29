@@ -287,9 +287,9 @@ unclosed template block (D-111), not email delivery.
    `fieldkit-backup-pull` key (rrsync, read-only) onto the NAS
    (`/nas/hdd/ubuntu_backups/fieldkit`), checksums verified, Pushover alert on failure.
    Proxmox also backs up the whole VM weekly. **Still to do:** no off-site copy yet
-   (comes with the Hetzner move); store `.env` in a password manager; remove the old
-   unrestricted `ubuntu-services-backup` key from `authorized_keys` (last used
-   2026-10-29, apparently only to install the new key). The statements site's DB
+   (comes with the Hetzner move); store `.env` in a password manager. The old
+   unrestricted `ubuntu-services-backup` key was removed from `authorized_keys`
+   2026-10-29 (backup: `~/.ssh/authorized_keys.bak-20261029b`). The statements site's DB
    (`fsm_prod`) isn't in the FieldKit backup script; check it's covered by Proxmox.
 2. ServiceFusion cutover import for Kleanit Charlotte, CTS, Kleanit SF —
    waiting on their exports.
@@ -361,7 +361,9 @@ builds.
   time.
 - **Photo retention:** job photos (mobile app) are deleted after **26 months**: the
   24-month warranty plus a margin. Recorded in `MOBILE-APP-BACKLOG.md`.
-- **Alert emails: a control page managers can run** themselves, not admin/IT only.
+- **Alert emails: a control page managers can run** themselves, not admin/IT only,
+  limited to the companies each manager has access to (a role is one per user and
+  covers all of that user's companies, so multi-company managers just work).
 - **Card payments wait.** **ServiceFusion imports** for the other three companies
   happen after the move.
 - **The January home-data-center plan is replaced** by Hetzner. The home hardware

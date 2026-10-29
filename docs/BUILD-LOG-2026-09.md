@@ -2003,3 +2003,11 @@ retention, manager-run alert settings and the rest in CURRENT-STATUS ("Decisions
 New `FIELDKIT_DESIGN_ADDENDUM_ai-assistant.md` captures and expands the home AI
 machine idea that replaces the January hardware plan. Next: the Hetzner migration brief
 for Fable.
+
+## 2026-10-29 — Hetzner migration brief; old backup key removed
+
+`docs/DEPLOYMENT/HETZNER-MIGRATION-BRIEF.md`: the brief for Fable, so it can write the
+step-by-step migration plan (current setup verified live, decisions made, known traps,
+the required plan format). Removed the unrestricted `ubuntu-services-backup` key from
+`~/.ssh/authorized_keys` at Chris's say-so. The NAS pull uses its own restricted key
+and was re-tested by Chris straight after.
