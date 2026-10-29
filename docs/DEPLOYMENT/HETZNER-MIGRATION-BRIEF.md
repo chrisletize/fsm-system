@@ -44,6 +44,14 @@ Chris is paying for your judgment, not your typing. What he wants most:
 - At the end, the **questions you need Chris to answer**, and the **risks you see**
   ranked by how much they'd hurt.
 
+### Also read: the homelab side
+
+Chris will give you `HOMELAB-CONTEXT-FOR-FIELDKIT-MIGRATION.md`, written by the homelab
+project's Claude session. It covers Cloudflare, NPM, OPNsense, Tailscale ACLs, the NAS
+pull, Proxmox, Pushover and his existing Hetzner footprint. Where it and this brief
+disagree about the homelab, trust that file. If you don't have it, ask for it before
+planning any step that touches the homelab.
+
 ### Read these first (all in the `chrisletize/fsm-system` repo)
 
 | File | Why |
