@@ -282,13 +282,15 @@ unclosed template block (D-111), not email delivery.
 ## Open items as of 2026-10-19 (from the D-112 audit)
 
 **Needs Chris's decision or input:**
-1. **Backups — half done (D-113).** Nightly local snapshots (all four DBs +
-   uploads + server config) have run since 2026-10-19, and a test restore has
-   passed. **Still needed:** the homelab-side pull to the NAS, without which the
-   backups live on the same VM as the data. Handoff steps are in
-   `docs/DEPLOYMENT/backups.md`. Also: store `.env` in a password manager
-   (deliberately not backed up), and restrict or replace the
-   `ubuntu-services-backup` SSH key, which has a full shell on this server.
+1. **Backups — done on the homelab side (2026-10-29).** Nightly local snapshots
+   (07:15 UTC) are pulled by ubuntu-services at 07:45 UTC with the restricted
+   `fieldkit-backup-pull` key (rrsync, read-only) onto the NAS
+   (`/nas/hdd/ubuntu_backups/fieldkit`), checksums verified, Pushover alert on failure.
+   Proxmox also backs up the whole VM weekly. **Still to do:** no off-site copy yet
+   (comes with the Hetzner move); store `.env` in a password manager; remove the old
+   unrestricted `ubuntu-services-backup` key from `authorized_keys` (last used
+   2026-10-29, apparently only to install the new key). The statements site's DB
+   (`fsm_prod`) isn't in the FieldKit backup script; check it's covered by Proxmox.
 2. ServiceFusion cutover import for Kleanit Charlotte, CTS, Kleanit SF —
    waiting on their exports.
 3. Company settings fields (legal names, remit-to, reply-to/alert emails);
@@ -344,6 +346,29 @@ mobile requirement with 30 ServiceFusion app screens (`docs/sf-reference/`) into
 feature catalogue, a proposed v1, and a discussion agenda. Nothing built yet; next is
 the design discussion with Chris. A Mac mini on Tailscale is now available for iOS
 builds.
+
+## Decisions 2026-10-29 (hosting and what comes next)
+
+- **Production moves to Hetzner** (cloud VM, at most €30/month), behind a Cloudflare
+  Tunnel (no open inbound ports), cutover rehearsed first. Fable writes the
+  step-by-step migration plan for a Claude session to carry out.
+- **ubuntu-business becomes the build VM:** development stays here, deploys go to
+  Hetzner through git. No more editing production directly. A separate dev/test
+  address is needed.
+- **Statements site stays on the homelab** for now; whatever FieldKit still lacks from
+  it gets added after the move.
+- **Disk alert on Hetzner** at around 60–75% full, so storage gets upgraded ahead of
+  time.
+- **Photo retention:** job photos (mobile app) are deleted after **26 months**: the
+  24-month warranty plus a margin. Recorded in `MOBILE-APP-BACKLOG.md`.
+- **Alert emails: a control page managers can run** themselves, not admin/IT only.
+- **Card payments wait.** **ServiceFusion imports** for the other three companies
+  happen after the move.
+- **The January home-data-center plan is replaced** by Hetzner. The home hardware
+  budget goes to an AI assistant machine instead:
+  `FIELDKIT_DESIGN_ADDENDUM_ai-assistant.md`.
+- **Mac mini** is on Tailscale (100.105.68.75, `get-a-grip-mac`). It answers ping, but
+  SSH is refused: Remote Login needs switching on.
 
 Decisions Chris has already made for this build (delinquent threshold = 90 days past
 invoice date, FL tax left empty/exempt for Kleanit SF, SF-import receivables excluded

@@ -1994,3 +1994,12 @@ admin/manager gate as the page itself (office users would get a 403). Checked ev
 `/settings/*` page against the dropdown: this was the only one missing. Verified with
 the Flask test client in all four companies: admin and manager see the link, office
 doesn't. No migration.
+
+## 2026-10-29 — Hosting decisions and the AI assistant idea (docs only)
+
+Recorded Chris's decisions on moving production to Hetzner, the build VM, photo
+retention, manager-run alert settings and the rest in CURRENT-STATUS ("Decisions
+2026-10-29"). Updated the backups open item now that the homelab pull is in place.
+New `FIELDKIT_DESIGN_ADDENDUM_ai-assistant.md` captures and expands the home AI
+machine idea that replaces the January hardware plan. Next: the Hetzner migration brief
+for Fable.

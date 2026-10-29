@@ -20,6 +20,7 @@ are what the app should talk to.
 | Offline-first architecture | `PROJECT-KNOWLEDGE/PHASE-1-PLANNING.md` (Offline-First Mobile App) | |
 | Job list + detail, status updates, clock in/out, job notes | `FIELDKIT_COMPLETE_SYSTEM_DESIGN_v2.md` (Phase 6) | Web stand-in: `/<company>/myday` |
 | Before/after photo upload in 2–5 sec (ServiceFusion ~30 sec) | `FIELDKIT_PROJECT_REFERENCE.md`, `FIELDKIT_TASKS.md` | |
+| Job photos deleted after 26 months (24-month warranty + 2 months' margin) | `PROJECT-KNOWLEDGE/CURRENT-STATUS.md` (Decisions 2026-10-29) | Decided by Chris 2026-10-29. Nightly job; keeps storage bounded on Hetzner |
 
 ## Features designed and waiting on the app
 
